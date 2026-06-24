@@ -9,13 +9,13 @@ from mne.beamformer import make_lcmv
 from mne.beamformer._compute_beamformer import _reg_pinv
 from numpy.testing import assert_allclose
 
-from mne_beamformers import (
+from mne_beamlab import (
     MCMVBeamformer,
     apply_mcmv,
     apply_mcmv_cov,
     make_mcmv,
 )
-from mne_beamformers._mcmv import _compute_mcmv_weights
+from mne_beamlab._mcmv import _compute_mcmv_weights
 
 mne.set_log_level("ERROR")
 REG = 0.05

@@ -1,0 +1,56 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below, and also cite the original method papers (Moiseev et al., 2011; Nunes et al., 2020)."
+title: "mne-beamlab: advanced beamformers for MEG/EEG, compatible with MNE-Python"
+authors:
+  - family-names: "Shirani"
+    given-names: "Sepehr"
+    email: "sepehrshirani@gmail.com"
+version: 0.1.0.dev0
+license: BSD-3-Clause
+repository-code: "https://github.com/Sepehrshirani/mne-beamlab"
+keywords:
+  - MEG
+  - EEG
+  - beamformer
+  - MCMV
+  - source localization
+  - MNE
+references:
+  - type: article
+    authors:
+      - family-names: "Moiseev"
+        given-names: "Alexander"
+      - family-names: "Gaspar"
+        given-names: "John M."
+      - family-names: "Schneider"
+        given-names: "Jennifer A."
+      - family-names: "Herdman"
+        given-names: "Anthony T."
+    title: "Application of multi-source minimum variance beamformers for reconstruction of correlated neural activity"
+    journal: "NeuroImage"
+    volume: 58
+    issue: 2
+    start: 481
+    end: 496
+    year: 2011
+    doi: "10.1016/j.neuroimage.2011.05.081"
+  - type: article
+    authors:
+      - family-names: "Nunes"
+        given-names: "Adonay S."
+      - family-names: "Moiseev"
+        given-names: "Alexander"
+      - family-names: "Kozhemiako"
+        given-names: "Nataliia"
+      - family-names: "Cheung"
+        given-names: "Teresa"
+      - family-names: "Ribary"
+        given-names: "Urs"
+      - family-names: "Doesburg"
+        given-names: "Sam M."
+    title: "Multiple constrained minimum variance beamformer (MCMV) performance in connectivity analyses"
+    journal: "NeuroImage"
+    volume: 208
+    start: 116386
+    year: 2020
+    doi: "10.1016/j.neuroimage.2019.116386"

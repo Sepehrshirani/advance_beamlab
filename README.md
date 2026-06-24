@@ -1,4 +1,4 @@
-# mne-beamformers
+# mne-beamlab
 
 Advanced minimum-variance beamformers for MEG/EEG source reconstruction,
 built to be fully compatible with [MNE-Python](https://mne.tools) and to
@@ -46,7 +46,7 @@ Requires Python ≥ 3.10, `mne >= 1.10`, NumPy and SciPy.
 ```python
 import numpy as np
 import mne
-from mne_beamformers import make_mcmv, apply_mcmv, apply_mcmv_cov
+from mne_beamlab import make_mcmv, apply_mcmv, apply_mcmv_cov
 
 # Any covariance estimator / shrinkage method supported by MNE is inherited
 # unchanged -- the choice is made here, upstream of the beamformer.
@@ -102,9 +102,10 @@ contract, paper-faithful tests):
 3. Augmented Pairwise MCMV (APW-MCMV) for connectivity — Nunes et al. (2020).
 
 ## License
-BSD-3-Clause (it's the one MNE uses)
+
+BSD-3-Clause (it's the one MNE uses).
 
 ## Citing
 
-Please cite the original method papers (Moiseev et
-al., 2011; Nunes et al., 2020) listed in `doc/references.bib`.
+Please cite the original method papers (Moiseev et al., 2011; Nunes et al.,
+2020) listed in `doc/references.bib`.

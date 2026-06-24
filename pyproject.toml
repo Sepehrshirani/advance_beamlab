@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "mne-beamformers"
+name = "mne-beamlab"
 version = "0.1.0.dev0"
 description = "Advanced beamformers for MEG/EEG, compatible with MNE-Python"
 readme = "README.md"
@@ -21,14 +21,14 @@ dependencies = [
 [project.optional-dependencies]
 test = ["pytest>=8.0", "pytest-cov"]
 doc = ["sphinx", "numpydoc", "sphinxcontrib-bibtex", "pydata-sphinx-theme"]
-dev = ["mne-beamformers[test,doc]", "ruff>=0.6"]
+dev = ["mne-beamlab[test,doc]", "ruff>=0.6"]
 
 [project.urls]
-Homepage = "https://github.com/Sepehrshirani/mne-beamformers.git"
-"Source Code" = "https://github.com/Sepehrshirani/mne-beamformers.git"
+Homepage = "https://github.com/Sepehrshirani/mne-beamlab"
+"Source Code" = "https://github.com/Sepehrshirani/mne-beamlab"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/mne_beamformers"]
+packages = ["src/mne_beamlab"]
 
 # Linting + formatting configured to mirror MNE-Python's conventions, so that
 # upstreamed files pass the MNE CI checks unchanged.
@@ -47,4 +47,4 @@ convention = "numpy"
 "**/tests/**" = ["D"]
 
 [tool.pytest.ini_options]
-testpaths = ["src/mne_beamformers/tests"]
+testpaths = ["src/mne_beamlab/tests"]
