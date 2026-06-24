@@ -103,9 +103,8 @@ contract, paper-faithful tests):
 
 ## License
 
-BSD-3-Clause.
 
 ## Citing
 
-If you use this package, please cite the original method papers (Moiseev et
+Please cite the original method papers (Moiseev et
 al., 2011; Nunes et al., 2020) listed in `doc/references.bib`.
