@@ -1,7 +1,6 @@
 """Tests for the Multiple Constrained Minimum Variance (MCMV) beamformer."""
 
-# Authors: the mne-beamformers contributors
-# License: BSD-3-Clause
+# Authors: Sepehr Shirani
 
 import mne
 import numpy as np

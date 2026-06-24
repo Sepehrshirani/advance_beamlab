@@ -1,4 +1,4 @@
-"""mne-beamformers: advanced minimum-variance beamformers for MNE-Python.
+"""mne-beamformers: advanced beamformers for MNE-Python.
 
 A staging package of peer-reviewed beamforming algorithms that extend the
 adaptive spatial filters in :mod:`mne.beamformer`, written to MNE-Python's
@@ -25,3 +25,5 @@ __all__ = [
 ]
 
 __version__ = "0.1.0.dev0"
+
+
