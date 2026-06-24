@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mne-beamformers"
+version = "0.1.0.dev0"
+description = "Advanced minimum-variance beamformers for MEG/EEG, compatible with MNE-Python"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "BSD-3-Clause"
+keywords = ["MEG", "EEG", "beamformer", "MCMV", "source localization", "MNE"]
+authors = [{ name = "the mne-beamformers contributors" }]
+dependencies = [
+    "numpy>=1.25",
+    "scipy>=1.11",
+    "mne>=1.10",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0", "pytest-cov"]
+doc = ["sphinx", "numpydoc", "sphinxcontrib-bibtex", "pydata-sphinx-theme"]
+dev = ["mne-beamformers[test,doc]", "ruff>=0.6"]
+
+[project.urls]
+Homepage = "https://github.com/mne-tools/mne-beamformers"
+"Source Code" = "https://github.com/mne-tools/mne-beamformers"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mne_beamformers"]
+
+# Linting + formatting configured to mirror MNE-Python's conventions, so that
+# upstreamed files pass the MNE CI checks unchanged.
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "D", "I", "UP", "B"]
+ignore = ["D107"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["D"]
+
+[tool.pytest.ini_options]
+testpaths = ["src/mne_beamformers/tests"]
