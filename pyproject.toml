@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "mne-beamformers"
 version = "0.1.0.dev0"
-description = "Advanced minimum-variance beamformers for MEG/EEG, compatible with MNE-Python"
+description = "Advanced beamformers for MEG/EEG, compatible with MNE-Python"
 readme = "README.md"
 requires-python = ">=3.10"
-license = ""
+license = "BSD-3-Clause"
 keywords = ["MEG", "EEG", "beamformer", "MCMV", "source localization", "MNE"]
-authors = [{ name = "the mne-beamformers contributors" }]
+authors = [{ name = "Sepehr Shirani" }]
 dependencies = [
     "numpy>=1.25",
     "scipy>=1.11",
@@ -23,8 +23,8 @@ doc = ["sphinx", "numpydoc", "sphinxcontrib-bibtex", "pydata-sphinx-theme"]
 dev = ["mne-beamformers[test,doc]", "ruff>=0.6"]
 
 [project.urls]
-Homepage = "https://github.com/mne-tools/mne-beamformers"
-"Source Code" = "https://github.com/mne-tools/mne-beamformers"
+Homepage = "https://github.com/Sepehrshirani/mne-beamformers.git"
+"Source Code" = "https://github.com/Sepehrshirani/mne-beamformers.git"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mne_beamformers"]

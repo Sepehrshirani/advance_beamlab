@@ -102,7 +102,7 @@ contract, paper-faithful tests):
 3. Augmented Pairwise MCMV (APW-MCMV) for connectivity — Nunes et al. (2020).
 
 ## License
-
+BSD-3-Clause (it's the one MNE uses)
 
 ## Citing
 
