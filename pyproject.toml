@@ -10,7 +10,8 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = "BSD-3-Clause"
 keywords = ["MEG", "EEG", "beamformer", "MCMV", "source localization", "MNE"]
-authors = [{ name = "Sepehr Shirani" }]
+authors = [{ name = "Sepehr Shirani", email = "sepehrshirani@gmail.com" }]
+maintainers = [{ name = "Sepehr Shirani", email = "sepehrshirani@gmail.com" }]
 dependencies = [
     "numpy>=1.25",
     "scipy>=1.11",
