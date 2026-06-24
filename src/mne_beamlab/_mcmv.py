@@ -22,7 +22,7 @@ References
 .. footbibliography::
 """
 
-# Authors: the mne-beamformers contributors
+# Authors: Sepehr Shirani
 # License: BSD-3-Clause
 
 import warnings

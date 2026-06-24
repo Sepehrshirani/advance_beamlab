@@ -1,4 +1,4 @@
-"""mne-beamformers: advanced beamformers for MNE-Python.
+"""mne-beamlab: advanced beamformers for MNE-Python.
 
 A staging package of peer-reviewed beamforming algorithms that extend the
 adaptive spatial filters in :mod:`mne.beamformer`, written to MNE-Python's
