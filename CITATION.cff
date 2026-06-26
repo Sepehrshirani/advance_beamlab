@@ -1,20 +1,13 @@
 cff-version: 1.2.0
-message: "If you use this software, please cite it as below, and also cite the original method papers (Moiseev et al., 2011; Nunes et al., 2020)."
-title: "mne-beamlab: advanced beamformers for MEG/EEG, compatible with MNE-Python"
+message: "If you use this software, please cite both the software and the original method papers listed below."
+title: "mne-beamlab"
+abstract: "Advanced minimum-variance beamformers for MEG/EEG source reconstruction, compatible with MNE-Python."
 authors:
   - family-names: "Shirani"
     given-names: "Sepehr"
-    email: "sepehrshirani@gmail.com"
 version: 0.1.0.dev0
 license: BSD-3-Clause
 repository-code: "https://github.com/Sepehrshirani/mne-beamlab"
-keywords:
-  - MEG
-  - EEG
-  - beamformer
-  - MCMV
-  - source localization
-  - MNE
 references:
   - type: article
     authors:
@@ -54,3 +47,17 @@ references:
     start: 116386
     year: 2020
     doi: "10.1016/j.neuroimage.2019.116386"
+  - type: article
+    authors:
+      - family-names: "Kuznetsova"
+        given-names: "Aleksandra"
+      - family-names: "Nurislamova"
+        given-names: "Yulia"
+      - family-names: "Ossadtchi"
+        given-names: "Alexei"
+    title: "Modified covariance beamformer for solving MEG inverse problem in the environment with correlated sources"
+    journal: "NeuroImage"
+    volume: 228
+    start: 117677
+    year: 2021
+    doi: "10.1016/j.neuroimage.2020.117677"
