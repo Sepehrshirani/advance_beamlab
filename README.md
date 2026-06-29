@@ -1,6 +1,6 @@
 # MNE-beamlab
 
-Advanced minimum-variance beamformers for MEG/EEG source reconstruction,
+Advance beamformers for MEG/EEG source reconstruction,
 built to be fully compatible with [MNE-Python](https://mne.tools) and to
 MNE-Python's contribution standards, so that each algorithm can be upstreamed
 into `mne.beamformer`.
@@ -11,7 +11,7 @@ published name, and mirrors the `mne.beamformer` API.
 
 ## Implemented algorithms
 
-### Multiple Constrained Minimum Variance (MCMV) beamformer
+### 1- Multiple Constrained Minimum Variance (MCMV) beamformer
 
 The **Multiple Constrained Minimum Variance (MCMV) beamformer** reconstructs a
 set of `n` sources that are constrained *jointly*, imposing unit gain on each
@@ -32,11 +32,11 @@ linearly constrained adaptive array of Frost (1972). The connectivity
 application and the augmented pairwise variant (APW-MCMV) come from Nunes et
 al. (2020), NeuroImage 208:116386.
 
-### ReciPSIICOS covariance modification
+### 2- ReciPSIICOS covariance modification
 
-The **ReciPSIICOS** method makes an *ordinary* LCMV beamformer robust to
+The **ReciPSIICOS** method makes the *base* LCMV beamformer robust to
 correlated sources by cleaning the data covariance before the beamformer is
-built -- it is a covariance transform, not a new spatial filter. Treating the
+built -- it is a covariance transform for the LCMV, not a new spatial filter. Treating the
 `M x M` sensor covariance as a vector in the `M^2`-dimensional space of
 matrices, the sensor covariance decomposes (Eq. 8) into *auto-products* of the
 source topographies, which carry the source powers, and *cross-products* of
@@ -80,7 +80,11 @@ Requires Python >= 3.10, `mne >= 1.10`, NumPy and SciPy.
 ```python
 import numpy as np
 import mne
-from mne_beamlab import make_mcmv, apply_mcmv, apply_mcmv_cov
+from mne_beamlab import (
+    make_mcmv, 
+    apply_mcmv, 
+    apply_mcmv_cov,
+)
 
 # Any covariance estimator / shrinkage method supported by MNE is inherited
 # unchanged -- the choice is made here, upstream of the beamformer.
@@ -134,9 +138,8 @@ filters = make_recipsiicos_lcmv(
 stc = apply_lcmv(evoked, filters)
 ```
 
-The projection rank is dataset-independent (it depends only on the forward
-model and the sensor array). The ranks used in the paper are on the order of a
-few hundred for arrays reduced to 40-80 virtual sensors; `recipsiicos_rank_curve`
+The projection rank depends on the forward model and the sensor array. 
+The ranks used in the paper are on the order of a few hundred for arrays reduced to 40-80 virtual sensors; `recipsiicos_rank_curve`
 adapts the choice to your own forward model.
 
 ## Design notes
