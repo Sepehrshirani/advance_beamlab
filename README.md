@@ -1,4 +1,4 @@
-# mne-beamlab
+# MNE-beamlab
 
 Advanced minimum-variance beamformers for MEG/EEG source reconstruction,
 built to be fully compatible with [MNE-Python](https://mne.tools) and to
