@@ -118,12 +118,16 @@ This is the Linearly Constrained Minimum Variance (LCMV) problem. Minimising
 $\mathbf{w}^{\mathsf T}\mathbf{R}\mathbf{w}$ subject to
 $\mathbf{w}^{\mathsf T}\mathbf{g}=1$ with a Lagrange multiplier $\lambda$,
 
-$$\mathcal{L}=\mathbf{w}^{\mathsf T}\mathbf{R}\mathbf{w}-\lambda(\mathbf{w}^{\mathsf T}\mathbf{g}-1),\qquad
-\frac{\partial\mathcal{L}}{\partial\mathbf{w}}=2\mathbf{R}\mathbf{w}-\lambda\mathbf{g}=\mathbf{0}\;\Rightarrow\;\mathbf{w}=\tfrac{\lambda}{2}\mathbf{R}^{-1}\mathbf{g}.$$
+$$
+\begin{aligned}
+\mathcal{L}&=\mathbf{w}^{\mathsf T}\mathbf{R}\mathbf{w}-\lambda(\mathbf{w}^{\mathsf T}\mathbf{g}-1),\\
+\frac{\partial\mathcal{L}}{\partial\mathbf{w}}&=2\mathbf{R}\mathbf{w}-\lambda\mathbf{g}=\mathbf{0}\;\Rightarrow\;\mathbf{w}=\tfrac{\lambda}{2}\mathbf{R}^{-1}\mathbf{g}.
+\end{aligned}
+$$
 
-Enforcing the constraint $\mathbf{w}^{\mathsf T}\mathbf{g}=1$ fixes $\lambda$ and gives the LCMV filter
+Enforcing the constraint $\mathbf{w}^{\mathsf T}\mathbf{g}=1$ fixes $\lambda$ and gives the LCMV filter, whose reconstructed power is $\langle\hat s^2\rangle=1/(\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{g})$:
 
-$$\boxed{\;\mathbf{w}=\dfrac{\mathbf{R}^{-1}\mathbf{g}}{\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{g}}\;}\qquad\text{with reconstructed power}\quad \langle\hat s^2\rangle=\dfrac{1}{\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{g}} .$$
+$$\boxed{\;\mathbf{w}=\dfrac{\mathbf{R}^{-1}\mathbf{g}}{\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{g}}\;}$$
 
 Scanning $1/(\mathbf{g}(\mathbf{r})^{\mathsf T}\mathbf{R}^{-1}\mathbf{g}(\mathbf{r}))$
 over $\mathbf{r}$ is the classic beamformer power map.
@@ -159,12 +163,16 @@ The diagonal ($i=j$) is the familiar **unit-gain** condition; the off-diagonal
 to be *blind* to every other constrained source. A blind filter cannot exploit a
 correlation it cannot see, so the cancellation of Section 3 disappears.
 
-Minimise the total output power $\operatorname{Tr}(\mathbf{W}^{\mathsf T}\mathbf{R}\mathbf{W})$
+Minimise the total output power $\mathrm{Tr}(\mathbf{W}^{\mathsf T}\mathbf{R}\mathbf{W})$
 subject to $\mathbf{W}^{\mathsf T}\mathbf{H}=\mathbf{I}_n$. With a matrix of
 Lagrange multipliers $\mathbf{\Lambda}$,
 
-$$\mathcal{L}=\operatorname{Tr}(\mathbf{W}^{\mathsf T}\mathbf{R}\mathbf{W})-\operatorname{Tr}\!\big(\mathbf{\Lambda}(\mathbf{W}^{\mathsf T}\mathbf{H}-\mathbf{I}_n)\big),\qquad
-\frac{\partial\mathcal{L}}{\partial\mathbf{W}}=2\mathbf{R}\mathbf{W}-\mathbf{H}\mathbf{\Lambda}^{\mathsf T}=\mathbf{0}\;\Rightarrow\;\mathbf{W}=\tfrac12\mathbf{R}^{-1}\mathbf{H}\,\mathbf{\Lambda}^{\mathsf T}.$$
+$$
+\begin{aligned}
+\mathcal{L}&=\mathrm{Tr}(\mathbf{W}^{\mathsf T}\mathbf{R}\mathbf{W})-\mathrm{Tr}\!\big(\mathbf{\Lambda}(\mathbf{W}^{\mathsf T}\mathbf{H}-\mathbf{I}_n)\big),\\
+\frac{\partial\mathcal{L}}{\partial\mathbf{W}}&=2\mathbf{R}\mathbf{W}-\mathbf{H}\mathbf{\Lambda}^{\mathsf T}=\mathbf{0}\;\Rightarrow\;\mathbf{W}=\tfrac12\mathbf{R}^{-1}\mathbf{H}\,\mathbf{\Lambda}^{\mathsf T}.
+\end{aligned}
+$$
 
 Substituting into the constraint $\mathbf{W}^{\mathsf T}\mathbf{H}=\mathbf{I}$
 fixes $\mathbf{\Lambda}$ and yields the **MCMV weights** (Moiseev et al. 2011,
@@ -254,10 +262,10 @@ is the covariance of the epoch-**averaged** (evoked) field. The four localizers
 
 | Localizer | Formula | Reduces at $n=1$ to | Use it for |
 |---|---|---|---|
-| **MAI** (activity index) | $\operatorname{Tr}(\mathbf{G}\mathbf{S}^{-1})-n$ | $\zeta-1=\dfrac{\mathbf{g}^{\mathsf T}\mathbf{C}_n^{-1}\mathbf{g}}{\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{g}}-1$ | robust, broad peaks |
-| **MPZ** (pseudo-Z) | $\operatorname{Tr}(\mathbf{S}\mathbf{T}^{-1})-n$ | $\bar Z-1=\dfrac{\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{g}}{\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{C}_n\mathbf{R}^{-1}\mathbf{g}}-1$ | sharper localisation |
-| **MER** (evoked) | $\operatorname{Tr}(\mathbf{E}\mathbf{T}^{-1})$ | evoked pseudo-Z | phase-locked responses |
-| **rMER** (reduced evoked) | $\operatorname{Tr}(\mathbf{E}\mathbf{S}^{-1})$ | reduced evoked pseudo-Z | evoked, no clean $\mathbf{C}_n$ |
+| **MAI** (activity index) | $\mathrm{Tr}(\mathbf{G}\mathbf{S}^{-1})-n$ | $\zeta-1=\dfrac{\mathbf{g}^{\mathsf T}\mathbf{C}_n^{-1}\mathbf{g}}{\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{g}}-1$ | robust, broad peaks |
+| **MPZ** (pseudo-Z) | $\mathrm{Tr}(\mathbf{S}\mathbf{T}^{-1})-n$ | $\bar Z-1=\dfrac{\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{g}}{\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{C}_n\mathbf{R}^{-1}\mathbf{g}}-1$ | sharper localisation |
+| **MER** (evoked) | $\mathrm{Tr}(\mathbf{E}\mathbf{T}^{-1})$ | evoked pseudo-Z | phase-locked responses |
+| **rMER** (reduced evoked) | $\mathrm{Tr}(\mathbf{E}\mathbf{S}^{-1})$ | reduced evoked pseudo-Z | evoked, no clean $\mathbf{C}_n$ |
 
 Intuition: $\zeta$ is a *(signal+noise)/noise* ratio — $(\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{g})^{-1}$
 is the total reconstructed power (signal + leaked noise) and
@@ -331,17 +339,22 @@ filter, it *repairs the data covariance* so that an ordinary `make_lcmv` no
 longer cancels correlated sources.
 
 **The vec view.** Stack the columns of the $M\times M$ covariance into a vector
-$\operatorname{vec}(\mathbf{R})\in\mathbb{R}^{M^2}$. Using
+$\mathrm{vec}(\mathbf{R})\in\mathbb{R}^{M^2}$. Using
 $\mathbf{R}=\mathbf{G}\mathbf{C}_s\mathbf{G}^{\mathsf T}+\mathbf{C}_n$ and
-$\operatorname{vec}(\mathbf{g}_i\mathbf{g}_j^{\mathsf T})=\mathbf{g}_j\otimes\mathbf{g}_i$,
+$\mathrm{vec}(\mathbf{g}_i\mathbf{g}_j^{\mathsf T})=\mathbf{g}_j\otimes\mathbf{g}_i$,
 
-$$\operatorname{vec}(\mathbf{R})=\underbrace{\sum_i [\mathbf{C}_s]_{ii}\,\operatorname{vec}(\mathbf{g}_i\mathbf{g}_i^{\mathsf T})}_{\text{auto-products: source \textit{power}}}
-+\underbrace{\sum_{i\ne j}[\mathbf{C}_s]_{ij}\,\operatorname{vec}(\mathbf{g}_i\mathbf{g}_j^{\mathsf T})}_{\text{cross-products: source \textit{coupling}}}
-+\operatorname{vec}(\mathbf{C}_n).$$
+$$
+\begin{aligned}
+\mathrm{vec}(\mathbf{R})
+&= \underbrace{\sum_i [\mathbf{C}_s]_{ii}\,\mathrm{vec}(\mathbf{g}_i\mathbf{g}_i^{\mathsf T})}_{\text{auto-products (source power)}}\\
+&+ \underbrace{\sum_{i\ne j}[\mathbf{C}_s]_{ij}\,\mathrm{vec}(\mathbf{g}_i\mathbf{g}_j^{\mathsf T})}_{\text{cross-products (source coupling)}}
++ \mathrm{vec}(\mathbf{C}_n).
+\end{aligned}
+$$
 
-The **auto-product** directions $\operatorname{vec}(\mathbf{g}_i\mathbf{g}_i^{\mathsf T})$
+The **auto-product** directions $\mathrm{vec}(\mathbf{g}_i\mathbf{g}_i^{\mathsf T})$
 carry the source powers; the **cross-product** directions
-$\operatorname{vec}(\mathbf{g}_i\mathbf{g}_j^{\mathsf T})$ carry the couplings —
+$\mathrm{vec}(\mathbf{g}_i\mathbf{g}_j^{\mathsf T})$ carry the couplings —
 and the couplings are *exactly* what an LCMV beamformer exploits to cancel
 correlated sources. Kill the cross-product part of the covariance and the
 cancellation has nothing to feed on.
@@ -369,7 +382,7 @@ and (for the whitened variant) the cross-product vectors as $\mathbf{G}_{\text{c
 **Applying it** (Eq. 11): reshape the projected vector back to a matrix and
 symmetrise,
 
-$$\tilde{\mathbf{R}}=\tfrac12\big(\mathbf{M}+\mathbf{M}^{\mathsf T}\big),\qquad \mathbf{M}=\operatorname{vec}^{-1}\!\big(\mathbf{P}\,\operatorname{vec}(\mathbf{R})\big).$$
+$$\tilde{\mathbf{R}}=\tfrac12\big(\mathbf{M}+\mathbf{M}^{\mathsf T}\big),\qquad \mathbf{M}=\mathrm{vec}^{-1}\!\big(\mathbf{P}\,\mathrm{vec}(\mathbf{R})\big).$$
 
 Projecting out a subspace can make $\tilde{\mathbf{R}}$ indefinite, but a
 covariance fed to `make_lcmv` must be positive definite, so we **spectral-flip**
