@@ -1,6 +1,7 @@
 """Tests for the Multiple Constrained Minimum Variance (MCMV) beamformer."""
 
-# Authors: Sepehr Shirani
+# Authors: the mne-beamlab contributors
+# License: BSD-3-Clause
 
 import mne
 import numpy as np
@@ -15,7 +16,7 @@ from mne_beamlab import (
     apply_mcmv_cov,
     make_mcmv,
 )
-from mne_beamlab._mcmv import _compute_mcmv_weights
+from mne_beamlab._mcmv import _compute_mcmv_weights, _make_whitener
 
 mne.set_log_level("ERROR")
 REG = 0.05
@@ -252,12 +253,109 @@ def test_rank_deficient_cov_warns(fwd_info):
 
 
 def test_unit_noise_gain_without_noise_cov_warns(fwd_info):
+    """No noise_cov -> normalisation is against the ad-hoc model, and warns."""
     fwd, info = fwd_info
     data_cov = _random_cov(info)
-    with pytest.warns(RuntimeWarning, match="identity"):
+    with pytest.warns(RuntimeWarning, match="ad-hoc"):
         filt = make_mcmv(
             info, fwd, data_cov, [1, 2], orientations=np.eye(3)[:2],
             weight_norm="unit-noise-gain",
         )
-    # Each filter has unit noise gain w.r.t. the identity (||w_i|| == 1).
-    assert_allclose(np.linalg.norm(filt["weights"], axis=1), 1.0, atol=1e-9)
+    # Unit noise gain is defined w.r.t. the noise model actually used (ad-hoc):
+    # w_i^T C_n w_i == 1, which is *not* ||w_i|| == 1 once C_n != I.
+    nad = mne.make_ad_hoc_cov(info)
+    cov_ch = list(nad.ch_names)
+    idx = [cov_ch.index(ch) for ch in filt["ch_names"]]
+    d = np.asarray(nad.data)
+    N = np.diag(d[idx]) if d.ndim == 1 else d[np.ix_(idx, idx)]
+    ng = np.einsum("ij,jk,ik->i", filt["weights"], N, filt["weights"])
+    assert_allclose(ng, 1.0, atol=1e-9)
+
+
+def test_unit_noise_gain_with_explicit_noise_cov(fwd_info):
+    """With a measured noise_cov, w_i^T C_n w_i == 1 exactly (no warning)."""
+    fwd, info = fwd_info
+    data_cov = _random_cov(info)
+    rng = np.random.default_rng(13)
+    d = rng.uniform(0.5, 2.0, len(info["ch_names"]))
+    ncov = mne.Covariance(
+        np.diag(d), info["ch_names"], info["bads"], list(info["projs"]), nfree=1
+    )
+    filt = make_mcmv(
+        info, fwd, data_cov, [1, 2], orientations=np.eye(3)[:2],
+        noise_cov=ncov, weight_norm="unit-noise-gain",
+    )
+    ng = np.einsum("ij,jk,ik->i", filt["weights"], np.diag(d), filt["weights"])
+    assert_allclose(ng, 1.0, atol=1e-9)
+
+
+# --------------------------------------------------------------------------- #
+# 6. Whitening: device-agnostic correctness.
+# --------------------------------------------------------------------------- #
+def test_whitened_mcmv_matches_closed_form_whitened_lcmv():
+    """n == 1 whitened MCMV equals the closed-form whitened LCMV, folded back."""
+    rng = np.random.default_rng(11)
+    n_ch = 24
+    h = rng.standard_normal((n_ch, 1))
+    A = rng.standard_normal((n_ch, n_ch))
+    R = A @ A.T + np.eye(n_ch)
+    B = rng.standard_normal((n_ch, n_ch))
+    N = B @ B.T + np.eye(n_ch)  # non-trivial SPD noise covariance
+
+    # Whitener with W N W^T = I (full rank here), via eigendecomposition.
+    evals, evecs = np.linalg.eigh(N)
+    W = (evecs * evals ** -0.5).T  # (n_ch, n_ch)
+    assert_allclose(W @ N @ W.T, np.eye(n_ch), atol=1e-10)
+
+    h_w, R_w = W @ h, W @ R @ W.T
+    Rinv_w = np.linalg.inv(R_w)
+    # Closed-form whitened unit-gain LCMV, then folded to sensor space.
+    w_closed = ((Rinv_w @ h_w) / (h_w.T @ Rinv_w @ h_w)).T @ W  # (1, n_ch)
+    w_mcmv = _compute_mcmv_weights(h_w, Rinv_w) @ W  # (1, n_ch)
+
+    assert_allclose(w_mcmv, w_closed, atol=1e-10)
+    # Unit-gain constraint holds in the original (unwhitened) sensor space.
+    assert_allclose((w_mcmv @ h).item(), 1.0, atol=1e-10)
+
+
+def test_single_sensor_type_invariant_to_whitening():
+    """A scalar (single-type) noise covariance cancels from the unit-gain filter.
+
+    This is why a CTF gradiometer-only array gives identical results with or
+    without whitening: the per-type scaling is a global scalar.
+    """
+    rng = np.random.default_rng(12)
+    n_ch = 20
+    H = rng.standard_normal((n_ch, 2))
+    A = rng.standard_normal((n_ch, n_ch))
+    R = A @ A.T + np.eye(n_ch)
+    Rinv = np.linalg.inv(R)
+    w_raw = _compute_mcmv_weights(H, Rinv)  # unwhitened solve
+
+    c = 3.7  # arbitrary single-type noise level
+    N = c**2 * np.eye(n_ch)
+    evals, evecs = np.linalg.eigh(N)
+    W = (evecs * evals ** -0.5).T
+    H_w, R_w = W @ H, W @ R @ W.T
+    w_white = _compute_mcmv_weights(H_w, np.linalg.inv(R_w)) @ W
+
+    assert_allclose(w_white, w_raw, atol=1e-9)
+
+
+def test_make_whitener_retains_every_sensor_type():
+    """Per-type rank: a mixed mag+grad array keeps *both* types after whitening.
+
+    A single global eigenvalue threshold would discard the smaller-unit type as
+    null space; MNE's per-type handling (used by ``_make_whitener``) does not.
+    """
+    ch_names = ["MAG1", "MAG2", "MAG3", "GRAD1", "GRAD2", "GRAD3"]
+    ch_types = ["mag", "mag", "mag", "grad", "grad", "grad"]
+    info = mne.create_info(ch_names, 1000.0, ch_types)
+    W = _make_whitener(info, None, ch_names, "full")
+
+    # Both sensor types survive: the whitener spans all 6 channels, not just one.
+    assert W.shape == (6, 6)
+    nad = mne.make_ad_hoc_cov(info)
+    d = np.asarray(nad.data)
+    N = np.diag(d) if d.ndim == 1 else d
+    assert_allclose(W @ N @ W.T, np.eye(6), atol=1e-8)

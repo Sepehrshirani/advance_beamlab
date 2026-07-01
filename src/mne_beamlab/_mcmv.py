@@ -22,7 +22,7 @@ References
 .. footbibliography::
 """
 
-# Authors: Sepehr Shirani
+# Authors: Sepehr Shirani <sepehrshirani@gmail.com>
 # License: BSD-3-Clause
 
 import warnings
@@ -190,6 +190,55 @@ def _get_leadfield(forward, common_ch, sources, orientations):
     return H
 
 
+def _make_whitener(info, noise_cov, common_ch, rank):
+    r"""Spatial whitener ``W`` with ``W C_n W^T = I`` over ``common_ch``.
+
+    Built from the noise covariance via :func:`mne.cov.compute_whitener`, the
+    same routine MNE's :func:`~mne.beamformer.make_lcmv` uses, so a single-source
+    MCMV reproduces MNE's whitening exactly. Whitening re-expresses every channel
+    in dimensionless, unit-noise units; this is what makes the beamformer valid
+    when the array mixes sensor types with different physical units (e.g.
+    magnetometers in T and gradiometers in T/m). In the original units the data
+    covariance is dominated by whichever type has the larger numerical scale and
+    its inverse is meaningless.
+
+    The whitener is computed with ``pca=True``, which drops the null space of the
+    noise covariance (its numerical rank is below the channel count after
+    SSS/Maxwell filtering or ICA) and returns a possibly rectangular
+    ``(n_white, n_channels)`` matrix. Crucially, the rank is resolved
+    *per sensor type*: a single global eigenvalue threshold would discard the
+    smaller-unit sensor type as if it were null, so MNE's per-type handling is
+    required for genuinely mixed arrays -- not merely preferable.
+
+    Parameters
+    ----------
+    info : instance of mne.Info
+        Measurement info carrying the channel types used to scale and rank each
+        sensor type.
+    noise_cov : instance of mne.Covariance | None
+        The noise covariance. If ``None``, an ad-hoc per-type model
+        (:func:`mne.make_ad_hoc_cov`) is used; for a single sensor type that is
+        a global scaling that cancels from the unit-gain filter.
+    common_ch : list of str
+        Channels (in order) the whitener columns must align to.
+    rank : int | 'full'
+        Rank handling passed through to :func:`mne.cov.compute_whitener`.
+    """
+    from mne import make_ad_hoc_cov
+    from mne.cov import compute_whitener
+
+    noise_used = make_ad_hoc_cov(info) if noise_cov is None else noise_cov
+    picks = [info["ch_names"].index(ch) for ch in common_ch]
+    whitener, wch = compute_whitener(
+        noise_used, info, picks=picks, rank=rank, pca=True, verbose=False
+    )
+    # Guarantee the columns are in ``common_ch`` order so W lines up with R/H.
+    if list(wch) != list(common_ch):
+        order = [list(wch).index(ch) for ch in common_ch]
+        whitener = whitener[:, order]
+    return whitener
+
+
 def _check_source_separation(forward, sources, min_dist=5e-3):
     """Warn if any pair of constrained sources is closer than ``min_dist`` (m)."""
     rr = forward.get("source_rr")
@@ -257,9 +306,12 @@ def make_mcmv(
         Indices (into the in-use source space of ``forward``) of the sources to
         constrain jointly. Must be unique. This sets the beamformer order ``n``.
     noise_cov : instance of mne.Covariance | None
-        The noise covariance :math:`\mathbf{N}`. Required only for
-        ``weight_norm='unit-noise-gain'``; otherwise unused by the unit-gain
-        filter of Eq. (5).
+        The noise covariance :math:`\mathbf{C}_n`. Used to whiten the leadfield
+        and data covariance before the solve, which is what makes the filter
+        valid for arrays that mix sensor types (e.g. magnetometers and
+        gradiometers). If ``None``, an ad-hoc per-sensor-type noise model is
+        used (:func:`mne.make_ad_hoc_cov`); for a single sensor type this is a
+        global scaling that leaves the unit-gain filter unchanged.
     reg : float
         Diagonal-loading regularisation of ``data_cov`` as a fraction of the
         mean eigenvalue, applied via MNE's :func:`~mne.beamformer` inversion
@@ -273,12 +325,18 @@ def make_mcmv(
         localiser of Moiseev et al., 2011) is provided by a separate function.
     weight_norm : 'unit-gain' | 'unit-noise-gain' | None
         Output normalisation. ``'unit-gain'`` (and ``None``) returns the literal
-        Eq. (5) filter. ``'unit-noise-gain'`` rescales each filter so that
-        :math:`\mathbf{w}_i^{\mathsf T}\mathbf{N}\mathbf{w}_i = 1`
-        :footcite:`SekiharaNagarajan2008` (requires ``noise_cov``).
+        Eq. (5) filter (the unit-gain / zero-gain constraint
+        :math:`\mathbf{W}^{\mathsf T}\mathbf{H}=\mathbf{I}` holds on the raw
+        leadfield). ``'unit-noise-gain'`` rescales each filter so that
+        :math:`\mathbf{w}_i^{\mathsf T}\mathbf{C}_n\mathbf{w}_i = 1`
+        :footcite:`SekiharaNagarajan2008`; because the solve is performed in the
+        whitened space this is exactly unit Euclidean norm of the whitened
+        filter, matching MNE's definition.
     rank : int | 'full'
-        Rank passed to the covariance inverse. Use an integer for rank-reduced
-        data (e.g. after SSP/ICA); ``'full'`` assumes a full-rank covariance.
+        Rank handling, applied to both the noise-covariance whitener
+        (:func:`mne.cov.compute_whitener`) and the data-covariance inverse. Use
+        an integer for rank-reduced data (e.g. after SSP/ICA); ``'full'`` assumes
+        full rank. For genuinely rank-deficient data prefer an explicit integer.
     %(verbose)s
 
     Returns
@@ -368,6 +426,21 @@ def make_mcmv(
     common_ch, R = _align_channels(info, forward, data_cov)
     if not np.all(np.isfinite(R)):
         raise ValueError("data_cov contains non-finite values.")
+
+    # If a noise covariance is supplied it must also cover the channels we use,
+    # so intersect with it before building anything (the no-noise-cov path uses
+    # an ad-hoc model defined on all of ``info`` and needs no intersection).
+    if noise_cov is not None:
+        ncov_set = set(noise_cov.ch_names)
+        keep = [i for i, ch in enumerate(common_ch) if ch in ncov_set]
+        if len(keep) == 0:
+            raise ValueError(
+                "noise_cov shares no channels with info/forward/data_cov."
+            )
+        if len(keep) < len(common_ch):
+            common_ch = [common_ch[i] for i in keep]
+            R = R[np.ix_(keep, keep)]
+
     n = sources.size
     if n > len(common_ch):
         raise ValueError(
@@ -380,12 +453,27 @@ def make_mcmv(
         raise ValueError("The forward solution contains non-finite values.")
     _check_source_separation(forward, sources)
 
-    # -- regularised inverse of the data covariance (identical to LCMV) ----- #
-    Rinv, loading, rnk = _reg_pinv(R, reg=reg, rank=rank)
-    if rnk < len(common_ch):
+    # -- whiten so the beamformer is valid for any sensor configuration ----- #
+    # The data covariance mixes sensor types with different physical units, so
+    # we move into the noise-covariance-whitened space where every channel is
+    # dimensionless with unit noise variance. There the types are commensurable
+    # and the data covariance is well conditioned. With no noise covariance we
+    # fall back to MNE's ad-hoc per-type model; for a single sensor type (e.g. a
+    # CTF gradiometer array) that model is a global scalar that cancels from the
+    # unit-gain filter, so single-type results are unchanged.
+    adhoc_noise = noise_cov is None
+    whitener = _make_whitener(info, noise_cov, common_ch, rank)
+    H_w = whitener @ H  # whitened leadfield (n_white, n_sources)
+    R_w = whitener @ R @ whitener.T  # whitened data covariance (n_white, n_white)
+    n_white = R_w.shape[0]
+
+    # -- regularised inverse of the (whitened) data covariance -------------- #
+    # Diagonal-loading convention identical to MNE's make_lcmv (_reg_pinv).
+    Rinv_w, loading, rnk = _reg_pinv(R_w, reg=reg, rank=rank)
+    if rnk < n_white:
         warnings.warn(
-            f"data_cov is rank-deficient (rank {rnk} < {len(common_ch)} "
-            f"channels); a pseudo-inverse was used. Supply a shrinkage-"
+            f"data_cov is rank-deficient (rank {rnk} < {n_white} whitened "
+            "dimensions); a pseudo-inverse was used. Supply a shrinkage-"
             "regularised covariance (e.g. method='oas'/'shrunk' in "
             "mne.compute_covariance) or set ``reg`` > 0 for a stable inverse.",
             RuntimeWarning,
@@ -398,26 +486,29 @@ def make_mcmv(
             "available to satisfy the constraints."
         )
 
-    # -- the MCMV solve (Eq. (5)) ------------------------------------------- #
-    weights = _compute_mcmv_weights(H, Rinv)  # (n_sources, n_channels)
+    # -- the MCMV solve (Eq. (5)) in the whitened space --------------------- #
+    weights_w = _compute_mcmv_weights(H_w, Rinv_w)  # (n_sources, n_white)
 
-    # -- optional unit-noise-gain rescaling --------------------------------- #
+    # -- weight normalisation ----------------------------------------------- #
+    # In whitened space the noise covariance is the identity, so unit-noise-gain
+    # is exactly unit Euclidean norm of each whitened filter
+    # :footcite:`SekiharaNagarajan2008` -- this matches MNE's definition.
     if weight_norm == "unit-noise-gain":
-        if noise_cov is None:
+        if adhoc_noise:
             warnings.warn(
-                "weight_norm='unit-noise-gain' requested without a noise_cov; "
-                "using the identity matrix as the noise covariance.",
+                "weight_norm='unit-noise-gain' without a noise_cov normalises "
+                "against MNE's ad-hoc noise model; supply a measured noise_cov "
+                "for a data-accurate unit-noise-gain.",
                 RuntimeWarning,
                 stacklevel=2,
             )
-            N = np.eye(len(common_ch))
-        else:
-            cov_ch = list(noise_cov.ch_names)
-            nidx = [cov_ch.index(ch) for ch in common_ch]
-            N = np.asarray(noise_cov.data)[np.ix_(nidx, nidx)]
-        # Rescale each filter w_i so that w_i^T N w_i = 1.
-        noise_gain = np.einsum("ij,jk,ik->i", weights, N, weights)
-        weights = weights / np.sqrt(noise_gain)[:, None]
+        weights_w = weights_w / np.linalg.norm(weights_w, axis=1, keepdims=True)
+
+    # -- fold the whitener back so the filters act on raw sensor data ------- #
+    # s_hat = weights_w (W x) = (weights_w W) x, and (weights_w W) H = I, so the
+    # unit-gain / zero-gain constraint is preserved in the original sensor space
+    # and apply_mcmv can be applied directly to unwhitened data.
+    weights = weights_w @ whitener  # (n_sources, n_channels)
 
     logger.info(f"    Computed MCMV beamformer for {n} source(s).")
     return MCMVBeamformer(
