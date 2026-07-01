@@ -1,14 +1,43 @@
+# Byte-compiled / optimized / caches
 __pycache__/
 *.py[cod]
-*.egg-info/
+*$py.class
+
+# Distribution / packaging
 build/
 dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# Installer / editable installs
+pip-wheel-metadata/
+
+# Test and coverage
 .pytest_cache/
-.ruff_cache/
+.cache/
 .coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# Sphinx documentation (all generated)
+doc/_build/
+doc/generated/
+doc/auto_examples/
+doc/sg_execution_times.rst
+
+# Environments
 .venv/
 venv/
+env/
+.python-version
+
+# Editors / OS
+.vscode/
 .idea/
+*.swp
 .DS_Store
-*.zip
-smoke_mcmv.py
+Thumbs.db
