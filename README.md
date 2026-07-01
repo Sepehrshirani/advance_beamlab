@@ -21,8 +21,9 @@ without reading the papers.
   **sequential source search** that turn it into a discovery tool. After
   Moiseev et al. (2011); connectivity/APW-MCMV after Nunes et al. (2020).
 - **ReciPSIICOS** — makes an *ordinary* LCMV beamformer robust to correlated
-  sources by cleaning the data covariance before the beamformer is built. After
-  Kuznetsova, Nurislamova & Ossadtchi (2021).
+  sources by cleaning the data covariance before the beamformer is built, with
+  noise-whitening and virtual-sensor reduction so it applies to real,
+  mixed-sensor MEG arrays. After Kuznetsova, Nurislamova & Ossadtchi (2021).
 
 ## Installation
 
@@ -54,10 +55,16 @@ stc_time_courses = apply_mcmv(epochs, result["filters"])  # jointly-optimal filt
 **Make LCMV robust to correlation with ReciPSIICOS**:
 
 ```python
-from mne_beamlab import make_recipsiicos_lcmv
+from mne_beamlab import make_recipsiicos_lcmv, recipsiicos_rank_curve
 from mne.beamformer import apply_lcmv
 
-filters = make_recipsiicos_lcmv(info, forward, data_cov, rank=70, method="whitened")
+# The projector is built from the forward model alone; K lives in the
+# (whitened, reduced) virtual-sensor space. Let the 45-degree criterion pick it.
+ranks, p_pwr, p_cor, k_opt = recipsiicos_rank_curve(
+    forward, info, method="whitened", noise_cov=noise_cov, return_optimal=True)
+
+filters = make_recipsiicos_lcmv(info, forward, data_cov, rank=k_opt,
+                                method="whitened", noise_cov=noise_cov)
 stc = apply_lcmv(evoked, filters)
 ```
 
@@ -329,28 +336,51 @@ pseudo-Z sequence, the per-iteration localizer maps, and a ready-to-apply
 ## 10. ReciPSIICOS: cleaning the covariance instead of constraining sources
 
 ReciPSIICOS attacks the same cancellation from the other end: rather than a new
-filter, it *repairs the data covariance* so that an ordinary `make_lcmv` no
-longer cancels correlated sources.
+filter, it *repairs the data covariance* so that an ordinary LCMV no longer
+cancels correlated sources.
 
 **The vec view.** Stack the columns of the $M\times M$ covariance into a vector
 $\mathrm{vec}(\mathbf{R})\in\mathbb{R}^{M^2}$. Using
 $\mathbf{R}=\mathbf{G}\mathbf{C_s}\mathbf{G}^{\mathsf T}+\mathbf{C_n}$ and
 $\mathrm{vec}(\mathbf{g_i}\mathbf{g_j}^{\mathsf T})=\mathbf{g_j}\otimes\mathbf{g_i}$,
 
-$$\mathrm{vec}(\mathbf{R})=\sum_i [\mathbf{C_s}]_{ii}\,\mathrm{vec}(\mathbf{g_i}\mathbf{g_i}^{\mathsf T})+\sum_{i\ne j}[\mathbf{C_s}]_{ij}\,\mathrm{vec}(\mathbf{g_i}\mathbf{g_j}^{\mathsf T})+\mathrm{vec}(\mathbf{C_n}).$$
+$$\mathrm{vec}(\mathbf{R})=\sum_i [\mathbf{C_s}]_{ii}\,\mathrm{vec}(\mathbf{g_i}\mathbf{g_i}^{\mathsf T})+\sum_{i<j}[\mathbf{C_s}]_{ij}\,\mathrm{vec}(\mathbf{g_i}\mathbf{g_j}^{\mathsf T}+\mathbf{g_j}\mathbf{g_i}^{\mathsf T})+\mathrm{vec}(\mathbf{C_n}).$$
 
-The first sum collects the **auto-products** (the source powers); the second collects the **cross-products** (the source couplings).
+The first sum collects the **auto-products** (the source powers); the second
+collects the symmetric **cross-products** (the source couplings) — and the
+couplings are *exactly* what an LCMV beamformer exploits to cancel correlated
+sources. Kill the cross-product part of the covariance and the cancellation has
+nothing to feed on.
 
-The **auto-product** directions $\mathrm{vec}(\mathbf{g_i}\mathbf{g_i}^{\mathsf T})$
-carry the source powers; the **cross-product** directions
-$\mathrm{vec}(\mathbf{g_i}\mathbf{g_j}^{\mathsf T})$ carry the couplings —
-and the couplings are *exactly* what an LCMV beamformer exploits to cancel
-correlated sources. Kill the cross-product part of the covariance and the
-cancellation has nothing to feed on.
+**A working space that makes it device-agnostic and tractable.** The original
+study used one MEG array of a single sensor type and built the projector in raw
+sensor space. Two changes are needed for general use, and the paper itself calls
+for the first:
+
+- *Noise whitening.* Section 2.6 of the paper notes that whitening by the noise
+  covariance changes the forward operator and therefore requires rebuilding the
+  projector in the whitened space, that it skipped this only for the cost of its
+  500 Monte-Carlo repetitions, and that proper whitening *may improve*
+  localisation. Whitening (via `mne.cov.compute_whitener`, per sensor type) is
+  also what makes the method valid when magnetometers (T) and gradiometers (T/m)
+  are mixed. So the projector is built from and applied in the whitened space —
+  faithful to the paper, not a departure from it.
+- *Virtual sensors.* The whitened leadfield is reduced by a truncated SVD to the
+  $q$ directions carrying a chosen fraction of its variance (`pct_var`, default
+  0.99 — the paper's 42–80 sensors for a whole-head array). The
+  $M^2\times M^2$ correlation Gram would be $93\text{k}\times 93\text{k}$ for a
+  306-channel array; in the $q$-dimensional working space it is a few thousand
+  square.
+
+Write $\mathbf{B}=\mathbf{U_q}^{\mathsf T}\mathbf{W}$ for the composite operator
+(whiten by $\mathbf{W}$, then keep the $q$ principal directions $\mathbf{U_q}$ of
+the whitened leadfield). Everything below lives in this working space: the
+leadfield $\mathbf{B}\mathbf{G}$, the covariance
+$\mathbf{B}\mathbf{R}\mathbf{B}^{\mathsf T}$, and the projector.
 
 **Building the projector — from the forward model alone.** Enumerate the
-auto-product vectors over the source grid as the columns of $G_p$
-and (for the whitened variant) the cross-product vectors as $G_c$.
+(working-space) auto-product vectors over the source grid as the columns of $G_p$
+and the symmetric cross-product vectors as $G_c$.
 
 - **`recipsiicos`** (Eq. 10): take the SVD of $G_p$, keep the
   top $K$ left singular vectors $\mathbf{U_K}$, and project *onto* the power
@@ -361,24 +391,34 @@ and (for the whitened variant) the cross-product vectors as $G_c$.
   $C_p=G_pG_p^{\mathsf T}$,
   its range-restricted inverse square root
   $W_p=\mathbf{E}\mathbf{\Lambda}^{-1/2}\mathbf{E}^{\mathsf T}$
-  (drop the null space — the auto-products live in the symmetric subspace of
-  dimension $M(M{+}1)/2$, so $C_p$ is *never* full rank and
+  (drop the null space — the auto-products span the symmetric subspace of
+  dimension $q(q{+}1)/2$, so $C_p$ is *never* full rank and
   must be range-restricted, not ridge-filled) — then, in that whitened space,
   project *away from* the top $K$ correlation directions and unwhiten. Because
-  the power directions have been flattened to unit scale first, this spares them
-  far better than the plain variant.
+  the power directions are flattened to unit scale first, this spares them far
+  better than the plain variant.
 
 **Applying it** (Eq. 11): reshape the projected vector back to a matrix and
 symmetrise,
 
-$$\tilde{\mathbf{R}}=\tfrac12\big(\mathbf{M}+\mathbf{M}^{\mathsf T}\big),\qquad \mathbf{M}=\mathrm{vec}^{-1}\big(\mathbf{P}\,\mathrm{vec}(\mathbf{R})\big).$$
+$$\tilde{\mathbf{R}}=\tfrac12\big(\mathbf{M}+\mathbf{M}^{\mathsf T}\big),\qquad \mathbf{M}=\mathrm{vec}^{-1}\big(\mathbf{P}\,\mathrm{vec}(\mathbf{B}\mathbf{R}\mathbf{B}^{\mathsf T})\big).$$
 
 Projecting out a subspace can make $\tilde{\mathbf{R}}$ indefinite, but a
-covariance fed to `make_lcmv` must be positive definite, so we **spectral-flip**
-(Eq. 12): eigendecompose and replace each eigenvalue by its absolute value. If a
-large fraction of the covariance energy sat in negative eigenvalues (default
-warn threshold 20%, Eq. 24), the rank $K$ was too aggressive and the method
-warns.
+covariance used by a beamformer must be positive semi-definite, so we
+**spectral-flip** (Eq. 12): eigendecompose and replace each eigenvalue by its
+absolute value. If a large fraction of the covariance energy sat in negative
+eigenvalues (default warn threshold 20%, Eq. 24), the rank $K$ was too aggressive
+and the method warns.
+
+**Solving the beamformer in the working space.** Because whitening and the
+virtual-sensor reduction both change the space, the cleaned covariance cannot be
+handed back to `make_lcmv` (which would whiten a second time and solve against
+the wrong leadfield). Instead the LCMV is solved *in the working space* by
+reusing MNE's own filter computation — its orientation selection, weight
+normalisation and rank handling — with an identity whitener there (the
+working-space noise is white by construction). The reduction operator
+$\mathbf{B}$ is then folded into the returned `Beamformer` as its whitener, so
+`apply_lcmv` applies the whole pipeline to sensor data unchanged.
 
 **Free orientation** (Eqs. 22–23): at each location the local $M\times 3$
 leadfield is reduced to its two dominant *tangential* topographies by a local
@@ -386,11 +426,15 @@ SVD; the power set then expands to three columns per location and the
 correlation set to four columns per location pair.
 
 **The one knob is $K$.** The projector depends only on the forward model, so it
-is built once and reused across datasets sharing that forward. In this package:
-`make_recipsiicos_cov(...)` returns the cleaned `mne.Covariance`;
-`make_recipsiicos_lcmv(...)` wraps it straight into a beamformer;
-`recipsiicos_rank_curve(...)` gives the retained power/correlation energy versus
-$K$ to choose it.
+is built once and reused across datasets sharing that forward.
+`recipsiicos_rank_curve(...)` returns the retained power/correlation energy
+versus $K$ (Eqs. 20–21) — computed in closed form over all ranks from a single
+decomposition rather than one per rank — and with `return_optimal=True` also the
+rank $K^*$ at the 45° point where the correlation subspace stops emptying faster
+than the power subspace (Section 2.4). Note $K$ lives in the $q^2$-dimensional
+working covariance space. `make_recipsiicos_cov(...)` returns the cleaned
+`mne.Covariance` (for inspection); `make_recipsiicos_lcmv(...)` builds the
+beamformer end to end.
 
 ---
 
@@ -413,11 +457,13 @@ $K$ to choose it.
 
 | Parameter | What it controls | Effect of changing it |
 |---|---|---|
-| `rank` (the projection rank $K$) | Size of the retained power subspace (`recipsiicos`) or removed correlation subspace (`whitened`) | The single most important knob. Too small → the projector removes real power (over-smoothing, lost sources); too large → correlation leaks back and cancellation returns. Use `recipsiicos_rank_curve` and pick $K$ near the elbow. |
+| `rank` (the projection rank $K$) | Size of the retained power subspace (`recipsiicos`) or removed correlation subspace (`whitened`), in the $q^2$-dimensional virtual-sensor space | The single most important knob. Too small → the projector removes real power (over-smoothing, lost sources); too large → correlation leaks back and cancellation returns. Use `recipsiicos_rank_curve` (optionally `return_optimal=True` for the 45° $K^*$) and pick $K$ near that point. |
 | `method` | Which projector | `recipsiicos` (project onto power) is simpler; `whitened` (project away from correlation in power-whitened space) spares source power better and is usually preferred for real data. |
-| `reg` | Regularisation of the LCMV inverse (and the whitening ridge for `whitened`) | Same trade-off as MCMV's `reg`: stability vs resolution. |
-| `noise_cov` (lcmv wrapper) | Whitening for the downstream LCMV | Needed for mixed sensor types; see the note above. |
-| `pick_ori`, `weight_norm`, … | Passed straight through to `make_lcmv` | Standard MNE beamformer options. |
+| `pct_var` / `n_virtual` | Virtual-sensor count $q$ | Fraction of whitened-leadfield variance kept (default 0.99), or an explicit count. Fewer virtual sensors → smaller and faster $M^2$-space but coarser subspace separation; too few and the power subspace fills the space, leaving the projector nothing to remove. |
+| `noise_cov` | Whitening model | Whitens per sensor type; **essential for mixed sensor types**. `None` uses an ad-hoc per-type model (a global scaling for a single type, which leaves the projector subspaces unchanged). |
+| `whitener_rank` | Numerical rank of the whitener | Use an integer after SSP/ICA/SSS (data are rank-deficient); `'full'` assumes full rank. |
+| `reg` | Tikhonov loading of the working-space LCMV inverse (and the whitening ridge for `whitened`) | Same trade-off as MCMV's `reg`: stability vs resolution. Default `0.05`. |
+| `pick_ori`, `weight_norm`, `reduce_rank`, `inversion` | Orientation and normalisation of the working-space LCMV | Reuse MNE's own filter computation, so they behave exactly as in `make_lcmv`. |
 
 If a ReciPSIICOS run warns about negative-eigenvalue energy above the threshold,
 lower `rank`: too much of the covariance was projected away and the
@@ -434,7 +480,7 @@ positive-definite repair had to flip a large amount of energy.
 | `scan_mcmv` → `MCMVScanResult` | Sequential source discovery |
 | `make_recipsiicos_cov` | ReciPSIICOS-cleaned `mne.Covariance` |
 | `make_recipsiicos_lcmv` | ReciPSIICOS + `make_lcmv` in one call |
-| `recipsiicos_rank_curve` | Retained-energy-versus-$K$ curve for choosing the rank |
+| `recipsiicos_rank_curve` | Retained-energy-versus-$K$ curve (and optional 45° optimum $K^*$) for choosing the rank |
 
 # References
 
