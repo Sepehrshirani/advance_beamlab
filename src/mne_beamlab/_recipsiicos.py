@@ -293,6 +293,76 @@ def _whitened_projector(g_pwr, c_cor, rank, reg):
 
 
 # --------------------------------------------------------------------------- #
+# Rank curves (Eqs. 20-21) -- closed-form over all ranks at once
+# --------------------------------------------------------------------------- #
+# The retained-energy fractions P_pwr(k) and P_cor(k) are needed for every rank
+# k = 1 .. q^2. Building and applying the projector separately at each rank costs
+# an SVD/eigendecomposition per rank (q^2 of them, each on a q^2 x q^2 matrix),
+# which is intractable for realistic virtual-sensor counts. Both curves can be
+# obtained from a single decomposition, exactly, as cumulative sums.
+def _power_rank_curve(g_pwr, c_pwr, c_cor, tr_pwr, tr_cor):
+    """Exact ReciPSIICOS retention curves for all ranks (Eq. 20-21).
+
+    With ``P_k = U_k U_k^T`` the projector onto the ``k`` leading power
+    directions, ``tr(P_k C P_k^T) = tr(U_k^T C U_k) = sum_{i<=k} u_i^T C u_i``,
+    so each curve is the cumulative sum of the per-direction quadratic forms.
+    """
+    u, _, _ = np.linalg.svd(g_pwr, full_matrices=False)
+    n_dir = u.shape[1]
+    msq = g_pwr.shape[0]
+    d_pwr = np.einsum("ij,ij->j", u, c_pwr @ u)  # u_i^T C_pwr u_i
+    d_cor = np.einsum("ij,ij->j", u, c_cor @ u)  # u_i^T C_cor u_i
+    cum_pwr = np.cumsum(d_pwr) / tr_pwr
+    cum_cor = np.cumsum(d_cor) / tr_cor
+    # For k > n_dir the projector is unchanged (all directions kept), so the
+    # curve is flat at its final value.
+    p_pwr = np.empty(msq)
+    p_cor = np.empty(msq)
+    p_pwr[:n_dir] = cum_pwr
+    p_pwr[n_dir:] = cum_pwr[-1]
+    p_cor[:n_dir] = cum_cor
+    p_cor[n_dir:] = cum_cor[-1]
+    return p_pwr, p_cor
+
+
+def _whitened_rank_curve(g_pwr, c_pwr, c_cor, tr_pwr, tr_cor, reg):
+    r"""Exact Whitened ReciPSIICOS retention curves for all ranks (Eq. 20-21).
+
+    Here ``P_k = W^{-1}(I - E_k E_k^T) W`` with ``E`` the eigenvectors of the
+    power-whitened correlation Gram (largest first). Writing ``C_w = W C W^T``,
+    ``M = W^{-1 T} W^{-1}``, ``P = E^T C_w E`` and ``Q = E^T M E``,
+
+    .. math::
+        \mathrm{tr}(P_k C P_k^{\mathsf T}) =
+        \mathrm{tr}(PQ) - \sum_{i\le k}(PQ)_{ii} - \sum_{i\le k}(QP)_{ii}
+        + \sum_{i,j\le k} P_{ij} Q_{ji},
+
+    every term of which is a cumulative sum over the ordered eigenvectors, so
+    both curves follow from a single eigendecomposition.
+    """
+    w, w_inv = _whitening_pair(c_pwr, reg)
+    c_cor_w = w @ c_cor @ w.T
+    eigvals, eigvecs = np.linalg.eigh(c_cor_w)
+    order = np.argsort(eigvals)[::-1]  # largest first (as removed by the projector)
+    e = eigvecs[:, order]
+    metric = e.T @ (w_inv.T @ w_inv) @ e  # Q
+    c_cor_e = e.T @ c_cor_w @ e  # P for the correlation Gram (diagonal = eigvals)
+    c_pwr_e = e.T @ (w @ c_pwr @ w.T) @ e  # P for the power Gram
+
+    def _curve(p_mat, trace):
+        pq = p_mat @ metric
+        qp = metric @ p_mat
+        diag_pq = np.diag(pq)
+        diag_qp = np.diag(qp)
+        block = p_mat * metric.T  # (i, j) -> P_ij Q_ji
+        block_cumsum = np.diag(np.cumsum(np.cumsum(block, axis=0), axis=1))
+        f_k = diag_pq.sum() - np.cumsum(diag_pq) - np.cumsum(diag_qp) + block_cumsum
+        return f_k / trace
+
+    return _curve(c_pwr_e, tr_pwr), _curve(c_cor_e, tr_cor)
+
+
+# --------------------------------------------------------------------------- #
 # Applying the projector and restoring positive-definiteness (Eqs. 11, 12, 24)
 # --------------------------------------------------------------------------- #
 def _apply_projector(projector, cov):
@@ -860,15 +930,12 @@ def recipsiicos_rank_curve(
 
     msq = g_pwr.shape[0]
     ranks = np.arange(1, msq + 1)
-    p_pwr = np.empty(ranks.size)
-    p_cor = np.empty(ranks.size)
-    for idx, k in enumerate(ranks):
-        if method == "recipsiicos":
-            projector, _ = _power_projector(g_pwr, k)
-        else:
-            projector, _ = _whitened_projector(g_pwr, c_cor, k, reg=reg)
-        p_pwr[idx] = np.trace(projector @ c_pwr @ projector.T) / tr_pwr
-        p_cor[idx] = np.trace(projector @ c_cor @ projector.T) / tr_cor
+    if method == "recipsiicos":
+        p_pwr, p_cor = _power_rank_curve(g_pwr, c_pwr, c_cor, tr_pwr, tr_cor)
+    else:
+        p_pwr, p_cor = _whitened_rank_curve(
+            g_pwr, c_pwr, c_cor, tr_pwr, tr_cor, reg
+        )
 
     if return_optimal:
         return ranks, p_pwr, p_cor, _optimal_rank(p_pwr, p_cor)

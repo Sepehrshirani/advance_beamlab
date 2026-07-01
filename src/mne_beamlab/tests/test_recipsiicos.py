@@ -374,6 +374,50 @@ def test_rank_curve_returns_optimal(fwd_fixed):
     assert 1 <= kstar <= ranks[-1]
 
 
+def test_rank_curve_matches_bruteforce(fwd_fixed):
+    """The closed-form curves equal the per-rank projector computation."""
+    from mne_beamlab._recipsiicos import (
+        _correlation_gram,
+        _forward_gain,
+        _power_projector,
+        _reduction_operator,
+        _tangential_topographies,
+        _whitened_projector,
+    )
+
+    info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
+    info.set_montage("standard_1020")
+    ch = fwd_fixed["sol"]["row_names"]
+    b_op, _, _ = _reduction_operator(
+        info, fwd_fixed, ch, noise_cov=None, whitener_rank="full",
+        pct_var=1.0, n_virtual=None,
+    )
+    gain, fixed = _forward_gain(fwd_fixed, ch)
+    topos = _tangential_topographies(b_op @ gain, fixed)
+    g_pwr = _power_columns(topos)
+    c_pwr = g_pwr @ g_pwr.T
+    c_cor = _correlation_gram(topos)
+    tr_pwr, tr_cor = np.trace(c_pwr), np.trace(c_cor)
+    msq = g_pwr.shape[0]
+    reg = 0.05
+
+    for method in ("recipsiicos", "whitened"):
+        _, p_pwr, p_cor = recipsiicos_rank_curve(
+            fwd_fixed, info, method=method, pct_var=1.0, reg=reg,
+        )
+        bp = np.empty(msq)
+        bc = np.empty(msq)
+        for i, k in enumerate(range(1, msq + 1)):
+            if method == "recipsiicos":
+                proj, _ = _power_projector(g_pwr, k)
+            else:
+                proj, _ = _whitened_projector(g_pwr, c_cor, k, reg=reg)
+            bp[i] = np.trace(proj @ c_pwr @ proj.T) / tr_pwr
+            bc[i] = np.trace(proj @ c_cor @ proj.T) / tr_cor
+        assert_allclose(p_pwr, bp, atol=1e-9)
+        assert_allclose(p_cor, bc, atol=1e-9)
+
+
 def test_optimal_rank_sign_change():
     """K* is the last rank before the first sign change of dP_cor/dk - dP_pwr/dk."""
     # A trailing positive marginal after the crossing must be ignored (the
