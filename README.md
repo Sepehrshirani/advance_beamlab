@@ -67,23 +67,23 @@ stc = apply_lcmv(evoked, filters)
 
 Notation: $M$ sensors, $N$ source locations. Bold lowercase are vectors, bold
 uppercase are matrices, $^{\mathsf T}$ is transpose, $\langle\cdot\rangle$ is the
-time average. $\mathbf{I}_n$ is the $n\times n$ identity.
+time average. $\mathbf{I_n}$ is the $n\times n$ identity.
 
 ## 1. The measurement model
 
 At each instant the sensors measure a linear mixture of the active sources plus
 noise:
 
-$$\mathbf{x}(t)=\sum_{i} \mathbf{g}_i\, s_i(t) + \mathbf{n}(t)=\mathbf{G}\,\mathbf{s}(t)+\mathbf{n}(t).$$
+$$\mathbf{x}(t)=\sum_{i} \mathbf{g_i}\, s_i(t) + \mathbf{n}(t)=\mathbf{G}\,\mathbf{s}(t)+\mathbf{n}(t).$$
 
 - $\mathbf{x}(t)\in\mathbb{R}^{M}$ is the sensor reading at time $t$.
 - $s_i(t)$ is the (scalar) time course of source $i$.
-- $\mathbf{g}_i\in\mathbb{R}^{M}$ is the **forward field** (a.k.a. leadfield,
+- $\mathbf{g_i}\in\mathbb{R}^{M}$ is the **forward field** (a.k.a. leadfield,
   topography) of source $i$: the pattern that source produces across the sensors
   when it has unit amplitude. It is computed once from the head model and sensor
   geometry — it is *known*.
 - $\mathbf{n}(t)$ is additive noise with covariance
-  $\mathbf{C}_n=\langle\mathbf{n}\mathbf{n}^{\mathsf T}\rangle$.
+  $\mathbf{C_n}=\langle\mathbf{n}\mathbf{n}^{\mathsf T}\rangle$.
 
 For a source at location $\mathbf{r}$ with **free orientation**, the forward
 field is $\mathbf{g}=\mathbf{L}(\mathbf{r})\,\mathbf{u}$, where
@@ -95,9 +95,9 @@ Everything downstream is driven by the **data covariance**
 
 $$\mathbf{R}=\langle\mathbf{x}\,\mathbf{x}^{\mathsf T}\rangle .$$
 
-If the sources have covariance $\mathbf{C}_s=\langle\mathbf{s}\mathbf{s}^{\mathsf T}\rangle$
+If the sources have covariance $\mathbf{C_s}=\langle\mathbf{s}\mathbf{s}^{\mathsf T}\rangle$
 and are uncorrelated with the noise, then
-$\mathbf{R}=\mathbf{G}\,\mathbf{C}_s\,\mathbf{G}^{\mathsf T}+\mathbf{C}_n$. Keep
+$\mathbf{R}=\mathbf{G}\,\mathbf{C_s}\,\mathbf{G}^{\mathsf T}+\mathbf{C_n}$. Keep
 this identity in mind — it is the reason the localizers below peak at the true
 sources, and the reason the ReciPSIICOS decomposition works.
 
@@ -131,12 +131,12 @@ over $\mathbf{r}$ is the classic beamformer power map.
 
 ## 3. Why correlated sources break LCMV
 
-Suppose two sources with fields $\mathbf{g}_1,\mathbf{g}_2$ have correlation
+Suppose two sources with fields $\mathbf{g_1},\mathbf{g_2}$ have correlation
 $\rho$. The LCMV filter for source 1 is free to place a null anywhere except
-along $\mathbf{g}_1$. Because source 2 is correlated with source 1, the filter
+along $\mathbf{g_1}$. Because source 2 is correlated with source 1, the filter
 can *lower its own output power* by passing a scaled, sign-flipped copy of
 source 2 that partially cancels source 1 in the average — the constraint on
-$\mathbf{g}_1$ is still satisfied instant by instant, but the variance is
+$\mathbf{g_1}$ is still satisfied instant by instant, but the variance is
 reduced by exploiting the correlation. The result is **signal cancellation**:
 the reconstructed power of source 1 is suppressed by roughly a factor
 $(1-\rho^2)$, collapsing to zero as $\rho\to 1$. Amplitudes are underestimated,
@@ -149,11 +149,11 @@ is what MCMV and ReciPSIICOS each remove, in two different ways.
 Instead of one filter that only protects its own source, MCMV solves for $n$
 filters **at once** and forbids each from responding to the *others'* fields.
 Collect the $n$ forward fields as the columns of
-$\mathbf{H}=[\mathbf{g}_1,\dots,\mathbf{g}_n]\in\mathbb{R}^{M\times n}$ and the
-$n$ filters as the columns of $\mathbf{W}=[\mathbf{w}_1,\dots,\mathbf{w}_n]$. The
+$\mathbf{H}=[\mathbf{g_1},\dots,\mathbf{g_n}]\in\mathbb{R}^{M\times n}$ and the
+$n$ filters as the columns of $\mathbf{W}=[\mathbf{w_1},\dots,\mathbf{w_n}]$. The
 constraint is
 
-$$\mathbf{W}^{\mathsf T}\mathbf{H}=\mathbf{I}_n,\qquad\text{i.e.}\qquad \mathbf{w}_i^{\mathsf T}\mathbf{g}_j=\delta_{ij}.$$
+$$\mathbf{W}^{\mathsf T}\mathbf{H}=\mathbf{I_n},\qquad\text{i.e.}\qquad \mathbf{w_i}^{\mathsf T}\mathbf{g_j}=\delta_{ij}.$$
 
 The diagonal ($i=j$) is the familiar **unit-gain** condition; the off-diagonal
 ($i\ne j$) **zero-gain** conditions are the new ingredient — filter $i$ is forced
@@ -161,10 +161,10 @@ to be *blind* to every other constrained source. A blind filter cannot exploit a
 correlation it cannot see, so the cancellation of Section 3 disappears.
 
 Minimise the total output power $\mathrm{Tr}(\mathbf{W}^{\mathsf T}\mathbf{R}\mathbf{W})$
-subject to $\mathbf{W}^{\mathsf T}\mathbf{H}=\mathbf{I}_n$. With a matrix of
+subject to $\mathbf{W}^{\mathsf T}\mathbf{H}=\mathbf{I_n}$. With a matrix of
 Lagrange multipliers $\mathbf{\Lambda}$,
 
-$$\mathcal{L}=\mathrm{Tr}(\mathbf{W}^{\mathsf T}\mathbf{R}\mathbf{W})-\mathrm{Tr}\!\big(\mathbf{\Lambda}(\mathbf{W}^{\mathsf T}\mathbf{H}-\mathbf{I}_n)\big),$$
+$$\mathcal{L}=\mathrm{Tr}(\mathbf{W}^{\mathsf T}\mathbf{R}\mathbf{W})-\mathrm{Tr}\big(\mathbf{\Lambda}(\mathbf{W}^{\mathsf T}\mathbf{H}-\mathbf{I_n})\big),$$
 
 $$\frac{\partial\mathcal{L}}{\partial\mathbf{W}}=2\mathbf{R}\mathbf{W}-\mathbf{H}\mathbf{\Lambda}^{\mathsf T}=\mathbf{0}\;\Rightarrow\;\mathbf{W}=\tfrac12\mathbf{R}^{-1}\mathbf{H}\,\mathbf{\Lambda}^{\mathsf T}.$$
 
@@ -191,7 +191,7 @@ filters on `Raw`/`Epochs`/`Evoked`/arrays.
 ## 5. Whitening, and why it is mandatory for mixed sensors
 
 The data covariance mixes sensor types with *different physical units* —
-magnetometers in tesla ($\sim\!10^{-13}$), gradiometers in T/m, EEG in volts.
+magnetometers in tesla ($\sim10^{-13}$), gradiometers in T/m, EEG in volts.
 The scalar $\mathbf{w}^{\mathsf T}\mathbf{R}\mathbf{w}$ then sums
 $\mathrm{T}^2$, $(\mathrm{T/m})^2$ and cross terms — literally adding
 incommensurable quantities — and $\mathbf{R}^{-1}$ is numerically dominated by
@@ -199,18 +199,18 @@ whichever block is largest, making the filter effectively blind to the
 smaller-scale sensor type. This is a *correctness* problem, not just
 conditioning.
 
-The fix is a change of coordinates. Build a **whitener** $\mathbf{W}_{\!n}$ from
-the noise covariance so that $\mathbf{W}_{\!n}\mathbf{C}_n\mathbf{W}_{\!n}^{\mathsf T}=\mathbf{I}$,
+The fix is a change of coordinates. Build a **whitener** $\mathbf{W_n}$ from
+the noise covariance so that $\mathbf{W_n}\mathbf{C_n}\mathbf{W_n}^{\mathsf T}=\mathbf{I}$,
 from the eigendecomposition
-$\mathbf{C}_n=\mathbf{U}\mathbf{\Lambda}\mathbf{U}^{\mathsf T}$,
-$\mathbf{W}_{\!n}=\mathbf{\Lambda}_r^{-1/2}\mathbf{U}_r^{\mathsf T}$ (keeping only
+$\mathbf{C_n}=\mathbf{U}\mathbf{\Lambda}\mathbf{U}^{\mathsf T}$,
+$\mathbf{W_n}=\mathbf{\Lambda_r}^{-1/2}\mathbf{U_r}^{\mathsf T}$ (keeping only
 the $r$ non-negligible eigenpairs — the numerical rank, which drops below $M$
 after SSS/Maxwell filtering or ICA). Then whiten leadfield and covariance,
 
-$$\tilde{\mathbf{H}}=\mathbf{W}_{\!n}\mathbf{H},\qquad \tilde{\mathbf{R}}=\mathbf{W}_{\!n}\mathbf{R}\,\mathbf{W}_{\!n}^{\mathsf T},$$
+$$\tilde{\mathbf{H}}=\mathbf{W_n}\mathbf{H},\qquad \tilde{\mathbf{R}}=\mathbf{W_n}\mathbf{R}\,\mathbf{W_n}^{\mathsf T},$$
 
 solve MCMV there, and fold the whitener back into the returned weights so they
-still act on raw sensor data ($\hat{\mathbf{s}}=\tilde{\mathbf{W}}^{\mathsf T}\mathbf{W}_{\!n}\mathbf{x}$).
+still act on raw sensor data ($\hat{\mathbf{s}}=\tilde{\mathbf{W}}^{\mathsf T}\mathbf{W_n}\mathbf{x}$).
 In whitened coordinates every channel is dimensionless with unit noise variance,
 so all sensor types are commensurable.
 
@@ -233,7 +233,7 @@ Two consequences worth internalising:
   on the raw leadfield, so reconstructed amplitudes are in physical source
   units. Use it when amplitudes/units matter.
 - **`unit-noise-gain`**: rescale each filter so that
-  $\mathbf{w}_i^{\mathsf T}\mathbf{C}_n\mathbf{w}_i=1$, i.e. unit output noise.
+  $\mathbf{w_i}^{\mathsf T}\mathbf{C_n}\mathbf{w_i}=1$, i.e. unit output noise.
   Because the solve is in whitened space this is exactly unit Euclidean norm of
   the whitened filter — MNE's definition. It equalises the noise floor across
   locations, which is what you want for *maps* (so deep, low-SNR locations are
@@ -245,9 +245,9 @@ MCMV needs to know *which* sources to constrain. The localizers are scalar maps
 that peak at the true sources. They are built from four $n\times n$ matrices
 (Moiseev et al. 2011, Table 2), each a leadfield sandwiched around a covariance:
 
-$$\mathbf{S}=\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\mathbf{H},\qquad \mathbf{G}=\mathbf{H}^{\mathsf T}\mathbf{C}_n^{-1}\mathbf{H},$$
+$$\mathbf{S}=\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\mathbf{H},\qquad \mathbf{G}=\mathbf{H}^{\mathsf T}\mathbf{C_n}^{-1}\mathbf{H},$$
 
-$$\mathbf{T}=\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\mathbf{C}_n\mathbf{R}^{-1}\mathbf{H},\qquad \mathbf{E}=\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\bar{\mathbf{R}}\,\mathbf{R}^{-1}\mathbf{H},$$
+$$\mathbf{T}=\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\mathbf{C_n}\mathbf{R}^{-1}\mathbf{H},\qquad \mathbf{E}=\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\bar{\mathbf{R}}\,\mathbf{R}^{-1}\mathbf{H},$$
 
 where $\bar{\mathbf{R}}=\langle\bar{\mathbf{b}}\bar{\mathbf{b}}^{\mathsf T}\rangle$
 is the covariance of the epoch-**averaged** (evoked) field. The four localizers
@@ -255,36 +255,36 @@ is the covariance of the epoch-**averaged** (evoked) field. The four localizers
 
 | Localizer | Formula | Reduces at $n=1$ to | Use it for |
 |---|---|---|---|
-| **MAI** (activity index) | $\mathrm{Tr}(\mathbf{G}\mathbf{S}^{-1})-n$ | $\zeta-1=\dfrac{\mathbf{g}^{\mathsf T}\mathbf{C}_n^{-1}\mathbf{g}}{\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{g}}-1$ | robust, broad peaks |
-| **MPZ** (pseudo-Z) | $\mathrm{Tr}(\mathbf{S}\mathbf{T}^{-1})-n$ | $\bar Z-1=\dfrac{\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{g}}{\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{C}_n\mathbf{R}^{-1}\mathbf{g}}-1$ | sharper localisation |
+| **MAI** (activity index) | $\mathrm{Tr}(\mathbf{G}\mathbf{S}^{-1})-n$ | $\zeta-1=\dfrac{\mathbf{g}^{\mathsf T}\mathbf{C_n}^{-1}\mathbf{g}}{\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{g}}-1$ | robust, broad peaks |
+| **MPZ** (pseudo-Z) | $\mathrm{Tr}(\mathbf{S}\mathbf{T}^{-1})-n$ | $\bar Z-1=\dfrac{\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{g}}{\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{C_n}\mathbf{R}^{-1}\mathbf{g}}-1$ | sharper localisation |
 | **MER** (evoked) | $\mathrm{Tr}(\mathbf{E}\mathbf{T}^{-1})$ | evoked pseudo-Z | phase-locked responses |
-| **rMER** (reduced evoked) | $\mathrm{Tr}(\mathbf{E}\mathbf{S}^{-1})$ | reduced evoked pseudo-Z | evoked, no clean $\mathbf{C}_n$ |
+| **rMER** (reduced evoked) | $\mathrm{Tr}(\mathbf{E}\mathbf{S}^{-1})$ | reduced evoked pseudo-Z | evoked, no clean $\mathbf{C_n}$ |
 
 Intuition: $\zeta$ is a *(signal+noise)/noise* ratio — $(\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{g})^{-1}$
 is the total reconstructed power (signal + leaked noise) and
-$(\mathbf{g}^{\mathsf T}\mathbf{C}_n^{-1}\mathbf{g})^{-1}$ is the noise-only power,
+$(\mathbf{g}^{\mathsf T}\mathbf{C_n}^{-1}\mathbf{g})^{-1}$ is the noise-only power,
 so subtracting $1$ gives a *pure* signal-to-noise ratio that is zero where there
 is no source. The multi-source versions generalise this to the whole
 constrained set. Two facts proved in the paper and verified in the tests: both
-power localizers are non-negative and ordered, $P_{\mathrm{MAI}}\ge P_{\mathrm{MPZ}}$
+power localizers are non-negative and ordered (the MAI value $\ge$ the MPZ value)
 (MPZ is sharper but noisier), and each localizer's global maximum is the true
-source configuration (they are *unbiased* for any $\mathbf{C}_n$). The power
+source configuration (they are *unbiased* for any $\mathbf{C_n}$). The power
 localizers (MAI, MPZ) work for induced/oscillatory activity; the event-related
 ones (MER, rMER) target phase-locked responses and need $\bar{\mathbf{R}}$.
 
-Everything is computed in the whitened space where $\mathbf{C}_n=\mathbf{I}$; the
+Everything is computed in the whitened space where $\mathbf{C_n}=\mathbf{I}$; the
 localizers are **invariant** under whitening, so the values are identical to the
 raw-space formulas above.
 
 ## 8. Data-driven orientation (no orientation search)
 
 For a free-orientation forward each candidate location contributes an $M\times 3$
-block $\mathbf{H}_k=[\mathbf{h}^x_k,\mathbf{h}^y_k,\mathbf{h}^z_k]$, and we must
-pick the orientation $\mathbf{u}_k$ (so that $\mathbf{g}_k=\mathbf{H}_k\mathbf{u}_k$)
+block $\mathbf{H_k}=[\mathbf{h}^x_k,\mathbf{h}^y_k,\mathbf{h}^z_k]$, and we must
+pick the orientation $\mathbf{u_k}$ (so that $\mathbf{g_k}=\mathbf{H_k}\mathbf{u_k}$)
 that maximises the localizer, *given* the sources already found (their fields
-form the reference block $\mathbf{H}_R$). Moiseev et al. show the maximiser is
+form the reference block $\mathbf{H_R}$). Moiseev et al. show the maximiser is
 the top eigenvector of a $3\times 3$ generalized eigenproblem
-$\mathbf{D}\,\mathbf{u}_k=\lambda\,\mathbf{F}\,\mathbf{u}_k$ — no scan over angles
+$\mathbf{D}\,\mathbf{u_k}=\lambda\,\mathbf{F}\,\mathbf{u_k}$ — no scan over angles
 is needed:
 
 $$\mathbf{F}=\mathbf{A}_{kk}-\mathbf{A}_{kR}\mathbf{A}_{RR}^{-1}\mathbf{A}_{Rk},$$
@@ -294,12 +294,14 @@ $$\mathbf{D}=\mathbf{A}_{kR}\mathbf{A}_{RR}^{-1}\mathbf{B}_{RR}\mathbf{A}_{RR}^{
 Here $(\mathbf{A},\mathbf{B})$ is the localizer's (denominator, numerator) pair —
 $(\mathbf{S},\mathbf{G})$ for MAI, $(\mathbf{T},\mathbf{S})$ for MPZ,
 $(\mathbf{T},\mathbf{E})$ for MER, $(\mathbf{S},\mathbf{E})$ for rMER — and the
-subscripted blocks are the Table-2 matrices evaluated between $\mathbf{H}_R$ and
-$\mathbf{H}_k$. $\mathbf{F}$ is the Schur complement of the denominator (it
+subscripted blocks are the Table-2 matrices evaluated between $\mathbf{H_R}$ and
+$\mathbf{H_k}$. $\mathbf{F}$ is the Schur complement of the denominator (it
 "conditions out" the already-found sources); $\mathbf{D}$ is the corresponding
 numerator form. With no references (the first source), it collapses to
-$\mathbf{B}_{kk}\mathbf{u}=\lambda\mathbf{A}_{kk}\mathbf{u}$. Exposed as
-`optimal_orientation(...)`.
+
+$$\mathbf{B}_{kk}\mathbf{u}=\lambda\mathbf{A}_{kk}\mathbf{u}.$$
+
+Exposed as `optimal_orientation(...)`.
 
 ## 9. The sequential source search
 
@@ -315,7 +317,7 @@ search is greedy and iterative (Moiseev et al. 2011):
    progressively removed and previously masked sources emerge.
 
 **Knowing when to stop.** After adding source $k$, monitor its single-source
-pseudo-Z $\bar z_k=(\mathbf{w}_k^{\mathsf T}\mathbf{R}\mathbf{w}_k)/(\mathbf{w}_k^{\mathsf T}\mathbf{C}_n\mathbf{w}_k)$.
+pseudo-Z $\bar z_k=(\mathbf{w_k}^{\mathsf T}\mathbf{R}\mathbf{w_k})/(\mathbf{w_k}^{\mathsf T}\mathbf{C_n}\mathbf{w_k})$.
 Genuine sources have large $\bar z_k$; once you start adding noise, $\bar z_k$
 drops to a baseline and fluctuates. The baseline is generally **not** $1$ and
 must be judged from the data — so `scan_mcmv` runs a requested `n_sources` and
@@ -332,35 +334,35 @@ longer cancels correlated sources.
 
 **The vec view.** Stack the columns of the $M\times M$ covariance into a vector
 $\mathrm{vec}(\mathbf{R})\in\mathbb{R}^{M^2}$. Using
-$\mathbf{R}=\mathbf{G}\mathbf{C}_s\mathbf{G}^{\mathsf T}+\mathbf{C}_n$ and
-$\mathrm{vec}(\mathbf{g}_i\mathbf{g}_j^{\mathsf T})=\mathbf{g}_j\otimes\mathbf{g}_i$,
+$\mathbf{R}=\mathbf{G}\mathbf{C_s}\mathbf{G}^{\mathsf T}+\mathbf{C_n}$ and
+$\mathrm{vec}(\mathbf{g_i}\mathbf{g_j}^{\mathsf T})=\mathbf{g_j}\otimes\mathbf{g_i}$,
 
-$$\mathrm{vec}(\mathbf{R})=\sum_i [\mathbf{C}_s]_{ii}\,\mathrm{vec}(\mathbf{g}_i\mathbf{g}_i^{\mathsf T})+\sum_{i\ne j}[\mathbf{C}_s]_{ij}\,\mathrm{vec}(\mathbf{g}_i\mathbf{g}_j^{\mathsf T})+\mathrm{vec}(\mathbf{C}_n).$$
+$$\mathrm{vec}(\mathbf{R})=\sum_i [\mathbf{C_s}]_{ii}\,\mathrm{vec}(\mathbf{g_i}\mathbf{g_i}^{\mathsf T})+\sum_{i\ne j}[\mathbf{C_s}]_{ij}\,\mathrm{vec}(\mathbf{g_i}\mathbf{g_j}^{\mathsf T})+\mathrm{vec}(\mathbf{C_n}).$$
 
 The first sum collects the **auto-products** (the source powers); the second collects the **cross-products** (the source couplings).
 
-The **auto-product** directions $\mathrm{vec}(\mathbf{g}_i\mathbf{g}_i^{\mathsf T})$
+The **auto-product** directions $\mathrm{vec}(\mathbf{g_i}\mathbf{g_i}^{\mathsf T})$
 carry the source powers; the **cross-product** directions
-$\mathrm{vec}(\mathbf{g}_i\mathbf{g}_j^{\mathsf T})$ carry the couplings —
+$\mathrm{vec}(\mathbf{g_i}\mathbf{g_j}^{\mathsf T})$ carry the couplings —
 and the couplings are *exactly* what an LCMV beamformer exploits to cancel
 correlated sources. Kill the cross-product part of the covariance and the
 cancellation has nothing to feed on.
 
 **Building the projector — from the forward model alone.** Enumerate the
-auto-product vectors over the source grid as the columns of $\mathbf{G}_{\mathrm{pwr}}$
-and (for the whitened variant) the cross-product vectors as $\mathbf{G}_{\mathrm{cor}}$.
+auto-product vectors over the source grid as the columns of $G_p$
+and (for the whitened variant) the cross-product vectors as $G_c$.
 
-- **`recipsiicos`** (Eq. 10): take the SVD of $\mathbf{G}_{\mathrm{pwr}}$, keep the
-  top $K$ left singular vectors $\mathbf{U}_K$, and project *onto* the power
-  subspace, $\mathbf{P}=\mathbf{U}_K\mathbf{U}_K^{\mathsf T}$. This retains
+- **`recipsiicos`** (Eq. 10): take the SVD of $G_p$, keep the
+  top $K$ left singular vectors $\mathbf{U_K}$, and project *onto* the power
+  subspace, $\mathbf{P}=\mathbf{U_K}\mathbf{U_K}^{\mathsf T}$. This retains
   power, and whatever of the correlation subspace is (near-)orthogonal to it is
   removed.
 - **`whitened`** (Eqs. 15–17): first *whiten by the power subspace* — form
-  $\mathbf{C}_{\mathrm{pwr}}=\mathbf{G}_{\mathrm{pwr}}\mathbf{G}_{\mathrm{pwr}}^{\mathsf T}$,
+  $C_p=G_pG_p^{\mathsf T}$,
   its range-restricted inverse square root
-  $\mathbf{W}_{\mathrm{pwr}}=\mathbf{E}\mathbf{\Lambda}^{-1/2}\mathbf{E}^{\mathsf T}$
+  $W_p=\mathbf{E}\mathbf{\Lambda}^{-1/2}\mathbf{E}^{\mathsf T}$
   (drop the null space — the auto-products live in the symmetric subspace of
-  dimension $M(M{+}1)/2$, so $\mathbf{C}_{\mathrm{pwr}}$ is *never* full rank and
+  dimension $M(M{+}1)/2$, so $C_p$ is *never* full rank and
   must be range-restricted, not ridge-filled) — then, in that whitened space,
   project *away from* the top $K$ correlation directions and unwhiten. Because
   the power directions have been flattened to unit scale first, this spares them
@@ -369,7 +371,7 @@ and (for the whitened variant) the cross-product vectors as $\mathbf{G}_{\mathrm
 **Applying it** (Eq. 11): reshape the projected vector back to a matrix and
 symmetrise,
 
-$$\tilde{\mathbf{R}}=\tfrac12\big(\mathbf{M}+\mathbf{M}^{\mathsf T}\big),\qquad \mathbf{M}=\mathrm{vec}^{-1}\!\big(\mathbf{P}\,\mathrm{vec}(\mathbf{R})\big).$$
+$$\tilde{\mathbf{R}}=\tfrac12\big(\mathbf{M}+\mathbf{M}^{\mathsf T}\big),\qquad \mathbf{M}=\mathrm{vec}^{-1}\big(\mathbf{P}\,\mathrm{vec}(\mathbf{R})\big).$$
 
 Projecting out a subspace can make $\tilde{\mathbf{R}}$ indefinite, but a
 covariance fed to `make_lcmv` must be positive definite, so we **spectral-flip**
