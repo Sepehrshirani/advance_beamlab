@@ -1,4 +1,4 @@
-"""mne-beamlab: advanced beamformers for MNE-Python.
+"""mne-beamlab: advanced minimum-variance beamformers for MNE-Python.
 
 A staging package of peer-reviewed beamforming algorithms that extend the
 adaptive spatial filters in :mod:`mne.beamformer`, written to MNE-Python's
@@ -14,8 +14,10 @@ Currently implemented:
 """
 
 from ._localizers import (
+    MCMVScanResult,
     localizer_value,
     optimal_orientation,
+    scan_mcmv,
 )
 from ._mcmv import (
     MCMVBeamformer,
@@ -34,6 +36,8 @@ __all__ = [
     "apply_mcmv",
     "apply_mcmv_cov",
     "MCMVBeamformer",
+    "scan_mcmv",
+    "MCMVScanResult",
     "localizer_value",
     "optimal_orientation",
     "make_recipsiicos_cov",

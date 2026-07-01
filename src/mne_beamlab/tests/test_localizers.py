@@ -3,11 +3,15 @@
 # Authors: the mne-beamlab contributors
 # License: BSD-3-Clause
 
+import mne
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
+from mne_beamlab import MCMVBeamformer, apply_mcmv, scan_mcmv
 from mne_beamlab._localizers import localizer_value, optimal_orientation
+
+mne.set_log_level("ERROR")
 
 
 # --------------------------------------------------------------------------- #
@@ -172,3 +176,88 @@ def test_orientation_requires_three_columns():
     H_loc2 = rng.standard_normal((n_ch, 2))  # only 2 columns, not x/y/z
     with pytest.raises(ValueError, match="3 columns"):
         optimal_orientation("mai", np.empty((n_ch, 0)), H_loc2, R, N)
+
+
+# --------------------------------------------------------------------------- #
+# 6. Sequential source search: recover implanted sources on a sphere forward.
+# --------------------------------------------------------------------------- #
+@pytest.fixture(scope="module")
+def sphere_fwd():
+    """A small free-orientation EEG forward on a sphere + its Info."""
+    montage = mne.channels.make_standard_montage("standard_1020")
+    info = mne.create_info(montage.ch_names[:32], 200.0, "eeg")
+    info.set_montage("standard_1020")
+    sphere = mne.make_sphere_model("auto", "auto", info)
+    src = mne.setup_volume_source_space(sphere=sphere, pos=30.0)
+    fwd = mne.make_forward_solution(info, None, src, sphere, eeg=True, meg=False)
+    fwd = mne.convert_forward_solution(fwd, force_fixed=False, surf_ori=False)
+    return fwd, info
+
+
+def _implanted_cov(fwd, info, locs, oris, corr=0.0, snr=9.0):
+    """Data covariance R = N + scale * H C H^T for implanted sources (N = I)."""
+    G = fwd["sol"]["data"]
+    cols = [
+        G[:, 3 * loc : 3 * loc + 3] @ (u / np.linalg.norm(u))
+        for loc, u in zip(locs, oris, strict=True)
+    ]
+    H = np.column_stack(cols)
+    k = len(locs)
+    C = np.full((k, k), corr) + (1.0 - corr) * np.eye(k)  # pairwise correlation
+    N = np.eye(G.shape[0])
+    sig = H @ C @ H.T
+    R = N + snr * np.trace(N) / np.trace(sig) * sig  # target rough SNR
+    cov = mne.Covariance(
+        R, info["ch_names"], info["bads"], list(info["projs"]), nfree=1
+    )
+    return cov
+
+
+@pytest.mark.parametrize("localizer", ["mai", "mpz"])
+def test_scan_recovers_single_source(sphere_fwd, localizer):
+    """A single implanted source is recovered exactly (it lies on the grid)."""
+    fwd, info = sphere_fwd
+    true_loc, true_ori = 26, np.array([1.0, -1.0, 0.5])
+    cov = _implanted_cov(fwd, info, [true_loc], [true_ori])
+
+    res = scan_mcmv(info, fwd, cov, localizer=localizer, n_sources=1)
+    assert res["sources"] == [true_loc]
+    # Orientation is recovered up to sign.
+    cos = np.abs(res["orientations"][0] @ (true_ori / np.linalg.norm(true_ori)))
+    assert cos > 0.99
+
+
+def test_scan_recovers_two_correlated_sources(sphere_fwd):
+    """Two correlated sources are both recovered by the sequential search."""
+    fwd, info = sphere_fwd
+    locs = [10, 45]
+    oris = [np.array([1.0, 0.0, 0.3]), np.array([0.0, 1.0, -0.2])]
+    cov = _implanted_cov(fwd, info, locs, oris, corr=0.8, snr=16.0)
+
+    res = scan_mcmv(info, fwd, cov, localizer="mpz", n_sources=2)
+    assert set(res["sources"]) == set(locs)
+
+
+def test_scan_result_is_usable(sphere_fwd):
+    """The result exposes filters, pseudo-Z and maps of the right shapes."""
+    fwd, info = sphere_fwd
+    cov = _implanted_cov(fwd, info, [15, 33], [[1, 0, 0], [0, 0, 1]], corr=0.5)
+
+    res = scan_mcmv(info, fwd, cov, localizer="mai", n_sources=2)
+    assert isinstance(res, dict)
+    assert isinstance(res["filters"], MCMVBeamformer)
+    assert res["pseudo_z"].shape == (2,)
+    assert len(res["maps"]) == 2 and res["maps"][0].shape == (fwd["nsource"],)
+    # The jointly-optimal filters apply to sensor data.
+    rng = np.random.default_rng(0)
+    arr = rng.standard_normal((len(res["filters"]["ch_names"]), 40))
+    assert apply_mcmv(arr, res["filters"]).shape == (2, 40)
+
+
+def test_scan_rejects_bad_n_sources(sphere_fwd):
+    fwd, info = sphere_fwd
+    cov = _implanted_cov(fwd, info, [20], [[1, 0, 0]])
+    with pytest.raises(ValueError, match="n_sources must be >= 1"):
+        scan_mcmv(info, fwd, cov, n_sources=0)
+    with pytest.raises(ValueError, match="exceeds the number of grid"):
+        scan_mcmv(info, fwd, cov, n_sources=fwd["nsource"] + 1)
