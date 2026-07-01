@@ -118,12 +118,9 @@ This is the Linearly Constrained Minimum Variance (LCMV) problem. Minimising
 $\mathbf{w}^{\mathsf T}\mathbf{R}\mathbf{w}$ subject to
 $\mathbf{w}^{\mathsf T}\mathbf{g}=1$ with a Lagrange multiplier $\lambda$,
 
-$$
-\begin{aligned}
-\mathcal{L}&=\mathbf{w}^{\mathsf T}\mathbf{R}\mathbf{w}-\lambda(\mathbf{w}^{\mathsf T}\mathbf{g}-1),\\
-\frac{\partial\mathcal{L}}{\partial\mathbf{w}}&=2\mathbf{R}\mathbf{w}-\lambda\mathbf{g}=\mathbf{0}\;\Rightarrow\;\mathbf{w}=\tfrac{\lambda}{2}\mathbf{R}^{-1}\mathbf{g}.
-\end{aligned}
-$$
+$$\mathcal{L}=\mathbf{w}^{\mathsf T}\mathbf{R}\mathbf{w}-\lambda(\mathbf{w}^{\mathsf T}\mathbf{g}-1),$$
+
+$$\frac{\partial\mathcal{L}}{\partial\mathbf{w}}=2\mathbf{R}\mathbf{w}-\lambda\mathbf{g}=\mathbf{0}\;\Rightarrow\;\mathbf{w}=\tfrac{\lambda}{2}\mathbf{R}^{-1}\mathbf{g}.$$
 
 Enforcing the constraint $\mathbf{w}^{\mathsf T}\mathbf{g}=1$ fixes $\lambda$ and gives the LCMV filter, whose reconstructed power is $\langle\hat s^2\rangle=1/(\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{g})$:
 
@@ -167,12 +164,9 @@ Minimise the total output power $\mathrm{Tr}(\mathbf{W}^{\mathsf T}\mathbf{R}\ma
 subject to $\mathbf{W}^{\mathsf T}\mathbf{H}=\mathbf{I}_n$. With a matrix of
 Lagrange multipliers $\mathbf{\Lambda}$,
 
-$$
-\begin{aligned}
-\mathcal{L}&=\mathrm{Tr}(\mathbf{W}^{\mathsf T}\mathbf{R}\mathbf{W})-\mathrm{Tr}\!\big(\mathbf{\Lambda}(\mathbf{W}^{\mathsf T}\mathbf{H}-\mathbf{I}_n)\big),\\
-\frac{\partial\mathcal{L}}{\partial\mathbf{W}}&=2\mathbf{R}\mathbf{W}-\mathbf{H}\mathbf{\Lambda}^{\mathsf T}=\mathbf{0}\;\Rightarrow\;\mathbf{W}=\tfrac12\mathbf{R}^{-1}\mathbf{H}\,\mathbf{\Lambda}^{\mathsf T}.
-\end{aligned}
-$$
+$$\mathcal{L}=\mathrm{Tr}(\mathbf{W}^{\mathsf T}\mathbf{R}\mathbf{W})-\mathrm{Tr}\!\big(\mathbf{\Lambda}(\mathbf{W}^{\mathsf T}\mathbf{H}-\mathbf{I}_n)\big),$$
+
+$$\frac{\partial\mathcal{L}}{\partial\mathbf{W}}=2\mathbf{R}\mathbf{W}-\mathbf{H}\mathbf{\Lambda}^{\mathsf T}=\mathbf{0}\;\Rightarrow\;\mathbf{W}=\tfrac12\mathbf{R}^{-1}\mathbf{H}\,\mathbf{\Lambda}^{\mathsf T}.$$
 
 Substituting into the constraint $\mathbf{W}^{\mathsf T}\mathbf{H}=\mathbf{I}$
 fixes $\mathbf{\Lambda}$ and yields the **MCMV weights** (Moiseev et al. 2011,
@@ -251,10 +245,9 @@ MCMV needs to know *which* sources to constrain. The localizers are scalar maps
 that peak at the true sources. They are built from four $n\times n$ matrices
 (Moiseev et al. 2011, Table 2), each a leadfield sandwiched around a covariance:
 
-$$\mathbf{S}=\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\mathbf{H},\quad
-\mathbf{G}=\mathbf{H}^{\mathsf T}\mathbf{C}_n^{-1}\mathbf{H},\quad
-\mathbf{T}=\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\mathbf{C}_n\mathbf{R}^{-1}\mathbf{H},\quad
-\mathbf{E}=\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\bar{\mathbf{R}}\,\mathbf{R}^{-1}\mathbf{H},$$
+$$\mathbf{S}=\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\mathbf{H},\qquad \mathbf{G}=\mathbf{H}^{\mathsf T}\mathbf{C}_n^{-1}\mathbf{H},$$
+
+$$\mathbf{T}=\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\mathbf{C}_n\mathbf{R}^{-1}\mathbf{H},\qquad \mathbf{E}=\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\bar{\mathbf{R}}\,\mathbf{R}^{-1}\mathbf{H},$$
 
 where $\bar{\mathbf{R}}=\langle\bar{\mathbf{b}}\bar{\mathbf{b}}^{\mathsf T}\rangle$
 is the covariance of the epoch-**averaged** (evoked) field. The four localizers
@@ -273,7 +266,7 @@ $(\mathbf{g}^{\mathsf T}\mathbf{C}_n^{-1}\mathbf{g})^{-1}$ is the noise-only pow
 so subtracting $1$ gives a *pure* signal-to-noise ratio that is zero where there
 is no source. The multi-source versions generalise this to the whole
 constrained set. Two facts proved in the paper and verified in the tests: both
-power localizers are non-negative and ordered, $P_{\text{MAI}}\ge P_{\text{MPZ}}$
+power localizers are non-negative and ordered, $P_{\mathrm{MAI}}\ge P_{\mathrm{MPZ}}$
 (MPZ is sharper but noisier), and each localizer's global maximum is the true
 source configuration (they are *unbiased* for any $\mathbf{C}_n$). The power
 localizers (MAI, MPZ) work for induced/oscillatory activity; the event-related
@@ -294,10 +287,9 @@ the top eigenvector of a $3\times 3$ generalized eigenproblem
 $\mathbf{D}\,\mathbf{u}_k=\lambda\,\mathbf{F}\,\mathbf{u}_k$ — no scan over angles
 is needed:
 
-$$\mathbf{F}=\mathbf{A}_{kk}-\mathbf{A}_{kR}\mathbf{A}_{RR}^{-1}\mathbf{A}_{Rk},\qquad
-\mathbf{D}=\mathbf{A}_{kR}\mathbf{A}_{RR}^{-1}\mathbf{B}_{RR}\mathbf{A}_{RR}^{-1}\mathbf{A}_{Rk}
--\mathbf{A}_{kR}\mathbf{A}_{RR}^{-1}\mathbf{B}_{Rk}
--\mathbf{B}_{kR}\mathbf{A}_{RR}^{-1}\mathbf{A}_{Rk}+\mathbf{B}_{kk}.$$
+$$\mathbf{F}=\mathbf{A}_{kk}-\mathbf{A}_{kR}\mathbf{A}_{RR}^{-1}\mathbf{A}_{Rk},$$
+
+$$\mathbf{D}=\mathbf{A}_{kR}\mathbf{A}_{RR}^{-1}\mathbf{B}_{RR}\mathbf{A}_{RR}^{-1}\mathbf{A}_{Rk}-\mathbf{A}_{kR}\mathbf{A}_{RR}^{-1}\mathbf{B}_{Rk}-\mathbf{B}_{kR}\mathbf{A}_{RR}^{-1}\mathbf{A}_{Rk}+\mathbf{B}_{kk}.$$
 
 Here $(\mathbf{A},\mathbf{B})$ is the localizer's (denominator, numerator) pair —
 $(\mathbf{S},\mathbf{G})$ for MAI, $(\mathbf{T},\mathbf{S})$ for MPZ,
@@ -343,14 +335,9 @@ $\mathrm{vec}(\mathbf{R})\in\mathbb{R}^{M^2}$. Using
 $\mathbf{R}=\mathbf{G}\mathbf{C}_s\mathbf{G}^{\mathsf T}+\mathbf{C}_n$ and
 $\mathrm{vec}(\mathbf{g}_i\mathbf{g}_j^{\mathsf T})=\mathbf{g}_j\otimes\mathbf{g}_i$,
 
-$$
-\begin{aligned}
-\mathrm{vec}(\mathbf{R})
-&= \underbrace{\sum_i [\mathbf{C}_s]_{ii}\,\mathrm{vec}(\mathbf{g}_i\mathbf{g}_i^{\mathsf T})}_{\text{auto-products (source power)}}\\
-&+ \underbrace{\sum_{i\ne j}[\mathbf{C}_s]_{ij}\,\mathrm{vec}(\mathbf{g}_i\mathbf{g}_j^{\mathsf T})}_{\text{cross-products (source coupling)}}
-+ \mathrm{vec}(\mathbf{C}_n).
-\end{aligned}
-$$
+$$\mathrm{vec}(\mathbf{R})=\sum_i [\mathbf{C}_s]_{ii}\,\mathrm{vec}(\mathbf{g}_i\mathbf{g}_i^{\mathsf T})+\sum_{i\ne j}[\mathbf{C}_s]_{ij}\,\mathrm{vec}(\mathbf{g}_i\mathbf{g}_j^{\mathsf T})+\mathrm{vec}(\mathbf{C}_n).$$
+
+The first sum collects the **auto-products** (the source powers); the second collects the **cross-products** (the source couplings).
 
 The **auto-product** directions $\mathrm{vec}(\mathbf{g}_i\mathbf{g}_i^{\mathsf T})$
 carry the source powers; the **cross-product** directions
@@ -360,20 +347,20 @@ correlated sources. Kill the cross-product part of the covariance and the
 cancellation has nothing to feed on.
 
 **Building the projector — from the forward model alone.** Enumerate the
-auto-product vectors over the source grid as the columns of $\mathbf{G}_{\text{pwr}}$
-and (for the whitened variant) the cross-product vectors as $\mathbf{G}_{\text{cor}}$.
+auto-product vectors over the source grid as the columns of $\mathbf{G}_{\mathrm{pwr}}$
+and (for the whitened variant) the cross-product vectors as $\mathbf{G}_{\mathrm{cor}}$.
 
-- **`recipsiicos`** (Eq. 10): take the SVD of $\mathbf{G}_{\text{pwr}}$, keep the
+- **`recipsiicos`** (Eq. 10): take the SVD of $\mathbf{G}_{\mathrm{pwr}}$, keep the
   top $K$ left singular vectors $\mathbf{U}_K$, and project *onto* the power
   subspace, $\mathbf{P}=\mathbf{U}_K\mathbf{U}_K^{\mathsf T}$. This retains
   power, and whatever of the correlation subspace is (near-)orthogonal to it is
   removed.
 - **`whitened`** (Eqs. 15–17): first *whiten by the power subspace* — form
-  $\mathbf{C}_{\text{pwr}}=\mathbf{G}_{\text{pwr}}\mathbf{G}_{\text{pwr}}^{\mathsf T}$,
+  $\mathbf{C}_{\mathrm{pwr}}=\mathbf{G}_{\mathrm{pwr}}\mathbf{G}_{\mathrm{pwr}}^{\mathsf T}$,
   its range-restricted inverse square root
-  $\mathbf{W}_{\text{pwr}}=\mathbf{E}\mathbf{\Lambda}^{-1/2}\mathbf{E}^{\mathsf T}$
+  $\mathbf{W}_{\mathrm{pwr}}=\mathbf{E}\mathbf{\Lambda}^{-1/2}\mathbf{E}^{\mathsf T}$
   (drop the null space — the auto-products live in the symmetric subspace of
-  dimension $M(M{+}1)/2$, so $\mathbf{C}_{\text{pwr}}$ is *never* full rank and
+  dimension $M(M{+}1)/2$, so $\mathbf{C}_{\mathrm{pwr}}$ is *never* full rank and
   must be range-restricted, not ridge-filled) — then, in that whitened space,
   project *away from* the top $K$ correlation directions and unwhiten. Because
   the power directions have been flattened to unit scale first, this spares them
