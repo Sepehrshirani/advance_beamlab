@@ -465,6 +465,11 @@ def make_mcmv(
     whitener = _make_whitener(info, noise_cov, common_ch, rank)
     H_w = whitener @ H  # whitened leadfield (n_white, n_sources)
     R_w = whitener @ R @ whitener.T  # whitened data covariance (n_white, n_white)
+    # The congruence above is symmetric in exact arithmetic; enforce it against
+    # floating-point drift, which is large for the wide dynamic range of a real
+    # magnetometer+gradiometer covariance and would otherwise fail the strict
+    # Hermitian check in ``_reg_pinv``.
+    R_w = (R_w + R_w.T) / 2.0
     n_white = R_w.shape[0]
 
     # -- regularised inverse of the (whitened) data covariance -------------- #

@@ -13,10 +13,14 @@ so that an ordinary LCMV no longer cancels them.
 
 This example contrasts a standard LCMV with ReciPSIICOS on the auditory
 response of the MNE sample dataset, whose left- and right-hemisphere auditory
-sources are strongly correlated. The forward operator is restricted to the
-superior-temporal (auditory) labels: this is the physiologically relevant
-region and it keeps the :math:`O(N^2)` correlation Gram of the ``whitened``
-projector small.
+sources are strongly correlated.
+
+Two practical points, both important on real data. The projector is built from
+the forward and must span where the data covariance's energy lives, so we use a
+*whole-brain* grid, not a region -- but the ``whitened`` correlation Gram is
+:math:`O(N^2)`, so we decimate that grid to keep it tractable. And the
+covariances are shrinkage-regularised, the correct estimator across the
+magnetometer/gradiometer unit scales.
 """
 # Authors: the mne-beamlab contributors
 # License: BSD-3-Clause
@@ -25,7 +29,9 @@ projector small.
 
 import matplotlib.pyplot as plt
 import mne
+from mne import Label
 from mne.beamformer import apply_lcmv_cov, make_lcmv
+from mne.forward import restrict_forward_to_label
 
 from mne_beamlab import make_recipsiicos_lcmv, recipsiicos_rank_curve
 
@@ -34,8 +40,8 @@ meg = data_path / "MEG" / "sample"
 subjects_dir = data_path / "subjects"
 
 # %%
-# Load the auditory epochs (left and right stimulation), the active and
-# baseline covariances, and the real BEM forward restricted to auditory cortex.
+# Load the auditory epochs (left and right stimulation) and shrinkage-
+# regularised active and baseline covariances.
 
 raw = mne.io.read_raw_fif(meg / "sample_audvis_filt-0-40_raw.fif", preload=True)
 events = mne.read_events(meg / "sample_audvis_filt-0-40_raw-eve.fif")
@@ -50,22 +56,26 @@ epochs = mne.Epochs(
     preload=True,
 )
 
-data_cov = mne.compute_covariance(epochs, tmin=0.05, tmax=0.2, method="empirical")
-noise_cov = mne.compute_covariance(epochs, tmin=None, tmax=0.0, method="empirical")
+data_cov = mne.compute_covariance(epochs, tmin=0.05, tmax=0.2, method="shrunk")
+noise_cov = mne.compute_covariance(epochs, tmin=None, tmax=0.0, method="shrunk")
+
+# %%
+# Load the real BEM forward and decimate it to a coarse whole-brain grid (every
+# 16th vertex per hemisphere), keeping both hemispheres so it still spans the
+# head while the whitened Gram stays small.
 
 fwd = mne.read_forward_solution(meg / "sample_audvis-meg-eeg-oct-6-fwd.fif")
 fwd = mne.pick_types_forward(fwd, meg=True, eeg=False)
-labels = mne.read_labels_from_annot(
-    "sample", "aparc", regexp="superiortemporal", subjects_dir=subjects_dir
-)
-fwd = mne.forward.restrict_forward_to_label(fwd, labels)
+labels = [
+    Label(fwd["src"][h]["vertno"][::16], hemi=hemi, subject="sample")
+    for h, hemi in enumerate(("lh", "rh"))
+]
+fwd = restrict_forward_to_label(fwd, labels)
 
 # %%
-# Choose the projection rank from the power-vs-correlation curve. The
-# 45-degree point (``return_optimal=True``) is where the correlation subspace
-# stops emptying faster than the power subspace. On a real BEM forward the
-# curve is smooth and separable (a single-shell sphere model would be too
-# low-rank to separate).
+# Choose the projection rank from the power-vs-correlation curve. The 45-degree
+# point (``return_optimal=True``) is where the correlation subspace stops
+# emptying faster than the power subspace.
 
 ranks, p_pwr, p_cor, kstar = recipsiicos_rank_curve(
     fwd, epochs.info, method="whitened", noise_cov=noise_cov, return_optimal=True
@@ -78,15 +88,14 @@ ax.axvline(kstar, color="k", ls="--", label=f"K* = {kstar}")
 ax.set(
     xlabel="projection rank K",
     ylabel="retained energy fraction",
-    title="ReciPSIICOS rank curve (auditory forward)",
+    title="ReciPSIICOS rank curve",
 )
 ax.legend()
 
 # %%
 # Build a standard LCMV and a ReciPSIICOS beamformer on the same data. Free
 # orientation MEG needs ``reduce_rank=True`` (the radial-silent leadfield is
-# rank-deficient). The projector depends only on the forward, so it could be
-# reused across datasets sharing it.
+# rank-deficient).
 
 lcmv = make_lcmv(
     epochs.info,
