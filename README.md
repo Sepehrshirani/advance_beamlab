@@ -436,6 +436,28 @@ working covariance space. `make_recipsiicos_cov(...)` returns the cleaned
 `mne.Covariance` (for inspection); `make_recipsiicos_lcmv(...)` builds the
 beamformer end to end.
 
+**Practical notes for real data.** Three things matter when moving from
+simulations to recordings:
+
+- *Free-orientation MEG needs `reduce_rank=True`.* In a spherical conductor a
+  radial source produces no external magnetic field, so a three-orientation MEG
+  leadfield is effectively rank two per location and the working-space LCMV is
+  singular unless the per-source forward rank is reduced — exactly as in
+  `make_lcmv`. Pass `reduce_rank=True`, or use a fixed-orientation forward.
+- *The correlation Gram is $O(N^2)$ in the source count.* The `whitened`
+  projector and both rank curves enumerate every source *pair*, so a
+  full-resolution grid (tens of thousands of vertices) is impractical: build the
+  projector on a decimated source space — a few thousand vertices as in the
+  paper, or a cortical label — then reuse it across datasets sharing that
+  forward. The `recipsiicos` projector uses only the auto-products and stays
+  linear in $N$.
+- *The rank curve needs a forward with rich leadfield structure.* On a
+  single-shell sphere model the tangential leadfields are so low-rank that the
+  power subspace collapses to a handful of directions and the curve degenerates
+  — there is nothing to separate. A realistic BEM forward gives the smooth,
+  separable curve the 45° criterion expects; on a degenerate curve $K^*$ falls
+  back to a near-identity rank rather than one that empties the covariance.
+
 ---
 
 # Parameter tuning
@@ -463,7 +485,7 @@ beamformer end to end.
 | `noise_cov` | Whitening model | Whitens per sensor type; **essential for mixed sensor types**. `None` uses an ad-hoc per-type model (a global scaling for a single type, which leaves the projector subspaces unchanged). |
 | `whitener_rank` | Numerical rank of the whitener | Use an integer after SSP/ICA/SSS (data are rank-deficient); `'full'` assumes full rank. |
 | `reg` | Tikhonov loading of the working-space LCMV inverse (and the whitening ridge for `whitened`) | Same trade-off as MCMV's `reg`: stability vs resolution. Default `0.05`. |
-| `pick_ori`, `weight_norm`, `reduce_rank`, `inversion` | Orientation and normalisation of the working-space LCMV | Reuse MNE's own filter computation, so they behave exactly as in `make_lcmv`. |
+| `pick_ori`, `weight_norm`, `reduce_rank`, `inversion` | Orientation and normalisation of the working-space LCMV | Reuse MNE's own filter computation, so they behave exactly as in `make_lcmv` — including that **free-orientation MEG needs `reduce_rank=True`** (the radial-silent leadfield is rank-deficient). |
 
 If a ReciPSIICOS run warns about negative-eigenvalue energy above the threshold,
 lower `rank`: too much of the covariance was projected away and the

@@ -418,15 +418,27 @@ def test_rank_curve_matches_bruteforce(fwd_fixed):
         assert_allclose(p_cor, bc, atol=1e-9)
 
 
-def test_optimal_rank_sign_change():
-    """K* is the last rank before the first sign change of dP_cor/dk - dP_pwr/dk."""
-    # A trailing positive marginal after the crossing must be ignored (the
-    # selection is the FIRST crossing, not the last non-negative point).
-    p_pwr = np.array([0.0, 0.10, 0.20, 0.30, 0.60, 0.95, 1.00])
-    p_cor = np.array([0.0, 0.30, 0.55, 0.75, 0.85, 0.92, 1.00])
-    # d_pwr = .10 .10 .10 .30 .35 .05 ; d_cor = .30 .25 .20 .10 .07 .08
-    # delta  = +.20 +.15 +.10 -.20 -.28 +.03 -> first negative at index 3
-    assert _optimal_rank(p_pwr, p_cor) == 4
+def test_optimal_rank_direction_aware():
+    """K* is the 45-degree crossing, found per curve direction, with a floor."""
+    # recipsiicos: increasing curves; K* = last rank before delta turns negative.
+    p_pwr = np.array([0.20, 0.30, 0.45, 0.60, 0.90, 0.97, 1.00])
+    p_cor = np.array([0.20, 0.55, 0.80, 0.90, 0.95, 0.98, 1.00])
+    # d_pwr = .10 .15 .15 .30 .07 .03 ; d_cor = .35 .25 .10 .05 .03 .02
+    # delta  = +.25 +.10 -.05 -.25 -.04 -.01 -> first negative at index 2 -> K*=3
+    assert _optimal_rank(p_pwr, p_cor, "recipsiicos") == 3
+
+    # whitened: decreasing curves; K* = last rank before delta turns positive.
+    q_pwr = np.array([1.00, 0.80, 0.60, 0.45, 0.35, 0.30, 0.28])
+    q_cor = np.array([1.00, 0.60, 0.30, 0.15, 0.10, 0.08, 0.07])
+    # d_pwr = -.20 -.20 -.15 -.10 -.05 -.02 ; d_cor = -.40 -.30 -.15 -.05 -.02 -.01
+    # delta  = -.20 -.10 .00 +.05 +.03 +.01 -> first positive at index 3 -> K*=4
+    assert _optimal_rank(q_pwr, q_cor, "whitened") == 4
+
+    # Degenerate decreasing curve (power emptied almost at once): the floor must
+    # pull K* back so the covariance is not zeroed.
+    d_pwr = np.array([0.58, 0.02, 0.0, 0.0, 0.0])
+    d_cor = np.array([0.55, 0.01, 0.0, 0.0, 0.0])
+    assert _optimal_rank(d_pwr, d_cor, "whitened") == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -476,6 +488,20 @@ def test_pick_ori_requires_free_orientation(fwd_fixed):
     with pytest.raises(ValueError, match="free-orientation"):
         make_recipsiicos_lcmv(
             info, fwd_fixed, data_cov, rank=5, pick_ori="max-power", pct_var=1.0,
+        )
+
+
+@pytest.mark.filterwarnings("ignore:The spectral-flip")
+def test_underdetermined_working_space_raises(fwd_info):
+    """A free-orientation solve with q < n_orient errors clearly, not opaquely."""
+    fwd, info = fwd_info
+    idx = [3, 3 * (fwd["nsource"] - 2)]
+    data_cov = _cov_from_sources(fwd, idx=idx, rho=0.9)
+    # Force only two virtual sensors: fewer than the three source orientations.
+    with pytest.raises(ValueError, match="underdetermined"):
+        make_recipsiicos_lcmv(
+            info, fwd, data_cov, rank=2, method="recipsiicos",
+            pick_ori="max-power", n_virtual=2,
         )
 
 

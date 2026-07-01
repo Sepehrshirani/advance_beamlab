@@ -689,7 +689,9 @@ def make_recipsiicos_lcmv(
         there.
     reduce_rank : bool
         Whether to reduce the leadfield rank by one during the solve (MNE
-        option, useful for free orientation with rank-deficient leadfields).
+        option). Required for free-orientation MEG: a three-orientation MEG
+        leadfield is effectively rank two per location (the radial field is
+        silent in a spherical conductor), so the solve is singular otherwise.
     inversion : 'matrix' | 'single'
         Covariance inversion scheme, passed to MNE's filter computation.
     whitener_rank : int | 'full'
@@ -711,6 +713,13 @@ def make_recipsiicos_lcmv(
     Notes
     -----
     Equation numbers refer to Kuznetsova et al. (2021).
+
+    For free-orientation MEG pass ``reduce_rank=True`` (see that parameter).
+    The ``whitened`` projector builds a correlation Gram over every source
+    *pair*, which is :math:`O(N^2)` in the number of sources; build the
+    projector on a decimated source space or restrict it with ``label`` for
+    real, high-resolution forwards. The ``recipsiicos`` projector uses only the
+    auto-products and stays linear in :math:`N`.
 
     References
     ----------
@@ -743,6 +752,16 @@ def make_recipsiicos_lcmv(
         )
 
     n_orient = 1 if fixed else 3
+
+    if q < n_orient:
+        raise ValueError(
+            f"The whitened, virtual-sensor-reduced forward has only q={q} working "
+            f"dimensions, fewer than the n_orient={n_orient} source orientations, "
+            f"so the working-space beamformer is underdetermined. This happens "
+            f"with a low-rank forward -- e.g. a single-shell sphere model, whose "
+            f"MEG leadfield is rank ~2 per location. Use a realistic BEM forward, "
+            f"a fixed-orientation forward, or raise pct_var / n_virtual."
+        )
 
     # Source normals and vertices, following MNE's convention: for a free
     # forward keep one normal per source; a surface-oriented forward uses the
@@ -804,26 +823,42 @@ def make_recipsiicos_lcmv(
     return filters
 
 
-def _optimal_rank(p_pwr, p_cor):
+def _optimal_rank(p_pwr, p_cor, method, floor=0.1):
     """Rank ``K*`` at the 45-degree point of the power-vs-correlation curve.
 
-    Kuznetsova et al. (2021), Section 2.4: the optimal rank is the largest one
-    for which the correlation subspace still loses energy at least as fast as the
-    power subspace, i.e. the last rank at which the marginal-gain difference
-    ``dP_cor/dk - dP_pwr/dk`` is non-negative before it turns negative. This is
-    the point where the logarithm of the marginal gain crosses zero and the
-    tangent to the (power, correlation) curve is at 45 degrees.
+    Kuznetsova et al. (2021), Section 2.4: the optimal rank is where the marginal
+    energy loss of the two subspaces balances -- the 45-degree tangent of the
+    ``(P_pwr, P_cor)`` curve, i.e. the sign change of
+    ``dP_cor/dk - dP_pwr/dk``.
+
+    The two projectors traverse the rank axis in opposite directions, so the
+    criterion is applied per method. For ``recipsiicos`` (projection *onto* the
+    power subspace) both curves rise with ``k`` and ``K*`` is the last rank before
+    the difference turns negative; for ``whitened`` (projection *away from* the
+    correlation subspace) both curves fall with ``k`` and ``K*`` is the last rank
+    before it turns positive. In each case a ``floor`` on the retained power
+    guards against a degenerate curve (a rank-deficient forward, e.g. a
+    single-shell sphere model, whose subspaces do not separate) returning a rank
+    that (near-)empties the covariance.
     """
-    d_pwr = np.diff(p_pwr)
-    d_cor = np.diff(p_cor)
-    delta = d_cor - d_pwr  # delta[i] is the marginal gain from rank i+1 to i+2
-    negative = np.nonzero(delta < 0)[0]
-    if negative.size == 0:
-        # The correlation subspace never starts losing energy faster than the
-        # power subspace: no interior optimum, keep the full rank.
-        return int(p_pwr.size)
-    # The optimal rank is the last one before the first sign change to negative.
-    return int(negative[0] + 1)
+    n = int(p_pwr.size)
+    if n < 3:
+        return n
+    delta = np.diff(p_cor) - np.diff(p_pwr)  # delta[i] links rank i+1 and i+2
+    if method == "recipsiicos":
+        hit = np.nonzero(delta < 0)[0]
+        k = int(hit[0] + 1) if hit.size else n
+        # Increasing curve: back off toward larger (near-identity) rank.
+        while k < n and p_pwr[k - 1] < floor:
+            k += 1
+    else:
+        hit = np.nonzero(delta > 0)[0]
+        k = int(hit[0] + 1) if hit.size else 1
+        # Decreasing curve: back off toward smaller (near-identity) rank so the
+        # projector does not remove essentially all of the covariance.
+        while k > 1 and p_pwr[k - 1] < floor:
+            k -= 1
+    return max(1, min(k, n))
 
 
 @verbose
@@ -891,6 +926,15 @@ def recipsiicos_rank_curve(
     -----
     Equation numbers refer to Kuznetsova et al. (2021).
 
+    The curve needs a forward with rich leadfield structure. On a single-shell
+    sphere model the tangential leadfields are so low-rank that the power
+    subspace collapses to a few directions and the curve degenerates (there is
+    nothing to separate); a realistic BEM forward gives the smooth, separable
+    curve the 45-degree criterion expects, and on a degenerate curve ``K*``
+    falls back to a near-identity rank. Both curves build a correlation Gram
+    over every source pair (:math:`O(N^2)`), so decimate the source space for
+    real forwards.
+
     References
     ----------
     .. footbibliography::
@@ -938,5 +982,5 @@ def recipsiicos_rank_curve(
         )
 
     if return_optimal:
-        return ranks, p_pwr, p_cor, _optimal_rank(p_pwr, p_cor)
+        return ranks, p_pwr, p_cor, _optimal_rank(p_pwr, p_cor, method)
     return ranks, p_pwr, p_cor
