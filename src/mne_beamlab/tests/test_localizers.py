@@ -261,3 +261,79 @@ def test_scan_rejects_bad_n_sources(sphere_fwd):
         scan_mcmv(info, fwd, cov, n_sources=0)
     with pytest.raises(ValueError, match="exceeds the number of grid"):
         scan_mcmv(info, fwd, cov, n_sources=fwd["nsource"] + 1)
+
+
+# --------------------------------------------------------------------------- #
+# 7. Coverage: repr, fixed-orientation scan, event-related scan, noise_cov.
+# --------------------------------------------------------------------------- #
+def test_scan_result_repr(sphere_fwd):
+    """MCMVScanResult has an informative repr."""
+    fwd, info = sphere_fwd
+    cov = _implanted_cov(fwd, info, [22], [[1, 0, 0]])
+    res = scan_mcmv(info, fwd, cov, localizer="mai", n_sources=1)
+    assert "MCMVScanResult" in repr(res) and "MAI" in repr(res)
+
+
+def test_scan_fixed_orientation(sphere_fwd):
+    """Scanning a fixed-orientation forward recovers the source, ori is None."""
+    fwd, info = sphere_fwd
+    fwd_fix = mne.convert_forward_solution(fwd, force_fixed=True, surf_ori=True)
+    G = fwd_fix["sol"]["data"]  # (n_ch, n_loc), one column per location
+    loc = 18
+    h = G[:, loc]
+    N = np.eye(G.shape[0])
+    R = N + 12.0 * np.outer(h, h) / (h @ h)
+    cov = mne.Covariance(R, info["ch_names"], [], list(info["projs"]), nfree=1)
+
+    res = scan_mcmv(info, fwd_fix, cov, localizer="mai", n_sources=1)
+    assert res["sources"] == [loc]
+    assert res["orientations"] is None
+
+
+def test_scan_event_related_with_diagonal_evoked_cov(sphere_fwd):
+    """MER scan runs with an evoked covariance, incl. the diagonal-cov path."""
+    fwd, info = sphere_fwd
+    loc, ori = 30, np.array([0.0, 1.0, 0.0])
+    cov = _implanted_cov(fwd, info, [loc], [ori], snr=16.0)
+    # A diagonal evoked covariance exercises the 1-D covariance branch.
+    evoked_cov = mne.Covariance(
+        np.ones(len(info["ch_names"])), info["ch_names"], [], [], nfree=1
+    )
+    res = scan_mcmv(
+        info, fwd, cov, localizer="mer", n_sources=1, evoked_cov=evoked_cov
+    )
+    assert len(res["sources"]) == 1
+
+
+def test_scan_noise_cov_subset(sphere_fwd):
+    """Scan restricts to noise_cov channels when it covers a subset."""
+    fwd, info = sphere_fwd
+    cov = _implanted_cov(fwd, info, [12], [[1, 0, 0]])
+    sub = info["ch_names"][:24]
+    ncov = mne.Covariance(np.eye(24), sub, [], [], nfree=1)
+    res = scan_mcmv(info, fwd, cov, localizer="mai", n_sources=1, noise_cov=ncov)
+    assert res["filters"]["ch_names"] == sub
+
+
+def test_scan_noise_cov_disjoint_raises(sphere_fwd):
+    """A disjoint noise_cov is an error in the scan too."""
+    fwd, info = sphere_fwd
+    cov = _implanted_cov(fwd, info, [12], [[1, 0, 0]])
+    ncov = mne.Covariance(np.eye(2), ["ZZ1", "ZZ2"], [], [], nfree=1)
+    with pytest.raises(ValueError, match="shares no channels"):
+        scan_mcmv(info, fwd, cov, n_sources=1, noise_cov=ncov)
+
+
+def test_scan_mer_with_full_evoked_cov(sphere_fwd):
+    """MER scan with a dense (2-D) evoked covariance."""
+    fwd, info = sphere_fwd
+    loc, ori = 28, np.array([1.0, 0.0, 0.0])
+    cov = _implanted_cov(fwd, info, [loc], [ori], snr=16.0)
+    rng = np.random.default_rng(9)
+    A = rng.standard_normal((len(info["ch_names"]), 3))
+    Rbar = A @ A.T + np.eye(len(info["ch_names"]))  # dense evoked covariance
+    evoked_cov = mne.Covariance(Rbar, info["ch_names"], [], [], nfree=1)
+    res = scan_mcmv(
+        info, fwd, cov, localizer="mer", n_sources=1, evoked_cov=evoked_cov
+    )
+    assert len(res["sources"]) == 1

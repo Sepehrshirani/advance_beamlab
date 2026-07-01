@@ -16,7 +16,11 @@ from mne_beamlab import (
     apply_mcmv_cov,
     make_mcmv,
 )
-from mne_beamlab._mcmv import _compute_mcmv_weights, _make_whitener
+from mne_beamlab._mcmv import (
+    _check_source_separation,
+    _compute_mcmv_weights,
+    _make_whitener,
+)
 
 mne.set_log_level("ERROR")
 REG = 0.05
@@ -359,3 +363,149 @@ def test_make_whitener_retains_every_sensor_type():
     d = np.asarray(nad.data)
     N = np.diag(d) if d.ndim == 1 else d
     assert_allclose(W @ N @ W.T, np.eye(6), atol=1e-8)
+
+
+# --------------------------------------------------------------------------- #
+# 7. Coverage: fixed orientation, noise_cov intersection, apply, reprs.
+# --------------------------------------------------------------------------- #
+@pytest.fixture(scope="module")
+def fwd_fixed(fwd_info):
+    """The same forward converted to fixed orientation."""
+    fwd, info = fwd_info
+    return mne.convert_forward_solution(fwd, force_fixed=True, surf_ori=True), info
+
+
+def test_beamformer_repr(fwd_info):
+    """MCMVBeamformer has an informative repr."""
+    fwd, info = fwd_info
+    filt = make_mcmv(
+        info, fwd, _random_cov(info), [1, 2], orientations=np.eye(3)[:2], reg=REG
+    )
+    text = repr(filt)
+    assert "MCMVBeamformer" in text and "source(s)" in text
+
+
+def test_fixed_orientation_forward(fwd_fixed):
+    """make_mcmv on a fixed-orientation forward: no orientations, constraint holds."""
+    fwd, info = fwd_fixed
+    data_cov = _random_cov(info)
+    filt = make_mcmv(info, fwd, data_cov, [3, 7], reg=REG)  # orientations=None
+    assert filt["is_fixed_orient"] is True
+    assert_allclose(filt["weights"] @ filt["leadfield"], np.eye(2), atol=1e-9)
+    rng = np.random.default_rng(1)
+    arr = rng.standard_normal((len(filt["ch_names"]), 20))
+    assert apply_mcmv(arr, filt).shape == (2, 20)
+
+
+def test_noise_cov_channel_subset(fwd_info):
+    """A noise_cov covering only some channels narrows the common set."""
+    fwd, info = fwd_info
+    data_cov = _random_cov(info)
+    sub = info["ch_names"][:20]  # noise_cov on a subset of channels
+    rng = np.random.default_rng(2)
+    ncov = mne.Covariance(np.diag(rng.uniform(0.5, 2.0, 20)), sub, [], [], nfree=1)
+    filt = make_mcmv(
+        info, fwd, data_cov, [1, 2], orientations=np.eye(3)[:2], noise_cov=ncov
+    )
+    assert filt["ch_names"] == sub  # restricted to the noise_cov channels
+    assert filt["weights"].shape == (2, 20)
+
+
+def test_noise_cov_disjoint_raises(fwd_info):
+    """A noise_cov sharing no channels is an error."""
+    fwd, info = fwd_info
+    ncov = mne.Covariance(np.eye(2), ["ZZ1", "ZZ2"], [], [], nfree=1)
+    with pytest.raises(ValueError, match="shares no channels"):
+        make_mcmv(
+            info, fwd, _random_cov(info), [1, 2],
+            orientations=np.eye(3)[:2], noise_cov=ncov,
+        )
+
+
+def test_non_unit_orientations_warn(fwd_info):
+    """Non-unit orientations are normalised, with a warning."""
+    fwd, info = fwd_info
+    with pytest.warns(RuntimeWarning, match="unit vectors"):
+        filt = make_mcmv(
+            info, fwd, _random_cov(info), [1, 2],
+            orientations=np.array([[2.0, 0, 0], [0, 3.0, 0]]),
+        )
+    assert_allclose(filt["weights"] @ filt["leadfield"], np.eye(2), atol=1e-9)
+
+
+def test_apply_mcmv_on_evoked(fwd_info):
+    """apply_mcmv accepts an MNE object and picks channels by name."""
+    fwd, info = fwd_info
+    filt = make_mcmv(
+        info, fwd, _random_cov(info), [4, 9], orientations=np.eye(3)[:2], reg=REG
+    )
+    ev_info = mne.create_info(filt["ch_names"], 200.0, "eeg")
+    rng = np.random.default_rng(3)
+    evoked = mne.EvokedArray(rng.standard_normal((len(filt["ch_names"]), 25)), ev_info)
+    assert apply_mcmv(evoked, filt).shape == (2, 25)
+
+
+def test_source_separation_warns_directly():
+    """_check_source_separation warns for near-coincident sources."""
+    fwd_like = {"source_rr": np.array([[0, 0, 0.05], [0, 0, 0.0501], [0, 0, 0.09]])}
+    with pytest.warns(RuntimeWarning, match="mm apart"):
+        _check_source_separation(fwd_like, [0, 1])
+    # No source_rr -> silently does nothing.
+    _check_source_separation({}, [0, 1])
+
+
+def test_zero_orientation_raises(fwd_info):
+    """A zero orientation vector is rejected."""
+    fwd, info = fwd_info
+    with pytest.raises(ValueError, match="zero vector"):
+        make_mcmv(
+            info, fwd, _random_cov(info), [1, 2],
+            orientations=np.array([[1.0, 0, 0], [0, 0, 0]]),
+        )
+
+
+def test_forward_nonfinite_raises(fwd_info):
+    """A forward with non-finite entries is rejected."""
+    fwd, info = fwd_info
+    bad = fwd.copy()
+    bad["sol"] = dict(fwd["sol"])
+    data = np.array(fwd["sol"]["data"], dtype=float)
+    data[0, 4] = np.nan  # a column within source index 1's (x,y,z) block
+    bad["sol"]["data"] = data
+    with pytest.raises(ValueError, match="forward solution contains non-finite"):
+        make_mcmv(info, bad, _random_cov(info), [1, 2], orientations=np.eye(3)[:2])
+
+
+def test_apply_shape_mismatch_raises(fwd_info):
+    """apply_mcmv rejects a raw array with the wrong channel count."""
+    fwd, info = fwd_info
+    filt = make_mcmv(
+        info, fwd, _random_cov(info), [1, 2], orientations=np.eye(3)[:2], reg=REG
+    )
+    with pytest.raises(ValueError):
+        apply_mcmv(np.zeros((len(filt["ch_names"]) - 1, 10)), filt)
+
+
+def test_dropped_channels_still_work(fwd_info):
+    """A data_cov missing a channel just narrows the common set (logged path)."""
+    fwd, info = fwd_info
+    keep = info["ch_names"][:-1]  # drop one channel from the covariance
+    rng = np.random.default_rng(4)
+    A = rng.standard_normal((len(keep), len(keep)))
+    cov = mne.Covariance(A @ A.T + np.eye(len(keep)), keep, [], [], nfree=1)
+    filt = make_mcmv(info, fwd, cov, [1, 2], orientations=np.eye(3)[:2])
+    assert len(filt["ch_names"]) == len(keep)
+
+
+def test_order_exceeds_rank_raises(fwd_info):
+    """Requesting more sources than the data-covariance rank is an error."""
+    fwd, info = fwd_info
+    rng = np.random.default_rng(5)
+    n = len(info["ch_names"])
+    B = rng.standard_normal((n, 3))  # rank-3 data covariance
+    cov = mne.Covariance(B @ B.T, info["ch_names"], [], [], nfree=1)
+    oris = np.eye(3)[[0, 1, 2, 0, 1]]
+    with pytest.warns(RuntimeWarning, match="rank-deficient"), pytest.raises(
+        ValueError, match="exceeds the data-covariance rank"
+    ):
+        make_mcmv(info, fwd, cov, [1, 2, 3, 4, 5], orientations=oris, reg=0.0)
