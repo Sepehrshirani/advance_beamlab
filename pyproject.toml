@@ -5,13 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "mne-beamlab"
 version = "0.1.0.dev0"
-description = "Advanced beamformers for MEG/EEG, compatible with MNE-Python"
+description = "Advanced minimum-variance beamformers for MEG/EEG, compatible with MNE-Python"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "BSD-3-Clause"
 keywords = ["MEG", "EEG", "beamformer", "MCMV", "source localization", "MNE"]
-authors = [{ name = "Sepehr Shirani", email = "sepehrshirani@gmail.com" }]
-maintainers = [{ name = "Sepehr Shirani", email = "sepehrshirani@gmail.com" }]
+authors = [{ name = "the mne-beamlab contributors" }]
 dependencies = [
     "numpy>=1.25",
     "scipy>=1.11",
@@ -20,12 +19,12 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8.0", "pytest-cov"]
-doc = ["sphinx", "numpydoc", "sphinxcontrib-bibtex", "pydata-sphinx-theme"]
+doc = ["sphinx", "myst-parser", "numpydoc", "sphinxcontrib-bibtex", "pydata-sphinx-theme"]
 dev = ["mne-beamlab[test,doc]", "ruff>=0.6"]
 
 [project.urls]
-Homepage = "https://github.com/Sepehrshirani/mne-beamlab"
-"Source Code" = "https://github.com/Sepehrshirani/mne-beamlab"
+Homepage = "https://github.com/mne-tools/mne-beamlab"
+"Source Code" = "https://github.com/mne-tools/mne-beamlab"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mne_beamlab"]
