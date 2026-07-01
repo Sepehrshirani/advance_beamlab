@@ -16,14 +16,47 @@ and applies it to the data covariance. The result approximates the covariance
 that would have been measured had the same sources been uncorrelated, so a
 standard LCMV beamformer built on it no longer suffers signal cancellation.
 
-Because the method only modifies the data covariance, it does not define a new
-spatial filter: the modified covariance is handed unchanged to
-:func:`mne.beamformer.make_lcmv`. Two public functions are provided --
-:func:`make_recipsiicos_cov`, which returns the modified
-:class:`mne.Covariance`, and :func:`make_recipsiicos_lcmv`, a convenience
-wrapper that performs the modification and the LCMV call in one step -- plus
-:func:`recipsiicos_rank_curve` to guide the choice of the single free
-parameter, the projection rank.
+Working space and whitening
+---------------------------
+Two device-agnostic steps are taken *around* the projector, both of which are
+required for real MEG data and neither of which the original single-array,
+single-sensor-type study needed:
+
+* **Noise whitening.** The projector is built from and applied in the space
+  whitened by the noise covariance (via :func:`mne.cov.compute_whitener`, the
+  same routine :func:`mne.beamformer.make_lcmv` uses, with the rank resolved per
+  sensor type). This is not a departure from the paper: Kuznetsova et al. (2021,
+  Section 2.6) state explicitly that whitening *changes the forward operator and
+  therefore requires recomputing the ReciPSIICOS projections*, that they skipped
+  it only for the computational cost of their 500 Monte-Carlo repetitions, and
+  that proper whitening *may improve localisation accuracy*. Whitening is what
+  makes the method valid for arrays that mix magnetometers (T) and gradiometers
+  (T/m), whose covariance is otherwise dominated by the larger-unit sensor type.
+
+* **Virtual sensors.** Following the paper's preprocessing, the whitened
+  leadfield is reduced by a truncated SVD to the principal directions capturing
+  a chosen fraction of its variance (``pct_var``), typically 42-80 virtual
+  sensors for a whole-head array. Everything -- the :math:`M^2`-space projector,
+  the data covariance and the beamformer -- then lives in this small working
+  space, which is what makes the :math:`M^2 \times M^2` correlation Gram
+  tractable (a 306-channel array would otherwise need a 93k x 93k matrix).
+
+Because whitening and the virtual-sensor reduction both change the space the
+projector lives in, the cleaned covariance cannot simply be handed back to
+:func:`mne.beamformer.make_lcmv` (which would whiten a second time and solve
+against the wrong leadfield). The LCMV problem is therefore solved *in the
+working space* by reusing MNE's own filter computation
+(:func:`mne.beamformer._compute_beamformer._compute_beamformer`, which performs
+the orientation selection, weight normalisation and rank handling), after which
+the reduction operator is folded into the returned
+:class:`~mne.beamformer.Beamformer` as its whitener so that
+:func:`mne.beamformer.apply_lcmv` applies it to the sensor data unchanged.
+
+Three public functions are provided: :func:`make_recipsiicos_lcmv`, which builds
+the beamformer end to end; :func:`make_recipsiicos_cov`, which returns the
+modified sensor-space :class:`mne.Covariance` (for inspection and interop); and
+:func:`recipsiicos_rank_curve`, which characterises -- and can automatically
+select -- the single free parameter, the projection rank.
 
 Notes
 -----
@@ -41,13 +74,18 @@ import warnings
 
 import numpy as np
 from mne import Covariance
+from mne.beamformer import Beamformer
+from mne.beamformer._compute_beamformer import _compute_beamformer
 from mne.forward import is_fixed_orient
+from mne.forward.forward import _subject_from_forward
+from mne.source_estimate import _get_src_type
+from mne.source_space._source_space import _get_vertno
 from mne.utils import _check_option, _validate_type, logger, verbose
 
-# Reuse the channel-alignment helper from the MCMV module so that both
-# algorithms read the forward solution and the covariance in exactly the same
-# (common, ordered) channel space.
-from ._mcmv import _align_channels
+# Reuse the channel-alignment and whitener helpers from the MCMV module so that
+# both algorithms read the forward/covariance in the same channel space and
+# whiten identically to MNE's make_lcmv.
+from ._mcmv import _align_channels, _make_whitener
 
 _ALLOWED_METHOD = ("recipsiicos", "whitened")
 
@@ -55,6 +93,11 @@ _ALLOWED_METHOD = ("recipsiicos", "whitened")
 # carry in the negative eigenvalues before a warning is raised (the authors
 # recommend the modification stay below ~20%; their Eq. 24).
 _NEG_ENERGY_LIMIT = 0.20
+
+# Default fraction of whitened-leadfield variance kept by the virtual-sensor
+# reduction. Kuznetsova et al. (2021) use 95-99%; 99% reproduces their reported
+# 42-80 virtual sensors on whole-head arrays.
+_DEFAULT_PCT_VAR = 0.99
 
 
 # --------------------------------------------------------------------------- #
@@ -72,47 +115,58 @@ def _unvec(vector, n):
 
 
 # --------------------------------------------------------------------------- #
-# Topographies of the forward model (handling source orientation)
+# Forward-model topographies (handling source orientation)
 # --------------------------------------------------------------------------- #
-def _local_topographies(forward, common_ch):
-    """Return one topography block per source location.
+def _forward_gain(forward, common_ch):
+    """Return the leadfield over ``common_ch`` and whether it is fixed-oriented.
 
-    For a fixed-orientation forward each location has a single topography, so
+    Returns
+    -------
+    gain : ndarray, shape (n_channels, n_dipoles)
+        ``n_dipoles`` is ``n_sources`` for a fixed-orientation forward and
+        ``3 * n_sources`` for a free-orientation one (three columns per source).
+    fixed : bool
+        Whether the forward has fixed source orientation.
+    """
+    fwd_ch = list(forward["sol"]["row_names"])
+    idx = [fwd_ch.index(ch) for ch in common_ch]
+    gain = np.asarray(forward["sol"]["data"], dtype=np.float64)[idx]
+    return gain, is_fixed_orient(forward)
+
+
+def _tangential_topographies(gain, fixed):
+    """Reduce a leadfield to one topography block per source location.
+
+    For a fixed-orientation forward each location has its single topography, so
     the returned array has a trailing dimension of 1. For a free-orientation
     forward each location is reduced to the two dominant (tangential)
-    topographies, obtained from the left singular vectors of the local
-    ``(n_channels, 3)`` forward block scaled by their singular values -- the
-    reduction used by Kuznetsova et al. (2021), Section 2.5, which discards the
-    poorly observed radial direction.
+    topographies, obtained from the first two left singular vectors of the local
+    ``(n_channels, 3)`` block scaled by their singular values -- the reduction
+    of Kuznetsova et al. (2021), Section 2.5, which discards the poorly observed
+    radial direction (Ahlfors et al., 2010: the third direction carries a median
+    6% of the local source energy).
 
     Parameters
     ----------
-    forward : instance of mne.Forward
-        The forward solution.
-    common_ch : list of str
-        Channels (in order) shared with the data covariance.
+    gain : ndarray, shape (n_channels, n_dipoles)
+        The leadfield (already in whatever -- e.g. working -- space is desired).
+    fixed : bool
+        Whether the forward has fixed source orientation.
 
     Returns
     -------
     topos : ndarray, shape (n_locations, n_channels, n_ori)
         ``n_ori`` is 1 for a fixed-orientation forward and 2 otherwise.
     """
-    fwd_ch = list(forward["sol"]["row_names"])
-    idx = [fwd_ch.index(ch) for ch in common_ch]
-    gain = np.asarray(forward["sol"]["data"], dtype=np.float64)[idx]
     n_channels = gain.shape[0]
-
-    if is_fixed_orient(forward):
+    if fixed:
         n_loc = gain.shape[1]
         return gain.T.reshape(n_loc, n_channels, 1)
 
-    # Free orientation: 3 leadfield columns per location.
     n_loc = gain.shape[1] // 3
     topos = np.empty((n_loc, n_channels, 2), dtype=np.float64)
     for i in range(n_loc):
         local = gain[:, 3 * i : 3 * i + 3]  # (n_channels, 3)
-        # SVD: the first two left singular vectors, scaled by their singular
-        # values, are the two tangential-plane topographies of this location.
         u, s, _ = np.linalg.svd(local, full_matrices=False)
         topos[i, :, 0] = u[:, 0] * s[0]
         topos[i, :, 1] = u[:, 1] * s[1]
@@ -129,7 +183,7 @@ def _power_columns(topos):
     Free orientation: the three columns of Eq. (22) per location, so that the
     auto-product of an arbitrarily oriented dipole is spanned.
     """
-    n_loc, n_channels, n_ori = topos.shape
+    n_loc, _, n_ori = topos.shape
     cols = []
     for i in range(n_loc):
         a = topos[i, :, 0]
@@ -152,7 +206,7 @@ def _correlation_blocks(topos, block_pairs=20000):
     large) matrix G_cor is never held in memory all at once -- the caller only
     needs the running Gram matrix ``G_cor G_cor^T``.
     """
-    n_loc, n_channels, n_ori = topos.shape
+    n_loc, _, n_ori = topos.shape
     buffer = []
     for i in range(n_loc):
         for j in range(i + 1, n_loc):
@@ -199,14 +253,14 @@ def _power_projector(g_pwr, rank):
 def _whitening_pair(c_pwr, reg, rtol=1e-6):
     """Symmetric whitener for the power subspace and its inverse (Eq. 15).
 
-    ``C_pwr`` is rank-limited (its rank cannot exceed the number of sources),
-    so the inverse square root is taken only on its range: eigenvalues at or
-    below ``rtol`` times the largest are treated as the null space and dropped,
-    which prevents the whitener from amplifying directions that carry no source
-    power. The retained eigenvalues are stabilised with a small ridge
+    ``C_pwr`` is rank-limited (its rank cannot exceed the number of sources), so
+    the inverse square root is taken only on its range: eigenvalues at or below
+    ``rtol`` times the largest are treated as the null space and dropped, which
+    prevents the whitener from amplifying directions that carry no source power.
+    The retained eigenvalues are stabilised with a small ridge
     ``reg * mean(eigenvalue)``. Returns ``(W, W_inv)`` with
-    ``W = E Lambda^{-1/2} E^T`` and ``W_inv = E Lambda^{1/2} E^T`` over the
-    range of ``C_pwr``.
+    ``W = E Lambda^{-1/2} E^T`` and ``W_inv = E Lambda^{1/2} E^T`` over the range
+    of ``C_pwr``.
     """
     eigvals, eigvecs = np.linalg.eigh(c_pwr)
     eigvals = np.clip(eigvals, 0.0, None)
@@ -214,8 +268,8 @@ def _whitening_pair(c_pwr, reg, rtol=1e-6):
     e = eigvecs[:, keep]
     lam = eigvals[keep]
     lam = lam + reg * lam.mean()
-    w = e @ np.diag(lam ** -0.5) @ e.T
-    w_inv = e @ np.diag(lam ** 0.5) @ e.T
+    w = e @ np.diag(lam**-0.5) @ e.T
+    w_inv = e @ np.diag(lam**0.5) @ e.T
     return w, w_inv
 
 
@@ -266,110 +320,120 @@ def _spectral_flip(cov):
 
 
 # --------------------------------------------------------------------------- #
-# Public API
+# Working space: noise whitening + virtual-sensor reduction
 # --------------------------------------------------------------------------- #
-@verbose
-def make_recipsiicos_cov(
-    data_cov,
-    forward,
-    *,
-    rank,
-    method="recipsiicos",
-    info=None,
-    reg=0.05,
-    verbose=None,
+def _virtual_sensor_count(sv, pct_var, n_virtual):
+    """Return the number of virtual sensors to keep from a singular spectrum.
+
+    Either an explicit count (``n_virtual``) or the smallest number of leading
+    directions whose cumulative squared-singular-value energy reaches
+    ``pct_var`` of the total.
+    """
+    n_max = sv.size
+    if n_virtual is not None:
+        return int(np.clip(n_virtual, 1, n_max))
+    if sv[0] == 0:
+        return 1
+    cum = np.cumsum(sv**2)
+    cum /= cum[-1]
+    q = int(np.searchsorted(cum, pct_var) + 1)
+    return int(np.clip(q, 1, n_max))
+
+
+def _reduction_operator(
+    info, forward, common_ch, *, noise_cov, whitener_rank, pct_var, n_virtual
 ):
-    """Modify a data covariance to suppress correlated-source contributions.
+    r"""Build the reduction operator ``B`` mapping sensors to the working space.
 
-    Implements the ReciPSIICOS (``method='recipsiicos'``) and Whitened
-    ReciPSIICOS (``method='whitened'``) covariance modification of
-    Kuznetsova et al. (2021). The returned covariance is intended to be passed
-    directly to :func:`mne.beamformer.make_lcmv`.
-
-    Parameters
-    ----------
-    data_cov : instance of mne.Covariance
-        The sensor-space data covariance to modify.
-    forward : instance of mne.Forward
-        The forward solution. The projector is built from this alone, so it is
-        independent of the data and can be reused across datasets that share
-        the forward model.
-    rank : int
-        The projection rank ``K`` -- the dimension of the principal subspace
-        used to build the projector. This is the only free parameter of the
-        method; :func:`recipsiicos_rank_curve` helps choose it.
-    method : 'recipsiicos' | 'whitened'
-        Which projector to build. ``'recipsiicos'`` projects onto the principal
-        power subspace (Eq. 10). ``'whitened'`` projects away from the principal
-        correlation subspace in the power-whitened space (Eqs. 15-17), which
-        spares the source-power terms more effectively.
-    info : instance of mne.Info | None
-        Measurement info used to determine the common channels. If ``None``,
-        ``data_cov`` and ``forward`` are intersected directly.
-    reg : float
-        Ridge added to the power-subspace eigenvalues before whitening (used by
-        ``method='whitened'`` only) as a fraction of their mean.
-    %(verbose)s
+    ``B = U_q^T W`` where ``W`` whitens by the noise covariance (per-type rank,
+    :func:`mne.cov.compute_whitener`) and ``U_q`` holds the ``q`` leading left
+    singular vectors of the *whitened* leadfield -- the virtual sensors of
+    Kuznetsova et al. (2021). Whitening makes the reduction device-agnostic
+    (commensurable units across sensor types); the SVD truncation makes the
+    subsequent :math:`M^2`-space computations tractable.
 
     Returns
     -------
-    cov : instance of mne.Covariance
-        The modified, positive-definite data covariance over the common
-        channels.
-
-    Notes
-    -----
-    The modification is followed by a spectral-flip step that restores positive
-    definiteness (Eq. 12). A warning is raised if the negative eigenvalues
-    carried more than 20%% of the eigenvalue energy (Eq. 24), the threshold above
-    which the authors caution against trusting the result.
-
-    References
-    ----------
-    .. footbibliography::
+    b_op : ndarray, shape (q, M)
+        The reduction operator (working-space rows, sensor-space columns).
+    n_ret : int
+        The number of virtual sensors ``q`` retained.
+    n_white : int
+        The whitened rank ``r`` (upper bound on ``q``), for logging.
     """
-    _validate_type(data_cov, Covariance, "data_cov")
-    _check_option("method", method, _ALLOWED_METHOD)
+    whitener = _make_whitener(info, noise_cov, common_ch, whitener_rank)  # (r, M)
+    gain, _ = _forward_gain(forward, common_ch)  # (M, n_dipoles)
+    gain_white = whitener @ gain  # (r, n_dipoles)
+    u, sv, _ = np.linalg.svd(gain_white, full_matrices=False)  # u: (r, k)
+    q = _virtual_sensor_count(sv, pct_var, n_virtual)
+    u_q = u[:, :q]  # (r, q)
+    b_op = u_q.T @ whitener  # (q, M)
+    return b_op, q, whitener.shape[0]
+
+
+def _build_projector(gain_work, fixed, method, rank, reg):
+    """Build the ReciPSIICOS/Whitened projector from working-space topographies."""
+    topos = _tangential_topographies(gain_work, fixed)
+    g_pwr = _power_columns(topos)
+    msq = gain_work.shape[0] ** 2
     if int(rank) < 1:
         raise ValueError(f"rank must be a positive integer, got {rank}.")
-
-    # Resolve the common channel space and the data covariance over it. When no
-    # info is supplied, intersect the covariance and forward channel sets.
-    if info is None:
-        fwd_ch = set(forward["sol"]["row_names"])
-        common_ch = [ch for ch in data_cov.ch_names if ch in fwd_ch]
-        if len(common_ch) == 0:
-            raise ValueError(
-                "No common channels between data_cov and forward."
-            )
-        cov_idx = [list(data_cov.ch_names).index(ch) for ch in common_ch]
-        cov = np.asarray(data_cov.data, dtype=np.float64)[np.ix_(cov_idx, cov_idx)]
-    else:
-        common_ch, cov = _align_channels(info, forward, data_cov)
-
-    n_channels = len(common_ch)
-    msq = n_channels * n_channels
     if int(rank) > msq:
         raise ValueError(
-            f"rank={rank} exceeds the dimension M^2={msq} of the covariance "
-            "vector space."
+            f"rank={rank} exceeds the dimension q^2={msq} of the working "
+            "covariance vector space (q is the number of virtual sensors)."
         )
-
-    # Build the topographies and the projector.
-    topos = _local_topographies(forward, common_ch)
-    g_pwr = _power_columns(topos)
     if method == "recipsiicos":
         projector, _ = _power_projector(g_pwr, rank)
     else:
         c_cor = _correlation_gram(topos)
         projector, _ = _whitened_projector(g_pwr, c_cor, rank, reg)
+    return projector
 
-    # Project the covariance and restore positive-definiteness.
-    modified = _apply_projector(projector, cov)
-    modified, neg_energy = _spectral_flip(modified)
+
+def _recipsiicos_working(
+    info,
+    forward,
+    data_cov,
+    *,
+    method,
+    rank,
+    noise_cov,
+    whitener_rank,
+    pct_var,
+    n_virtual,
+    reg,
+):
+    """Clean the data covariance in the whitened, reduced working space.
+
+    Returns the reduction operator, the working-space leadfield, the cleaned
+    working-space covariance and diagnostics, shared by both public entry
+    points.
+    """
+    _validate_type(data_cov, Covariance, "data_cov")
+    _check_option("method", method, _ALLOWED_METHOD)
+
+    common_ch, cov = _align_channels(info, forward, data_cov)
+    b_op, q, r = _reduction_operator(
+        info,
+        forward,
+        common_ch,
+        noise_cov=noise_cov,
+        whitener_rank=whitener_rank,
+        pct_var=pct_var,
+        n_virtual=n_virtual,
+    )
+    gain, fixed = _forward_gain(forward, common_ch)
+    gain_work = b_op @ gain  # (q, n_dipoles)
+    cov_work = b_op @ cov @ b_op.T  # (q, q)
+
+    projector = _build_projector(gain_work, fixed, method, rank, reg)
+    modified = _apply_projector(projector, cov_work)
+    cov_clean, neg_energy = _spectral_flip(modified)
+
     logger.info(
-        f"    ReciPSIICOS ({method}): modified covariance over {n_channels} "
-        f"channels at rank {rank}; negative-eigenvalue energy "
+        f"    ReciPSIICOS ({method}): {r} whitened dims reduced to {q} virtual "
+        f"sensors; projection rank {rank}; negative-eigenvalue energy "
         f"{neg_energy * 100:.1f}%."
     )
     if neg_energy > _NEG_ENERGY_LIMIT:
@@ -381,9 +445,110 @@ def make_recipsiicos_cov(
             RuntimeWarning,
             stacklevel=2,
         )
+    return common_ch, b_op, gain_work, fixed, cov_clean, neg_energy, q
+
+
+# --------------------------------------------------------------------------- #
+# Public API
+# --------------------------------------------------------------------------- #
+@verbose
+def make_recipsiicos_cov(
+    data_cov,
+    forward,
+    info,
+    *,
+    rank,
+    method="recipsiicos",
+    noise_cov=None,
+    whitener_rank="full",
+    pct_var=_DEFAULT_PCT_VAR,
+    n_virtual=None,
+    reg=0.05,
+    verbose=None,
+):
+    r"""ReciPSIICOS modification of a sensor-space data covariance.
+
+    Builds the ReciPSIICOS (``method='recipsiicos'``) or Whitened ReciPSIICOS
+    (``method='whitened'``) projector from the forward model in the noise-
+    whitened, virtual-sensor working space, applies it to the data covariance
+    there, restores positive-definiteness by the spectral-flip step (Eq. 12) and
+    maps the result back to sensor space.
+
+    The returned covariance is provided for inspection and interoperability. To
+    build a beamformer, prefer :func:`make_recipsiicos_lcmv`, which solves the
+    LCMV problem directly in the working space; feeding the covariance returned
+    here to :func:`mne.beamformer.make_lcmv` with the same ``noise_cov`` would
+    whiten a second time.
+
+    Parameters
+    ----------
+    data_cov : instance of mne.Covariance
+        The sensor-space data covariance to modify.
+    forward : instance of mne.Forward
+        The forward solution. The projector is built from this alone.
+    info : instance of mne.Info
+        Measurement info, required to whiten per sensor type. Must cover the
+        channels shared by ``data_cov`` and ``forward``.
+    rank : int
+        Projection rank ``K`` (Eq. 10 / Eq. 17), in the ``q^2``-dimensional
+        working covariance vector space (``q`` = number of virtual sensors). Use
+        :func:`recipsiicos_rank_curve` to choose it.
+    method : 'recipsiicos' | 'whitened'
+        Which projector to build. ``'recipsiicos'`` projects onto the principal
+        power subspace (Eq. 10); ``'whitened'`` projects away from the principal
+        correlation subspace in the power-whitened space (Eqs. 15-17).
+    noise_cov : instance of mne.Covariance | None
+        Noise covariance used to whiten. If ``None``, an ad-hoc per-type model
+        (:func:`mne.make_ad_hoc_cov`) is used; for a single sensor type this is
+        a global scaling that leaves the projector subspaces unchanged.
+    whitener_rank : int | 'full'
+        Rank handling passed to :func:`mne.cov.compute_whitener`.
+    pct_var : float
+        Fraction of whitened-leadfield variance kept by the virtual-sensor
+        reduction (Section 2.6). Ignored if ``n_virtual`` is given.
+    n_virtual : int | None
+        Explicit number of virtual sensors. Overrides ``pct_var``.
+    reg : float
+        Ridge added to the power-subspace eigenvalues before whitening (used by
+        ``method='whitened'`` only) as a fraction of their mean.
+    %(verbose)s
+
+    Returns
+    -------
+    cov : instance of mne.Covariance
+        The modified sensor-space covariance (rank ``q``), over the channels
+        shared by ``data_cov``, ``forward`` and ``info``.
+
+    Notes
+    -----
+    Equation numbers refer to Kuznetsova et al. (2021).
+
+    References
+    ----------
+    .. footbibliography::
+    """
+    _validate_type(info, "info", "info")
+    common_ch, b_op, _, _, cov_clean, _, _ = _recipsiicos_working(
+        info,
+        forward,
+        data_cov,
+        method=method,
+        rank=rank,
+        noise_cov=noise_cov,
+        whitener_rank=whitener_rank,
+        pct_var=pct_var,
+        n_virtual=n_virtual,
+        reg=reg,
+    )
+    # Map the cleaned working-space covariance back to sensor space through the
+    # pseudo-inverse of the reduction operator. The result is the rank-q sensor-
+    # space representation of the cleaned covariance.
+    b_pinv = np.linalg.pinv(b_op)  # (M, q)
+    cov_sensor = b_pinv @ cov_clean @ b_pinv.T
+    cov_sensor = 0.5 * (cov_sensor + cov_sensor.T)
 
     return Covariance(
-        modified,
+        cov_sensor,
         common_ch,
         list(data_cov.get("bads", [])),
         list(data_cov.get("projs", [])),
@@ -403,130 +568,291 @@ def make_recipsiicos_lcmv(
     reg=0.05,
     label=None,
     pick_ori=None,
-    weight_norm="unit-noise-gain-invariant",
-    rank_lcmv="info",
+    weight_norm="unit-noise-gain",
     reduce_rank=False,
-    depth=None,
     inversion="matrix",
+    whitener_rank="full",
+    pct_var=_DEFAULT_PCT_VAR,
+    n_virtual=None,
     verbose=None,
 ):
-    """Build an LCMV beamformer on a ReciPSIICOS-modified data covariance.
+    r"""LCMV beamformer on a ReciPSIICOS-modified data covariance.
 
-    Convenience wrapper that modifies ``data_cov`` with
-    :func:`make_recipsiicos_cov` and then calls
-    :func:`mne.beamformer.make_lcmv` with the modified covariance. All LCMV
-    options are passed straight through, so the beamformer is identical to a
-    standard MNE LCMV except for the correlated-source-robust covariance.
+    Cleans the data covariance with the ReciPSIICOS or Whitened ReciPSIICOS
+    projector in the noise-whitened, virtual-sensor working space, then solves
+    the LCMV problem *in that working space* by reusing MNE's own filter
+    computation (orientation selection, weight normalisation and rank handling).
+    The reduction operator is folded into the returned filters as their
+    whitener, so :func:`mne.beamformer.apply_lcmv` applies the whole pipeline to
+    sensor data without modification.
 
     Parameters
     ----------
     info : instance of mne.Info
-        The measurement info.
+        Measurement info. Used to whiten per sensor type and to align channels.
     forward : instance of mne.Forward
         The forward solution.
     data_cov : instance of mne.Covariance
-        The (unmodified) data covariance.
+        The sensor-space data covariance.
     rank : int
-        The ReciPSIICOS projection rank (see :func:`make_recipsiicos_cov`).
+        Projection rank ``K`` in the ``q^2``-dimensional working covariance
+        vector space (``q`` = number of virtual sensors). See
+        :func:`recipsiicos_rank_curve`.
     method : 'recipsiicos' | 'whitened'
         Which ReciPSIICOS projector to use.
     noise_cov : instance of mne.Covariance | None
-        Noise covariance, passed to ``make_lcmv``.
+        Noise covariance used to whiten and to define the working-space noise
+        model (which is white by construction). If ``None``, an ad-hoc per-type
+        model is used.
     reg : float
-        Regularisation. Used both for the ReciPSIICOS whitening ridge and as the
-        ``reg`` argument of ``make_lcmv``.
+        Tikhonov regularisation for the working-space covariance inversion, as a
+        fraction of its mean eigenvalue (passed to MNE's filter computation).
+        Also the ridge for the whitened-projector power subspace.
     label : instance of mne.Label | None
-        Restrict the source space, passed to ``make_lcmv``.
-    pick_ori : None | str
-        Source-orientation handling, passed to ``make_lcmv``.
-    weight_norm : str | None
-        Weight normalisation, passed to ``make_lcmv``.
-    rank_lcmv : None | int | 'full' | 'info'
-        The ``rank`` argument of ``make_lcmv`` (named ``rank_lcmv`` here to
-        avoid clashing with the ReciPSIICOS projection rank).
+        Restrict the source space to this label before building the filters.
+    pick_ori : None | 'normal' | 'max-power' | 'vector'
+        Source orientation handling, passed to MNE's filter computation. Only
+        valid for a free-orientation forward.
+    weight_norm : None | 'unit-noise-gain' | 'unit-noise-gain-invariant' | 'nai'
+        Weight normalisation, passed to MNE's filter computation. In the working
+        space the noise is white, so unit-noise-gain normalises to unit norm
+        there.
     reduce_rank : bool
-        Passed to ``make_lcmv``.
-    depth : None | float | dict
-        Passed to ``make_lcmv``.
+        Whether to reduce the leadfield rank by one during the solve (MNE
+        option, useful for free orientation with rank-deficient leadfields).
     inversion : 'matrix' | 'single'
-        Passed to ``make_lcmv``.
+        Covariance inversion scheme, passed to MNE's filter computation.
+    whitener_rank : int | 'full'
+        Rank handling passed to :func:`mne.cov.compute_whitener`.
+    pct_var : float
+        Fraction of whitened-leadfield variance kept by the virtual-sensor
+        reduction. Ignored if ``n_virtual`` is given.
+    n_virtual : int | None
+        Explicit number of virtual sensors. Overrides ``pct_var``.
     %(verbose)s
 
     Returns
     -------
     filters : instance of mne.beamformer.Beamformer
-        The LCMV spatial filter built on the modified covariance.
+        The LCMV filters, ready for :func:`mne.beamformer.apply_lcmv`. Their
+        ``weights`` act in the working space and their ``whitener`` is the
+        reduction operator, so the combination acts on sensor data.
+
+    Notes
+    -----
+    Equation numbers refer to Kuznetsova et al. (2021).
 
     References
     ----------
     .. footbibliography::
     """
-    # Imported here to keep the module import light and to make the dependency
-    # on MNE's LCMV explicit at the point of use.
-    from mne.beamformer import make_lcmv
+    _validate_type(info, "info", "info")
+    if label is not None:
+        from mne import Label
+        from mne.forward import restrict_forward_to_label
 
-    modified_cov = make_recipsiicos_cov(
-        data_cov,
-        forward,
-        rank=rank,
-        method=method,
-        info=info,
-        reg=reg,
-    )
-    return make_lcmv(
+        _validate_type(label, Label, "label")
+        forward = restrict_forward_to_label(forward, label)
+
+    common_ch, b_op, gain_work, fixed, cov_clean, _, q = _recipsiicos_working(
         info,
         forward,
-        modified_cov,
-        reg=reg,
+        data_cov,
+        method=method,
+        rank=rank,
         noise_cov=noise_cov,
-        label=label,
-        pick_ori=pick_ori,
-        rank=rank_lcmv,
-        weight_norm=weight_norm,
-        reduce_rank=reduce_rank,
-        depth=depth,
-        inversion=inversion,
+        whitener_rank=whitener_rank,
+        pct_var=pct_var,
+        n_virtual=n_virtual,
+        reg=reg,
     )
 
+    if fixed and pick_ori is not None:
+        raise ValueError(
+            f"pick_ori={pick_ori!r} requires a free-orientation forward."
+        )
 
-def recipsiicos_rank_curve(forward, *, method="recipsiicos", info=None, data_cov=None):
-    """Power-vs-correlation retention as a function of projection rank.
+    n_orient = 1 if fixed else 3
 
-    Computes, for every projection rank ``k``, the fraction of the power- and
-    correlation-subspace energy that survives the projection (Eqs. 20-21). The
-    useful rank is the largest ``k`` for which the correlation subspace is
-    depleted faster than the power subspace; plotting ``p_cor`` against
-    ``p_pwr`` makes this trade-off visible (the authors pick the 45-degree
-    point of the curve).
+    # Source normals and vertices, following MNE's convention: for a free
+    # forward keep one normal per source; a surface-oriented forward uses the
+    # local +Z direction.
+    nn = forward["source_nn"]
+    if not fixed:
+        nn = nn[2::3]
+    nn = nn.copy()
+    if forward["surf_ori"]:
+        nn[...] = [0.0, 0.0, 1.0]
+    vertno = _get_vertno(forward["src"])
+    orient_std = np.ones(gain_work.shape[1])
+
+    # Solve the LCMV in the working space. The working-space noise is white, so
+    # the identity is the correct whitener here; MNE's routine does the
+    # orientation selection, weight normalisation and rank handling.
+    weights, max_power_ori = _compute_beamformer(
+        gain_work,
+        cov_clean,
+        reg,
+        n_orient,
+        weight_norm,
+        pick_ori,
+        reduce_rank,
+        q,
+        inversion=inversion,
+        nn=nn,
+        orient_std=orient_std,
+        whitener=np.eye(q),
+    )
+
+    src_type = _get_src_type(forward["src"], vertno)
+    subject = _subject_from_forward(forward)
+    is_free_ori = (not fixed) if pick_ori in (None, "vector") else False
+
+    filters = Beamformer(
+        kind="LCMV",
+        weights=weights,
+        data_cov=data_cov,
+        noise_cov=noise_cov,
+        # Fold the reduction operator in as the whitener: apply_lcmv applies it
+        # to the sensor data before the working-space weights.
+        whitener=b_op,
+        weight_norm=weight_norm,
+        pick_ori=pick_ori,
+        ch_names=list(common_ch),
+        proj=None,
+        is_ssp=False,
+        vertices=vertno,
+        is_free_ori=is_free_ori,
+        n_sources=forward["nsource"],
+        src_type=src_type,
+        source_nn=forward["source_nn"].copy(),
+        subject=subject,
+        rank=int(q),
+        max_power_ori=max_power_ori,
+        inversion=inversion,
+    )
+    return filters
+
+
+def _optimal_rank(p_pwr, p_cor):
+    """Rank ``K*`` at the 45-degree point of the power-vs-correlation curve.
+
+    Kuznetsova et al. (2021), Section 2.4: the optimal rank is the largest one
+    for which the correlation subspace still loses energy at least as fast as the
+    power subspace, i.e. the last rank at which the marginal-gain difference
+    ``dP_cor/dk - dP_pwr/dk`` is non-negative before it turns negative. This is
+    the point where the logarithm of the marginal gain crosses zero and the
+    tangent to the (power, correlation) curve is at 45 degrees.
+    """
+    d_pwr = np.diff(p_pwr)
+    d_cor = np.diff(p_cor)
+    delta = d_cor - d_pwr  # delta[i] is the marginal gain from rank i+1 to i+2
+    negative = np.nonzero(delta < 0)[0]
+    if negative.size == 0:
+        # The correlation subspace never starts losing energy faster than the
+        # power subspace: no interior optimum, keep the full rank.
+        return int(p_pwr.size)
+    # The optimal rank is the last one before the first sign change to negative.
+    return int(negative[0] + 1)
+
+
+@verbose
+def recipsiicos_rank_curve(
+    forward,
+    info,
+    *,
+    method="recipsiicos",
+    data_cov=None,
+    noise_cov=None,
+    whitener_rank="full",
+    pct_var=_DEFAULT_PCT_VAR,
+    n_virtual=None,
+    reg=0.05,
+    return_optimal=False,
+    verbose=None,
+):
+    r"""Power-vs-correlation retention as a function of projection rank.
+
+    Computes, for every projection rank ``k`` in the working space, the fraction
+    of the power- and correlation-subspace energy that survives the projection
+    (Eqs. 20-21). The useful rank is the largest ``k`` for which the correlation
+    subspace is depleted faster than the power subspace; plotting ``p_cor``
+    against ``p_pwr`` makes this trade-off visible and its 45-degree point
+    (Section 2.4) is the recommended rank.
 
     Parameters
     ----------
     forward : instance of mne.Forward
         The forward solution.
+    info : instance of mne.Info
+        Measurement info, used to whiten and reduce to the working space so that
+        the curve matches the space the beamformer is built in.
     method : 'recipsiicos' | 'whitened'
         Which projector family to characterise.
-    info : instance of mne.Info | None
-        Used, with ``data_cov``, to determine the common channels. If ``None``
-        all forward channels are used.
     data_cov : instance of mne.Covariance | None
-        Only used together with ``info`` to intersect channels.
+        Only used to intersect channels; its values do not affect the curve.
+    noise_cov : instance of mne.Covariance | None
+        Noise covariance used to whiten (see :func:`make_recipsiicos_lcmv`).
+    whitener_rank : int | 'full'
+        Rank handling passed to :func:`mne.cov.compute_whitener`.
+    pct_var : float
+        Fraction of whitened-leadfield variance kept by the virtual-sensor
+        reduction. Ignored if ``n_virtual`` is given.
+    n_virtual : int | None
+        Explicit number of virtual sensors. Overrides ``pct_var``.
+    reg : float
+        Ridge for the whitened-projector power subspace.
+    return_optimal : bool
+        If ``True``, also return the automatically selected rank ``K*``.
+    %(verbose)s
 
     Returns
     -------
     ranks : ndarray, shape (n_ranks,)
-        The projection ranks evaluated (1 .. M^2).
+        The projection ranks evaluated (1 .. q^2).
     p_pwr : ndarray, shape (n_ranks,)
         Fraction of power-subspace energy retained at each rank (Eq. 20).
     p_cor : ndarray, shape (n_ranks,)
         Fraction of correlation-subspace energy retained at each rank (Eq. 21).
+    optimal : int
+        The selected rank ``K*`` (only if ``return_optimal=True``).
+
+    Notes
+    -----
+    Equation numbers refer to Kuznetsova et al. (2021).
+
+    References
+    ----------
+    .. footbibliography::
     """
     _check_option("method", method, _ALLOWED_METHOD)
-    if info is not None and data_cov is not None:
+    _validate_type(info, "info", "info")
+
+    # Determine the common channels (values of data_cov are irrelevant here).
+    if data_cov is not None:
         common_ch, _ = _align_channels(info, forward, data_cov)
     else:
-        common_ch = list(forward["sol"]["row_names"])
+        bads = set(info["bads"])
+        fwd_set = set(forward["sol"]["row_names"])
+        common_ch = [
+            ch for ch in info["ch_names"] if ch in fwd_set and ch not in bads
+        ]
+        if len(common_ch) == 0:
+            raise ValueError("No common good channels between info and forward.")
 
-    topos = _local_topographies(forward, common_ch)
+    b_op, _, _ = _reduction_operator(
+        info,
+        forward,
+        common_ch,
+        noise_cov=noise_cov,
+        whitener_rank=whitener_rank,
+        pct_var=pct_var,
+        n_virtual=n_virtual,
+    )
+    gain, fixed = _forward_gain(forward, common_ch)
+    gain_work = b_op @ gain
+
+    topos = _tangential_topographies(gain_work, fixed)
     g_pwr = _power_columns(topos)
     c_pwr = g_pwr @ g_pwr.T
     c_cor = _correlation_gram(topos)
@@ -540,7 +866,10 @@ def recipsiicos_rank_curve(forward, *, method="recipsiicos", info=None, data_cov
         if method == "recipsiicos":
             projector, _ = _power_projector(g_pwr, k)
         else:
-            projector, _ = _whitened_projector(g_pwr, c_cor, k, reg=0.05)
+            projector, _ = _whitened_projector(g_pwr, c_cor, k, reg=reg)
         p_pwr[idx] = np.trace(projector @ c_pwr @ projector.T) / tr_pwr
         p_cor[idx] = np.trace(projector @ c_cor @ projector.T) / tr_cor
+
+    if return_optimal:
+        return ranks, p_pwr, p_cor, _optimal_rank(p_pwr, p_cor)
     return ranks, p_pwr, p_cor
