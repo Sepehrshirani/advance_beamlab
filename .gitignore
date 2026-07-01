@@ -11,3 +11,4 @@ venv/
 .idea/
 .DS_Store
 *.zip
+smoke_mcmv.py
