@@ -275,7 +275,7 @@ def scan_mcmv(
     noise_cov=None,
     evoked_cov=None,
     reg=0.05,
-    rank="full",
+    rank=None,
     verbose=None,
 ):
     r"""Discover correlated sources by iterative MCMV scanning.
@@ -316,8 +316,10 @@ def scan_mcmv(
     reg : float
         Diagonal-loading regularisation applied to the (whitened) data
         covariance, as in :func:`make_mcmv`.
-    rank : int | 'full'
-        Rank handling for the whitener and the covariance inverse.
+    rank : int | None | 'full'
+        Rank handling for the whitener and the covariance inverse, as in
+        :func:`make_mcmv`. The default ``None`` auto-detects the rank and drops
+        the null space.
     %(verbose)s
 
     Returns

@@ -270,7 +270,7 @@ def make_mcmv(
     reg=0.05,
     orientations=None,
     weight_norm="unit-gain",
-    rank="full",
+    rank=None,
     verbose=None,
 ):
     r"""Compute a Multiple Constrained Minimum Variance (MCMV) beamformer.
@@ -332,11 +332,14 @@ def make_mcmv(
         :footcite:`SekiharaNagarajan2008`; because the solve is performed in the
         whitened space this is exactly unit Euclidean norm of the whitened
         filter, matching MNE's definition.
-    rank : int | 'full'
+    rank : int | None | 'full'
         Rank handling, applied to both the noise-covariance whitener
-        (:func:`mne.cov.compute_whitener`) and the data-covariance inverse. Use
-        an integer for rank-reduced data (e.g. after SSP/ICA); ``'full'`` assumes
-        full rank. For genuinely rank-deficient data prefer an explicit integer.
+        (:func:`mne.cov.compute_whitener`) and the data-covariance inverse. The
+        default ``None`` auto-detects the rank per sensor type and drops the null
+        space, as :func:`mne.beamformer.make_lcmv` does -- the correct choice for
+        rank-deficient data (e.g. after SSP/ICA), where ``'full'`` would instead
+        invert the near-null directions and give an unstable whitener. Pass an
+        integer to set the rank explicitly.
     %(verbose)s
 
     Returns
