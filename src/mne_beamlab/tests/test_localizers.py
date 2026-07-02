@@ -1,6 +1,6 @@
 """Tests for the MCMV localizers and data-driven orientation."""
 
-# Authors: the mne-beamlab contributors
+# Authors: Sepehr Shirani
 # License: BSD-3-Clause
 
 import mne
