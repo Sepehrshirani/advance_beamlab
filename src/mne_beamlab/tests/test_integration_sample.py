@@ -1,4 +1,4 @@
-# Authors: the mne-beamlab contributors
+# Authors: Sepehr Shirani
 # License: BSD-3-Clause
 """Integration tests on the MNE ``sample`` dataset (a real MEG recording).
 
