@@ -91,7 +91,14 @@ print(f"selected sources (left, right hemisphere): {sources}")
 # courses. For comparison, take the two matching rows of the per-source LCMV
 # reconstruction.
 
-mcmv = make_mcmv(evoked.info, fwd, data_cov, sources=sources, noise_cov=noise_cov)
+mcmv = make_mcmv(
+    evoked.info,
+    fwd,
+    data_cov,
+    sources=sources,
+    noise_cov=noise_cov,
+    weight_norm="unit-noise-gain",  # same scale as the LCMV trace it is compared to
+)
 s_mcmv = apply_mcmv(evoked, mcmv)  # (2, n_times)
 
 s_lcmv = apply_lcmv(evoked, lcmv).data[sources]  # (2, n_times)
