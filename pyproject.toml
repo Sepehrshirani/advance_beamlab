@@ -19,7 +19,17 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8.0", "pytest-cov"]
-doc = ["sphinx", "myst-parser", "numpydoc", "sphinxcontrib-bibtex", "pydata-sphinx-theme"]
+doc = [
+    "sphinx",
+    "sphinx-gallery",
+    "myst-parser",
+    "numpydoc",
+    "sphinxcontrib-bibtex",
+    "pydata-sphinx-theme",
+    "matplotlib",
+    "pyvista",
+    "pyvistaqt",
+]
 dev = ["mne-beamlab[test,doc]", "ruff>=0.6"]
 
 [project.urls]
