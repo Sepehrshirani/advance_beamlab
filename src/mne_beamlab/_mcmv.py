@@ -258,7 +258,6 @@ def _check_source_separation(forward, sources, min_dist=5e-3):
                     stacklevel=2,
                 )
 
-
 @verbose
 def make_mcmv(
     info,
