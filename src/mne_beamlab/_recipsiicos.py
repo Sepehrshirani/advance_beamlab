@@ -530,7 +530,7 @@ def make_recipsiicos_cov(
     rank,
     method="recipsiicos",
     noise_cov=None,
-    whitener_rank="full",
+    whitener_rank=None,
     pct_var=_DEFAULT_PCT_VAR,
     n_virtual=None,
     reg=0.05,
@@ -571,8 +571,12 @@ def make_recipsiicos_cov(
         Noise covariance used to whiten. If ``None``, an ad-hoc per-type model
         (:func:`mne.make_ad_hoc_cov`) is used; for a single sensor type this is
         a global scaling that leaves the projector subspaces unchanged.
-    whitener_rank : int | 'full'
-        Rank handling passed to :func:`mne.cov.compute_whitener`.
+    whitener_rank : int | None | 'full'
+        Rank handling passed to :func:`mne.cov.compute_whitener`. The
+        default ``None`` auto-detects the covariance rank per sensor type
+        and drops the null space -- required when SSP/SSS projectors make the
+        covariance rank-deficient, since ``'full'`` would instead invert the
+        near-null directions and yield an unstable whitener.
     pct_var : float
         Fraction of whitened-leadfield variance kept by the virtual-sensor
         reduction (Section 2.6). Ignored if ``n_virtual`` is given.
@@ -641,7 +645,7 @@ def make_recipsiicos_lcmv(
     weight_norm="unit-noise-gain",
     reduce_rank=False,
     inversion="matrix",
-    whitener_rank="full",
+    whitener_rank=None,
     pct_var=_DEFAULT_PCT_VAR,
     n_virtual=None,
     verbose=None,
@@ -694,8 +698,12 @@ def make_recipsiicos_lcmv(
         silent in a spherical conductor), so the solve is singular otherwise.
     inversion : 'matrix' | 'single'
         Covariance inversion scheme, passed to MNE's filter computation.
-    whitener_rank : int | 'full'
-        Rank handling passed to :func:`mne.cov.compute_whitener`.
+    whitener_rank : int | None | 'full'
+        Rank handling passed to :func:`mne.cov.compute_whitener`. The
+        default ``None`` auto-detects the covariance rank per sensor type
+        and drops the null space -- required when SSP/SSS projectors make the
+        covariance rank-deficient, since ``'full'`` would instead invert the
+        near-null directions and yield an unstable whitener.
     pct_var : float
         Fraction of whitened-leadfield variance kept by the virtual-sensor
         reduction. Ignored if ``n_virtual`` is given.
@@ -869,7 +877,7 @@ def recipsiicos_rank_curve(
     method="recipsiicos",
     data_cov=None,
     noise_cov=None,
-    whitener_rank="full",
+    whitener_rank=None,
     pct_var=_DEFAULT_PCT_VAR,
     n_virtual=None,
     reg=0.05,
@@ -898,8 +906,12 @@ def recipsiicos_rank_curve(
         Only used to intersect channels; its values do not affect the curve.
     noise_cov : instance of mne.Covariance | None
         Noise covariance used to whiten (see :func:`make_recipsiicos_lcmv`).
-    whitener_rank : int | 'full'
-        Rank handling passed to :func:`mne.cov.compute_whitener`.
+    whitener_rank : int | None | 'full'
+        Rank handling passed to :func:`mne.cov.compute_whitener`. The
+        default ``None`` auto-detects the covariance rank per sensor type
+        and drops the null space -- required when SSP/SSS projectors make the
+        covariance rank-deficient, since ``'full'`` would instead invert the
+        near-null directions and yield an unstable whitener.
     pct_var : float
         Fraction of whitened-leadfield variance kept by the virtual-sensor
         reduction. Ignored if ``n_virtual`` is given.
