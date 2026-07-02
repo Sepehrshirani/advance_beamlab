@@ -92,6 +92,13 @@ ax.set(
 )
 ax.legend()
 
+# Both curves are flat at zero once the rank passes the power cliff, so zoom the
+# x-axis to the range where power and correlation actually change -- otherwise
+# the informative part is squeezed into a small fraction of a q^2-wide axis.
+informative = (p_pwr > 0.01).nonzero()[0]
+xmax = int(ranks[informative[-1]]) if informative.size else int(ranks[-1])
+ax.set_xlim(0, min(int(ranks[-1]), int(1.15 * xmax)))
+
 # %%
 # Build a standard LCMV and a ReciPSIICOS beamformer on the same data. Free
 # orientation MEG needs ``reduce_rank=True`` (the radial-silent leadfield is
