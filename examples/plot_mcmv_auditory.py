@@ -101,57 +101,73 @@ brain = stc_pow.plot(
 )
 
 # %%
-# Build the MCMV joint filter on those two sources and reconstruct their time
-# courses. For comparison, take the two matching rows of the per-source LCMV
-# reconstruction.
+# Build the MCMV joint filter on those two sources, and a per-source LCMV, both
+# with *unit gain* so the recovered amplitudes are directly comparable. Unit gain
+# reads out the physical source amplitude, so the two beamformers agree exactly
+# when there is nothing to cancel and diverge only through correlated-source
+# cancellation -- unlike unit-noise-gain, which offsets the two even when the
+# sources are independent.
 
+lcmv_ug = make_lcmv(
+    evoked.info,
+    fwd,
+    data_cov,
+    reg=0.05,
+    noise_cov=noise_cov,
+    pick_ori=None,
+    weight_norm=None,  # unit gain: physical source amplitude
+)
 mcmv = make_mcmv(
     evoked.info,
     fwd,
     data_cov,
     sources=sources,
     noise_cov=noise_cov,
-    weight_norm="unit-noise-gain",  # same scale as the LCMV trace it is compared to
+    weight_norm="unit-gain",
 )
 s_mcmv = apply_mcmv(evoked, mcmv)  # (2, n_times)
-
-s_lcmv = apply_lcmv(evoked, lcmv).data[sources]  # (2, n_times)
+s_lcmv = apply_lcmv(evoked, lcmv_ug).data[sources]  # (2, n_times)
 
 # %%
 # The MCMV null on the opposite source removes the shared-signal cancellation, so
-# the joint auditory time courses are cleaner and less attenuated than the
-# per-source LCMV traces.
+# the joint auditory time courses are recovered at a fuller amplitude than the
+# per-source LCMV traces. The peak-amplitude ratio in each panel quantifies how
+# much the per-source LCMV is attenuated (a ratio near one means the two auditory
+# sources were only weakly correlated in this covariance, so there was little to
+# cancel).
 
 times = evoked.times * 1e3
+post = evoked.times >= 0.0
 fig, axes = plt.subplots(2, 1, sharex=True, figsize=(7, 5), constrained_layout=True)
 for ax, i, hemi in zip(axes, range(2), ("Left", "Right"), strict=True):
+    ratio = np.abs(s_mcmv[i, post]).max() / np.abs(s_lcmv[i, post]).max()
     ax.plot(times, s_lcmv[i], color="C0", label="LCMV (per-source)")
     ax.plot(times, s_mcmv[i], color="C3", label="MCMV (joint)")
     ax.axvline(0, color="k", lw=0.5)
-    ax.set(title=f"{hemi} auditory source", ylabel="amplitude (a.u.)")
+    ax.set(title=f"{hemi} auditory source  (MCMV/LCMV peak = {ratio:.2f})",
+           ylabel="amplitude (Am)")
     ax.legend(loc="upper right")
 axes[-1].set_xlabel("time (ms)")
 
 # %%
 # Unlike a set of independent LCMV filters, MCMV also returns the joint source
-# covariance directly (:func:`~mne_beamlab.apply_mcmv_cov`). Its diagonal is the
-# two source powers and its off-diagonal is the recovered coupling between the
-# hemispheres -- a quantity the joint constraint estimates and the per-source
-# LCMV cannot.
+# covariance directly (:func:`~mne_beamlab.apply_mcmv_cov`). Normalised to a
+# correlation matrix, its off-diagonal is the recovered coupling between the two
+# hemispheres -- a quantity the joint constraint estimates and per-source LCMV
+# cannot provide at all.
 
 src_cov = apply_mcmv_cov(data_cov, mcmv)
-corr = src_cov[0, 1] / np.sqrt(src_cov[0, 0] * src_cov[1, 1])
+std = np.sqrt(np.diag(src_cov))
+src_corr = src_cov / np.outer(std, std)  # scale-invariant correlation matrix
 
 fig, ax = plt.subplots(constrained_layout=True, figsize=(4.2, 3.6))
-im = ax.imshow(src_cov, cmap="magma")
+im = ax.imshow(src_corr, cmap="RdBu_r", vmin=-1, vmax=1)
 ax.set(
     xticks=[0, 1], yticks=[0, 1],
     xticklabels=["Left", "Right"], yticklabels=["Left", "Right"],
-    title=f"MCMV source covariance\nrecovered correlation r = {corr:.2f}",
+    title=f"MCMV source coupling\nrecovered correlation r = {src_corr[0, 1]:.2f}",
 )
 for a in range(2):
     for b in range(2):
-        ax.text(
-            b, a, f"{src_cov[a, b]:.2g}", ha="center", va="center", color="tab:cyan"
-        )
-fig.colorbar(im, ax=ax, label="source (co)variance")
+        ax.text(b, a, f"{src_corr[a, b]:.2f}", ha="center", va="center", color="k")
+fig.colorbar(im, ax=ax, label="correlation")
