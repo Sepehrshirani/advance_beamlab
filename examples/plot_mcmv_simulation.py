@@ -45,7 +45,7 @@ obscures the comparison.
 import matplotlib.pyplot as plt
 import mne
 import numpy as np
-from mne.beamformer import apply_lcmv, make_lcmv
+from mne.beamformer import apply_lcmv, apply_lcmv_cov, make_lcmv
 
 from mne_beamlab import apply_mcmv, make_mcmv
 
@@ -199,6 +199,36 @@ data_cov = mne.compute_covariance(
 noise_cov = mne.compute_covariance(
     epochs, tmin=None, tmax=0.0, method="shrunk", verbose=False
 )
+
+# %%
+# Spatial check: before comparing waveforms, confirm both beamformers are
+# looking at the right place. A whole-grid LCMV power map (the standard
+# unit-noise-gain power beamformer) should peak at the two injected sources.
+# Both lie at x = 0, so we project onto the sagittal (y, z) plane.
+
+lcmv_grid = make_lcmv(evoked.info, fwd, data_cov, reg=0.02, noise_cov=noise_cov,
+                      pick_ori=None, weight_norm="unit-noise-gain")
+power = apply_lcmv_cov(data_cov, lcmv_grid).data[:, 0]
+
+rr_mm = source_rr * 1e3
+order = np.argsort(power)  # draw faint sources first so the peaks sit on top
+fig, ax = plt.subplots(constrained_layout=True)
+sctr = ax.scatter(rr_mm[order, 1], rr_mm[order, 2], c=power[order], cmap="hot", s=35)
+ax.scatter(
+    rr_mm[sources, 1], rr_mm[sources, 2], s=170,
+    facecolors="none", edgecolors="tab:cyan", linewidths=2, label="injected sources",
+)
+fig.colorbar(sctr, ax=ax, label="LCMV power (unit-noise-gain)")
+ax.set(
+    xlabel="y (mm)", ylabel="z (mm)", aspect="equal",
+    title=f"LCMV power localises both sources ($\\rho = {rho_demo}$)",
+)
+ax.legend(loc="upper right")
+
+# %%
+# Now the reconstructed waveforms from the same data: the LCMV estimate of the
+# first source is strongly attenuated by its correlated neighbour, while MCMV
+# recovers the injected oscillation.
 
 lcmv = make_lcmv(evoked.info, fwd, data_cov, reg=0.02, noise_cov=noise_cov,
                  pick_ori=None, weight_norm=None)
