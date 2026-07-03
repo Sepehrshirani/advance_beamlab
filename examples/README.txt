@@ -3,9 +3,10 @@
 Examples
 ========
 
-Worked examples demonstrating the mne-beamlab beamformers end to end. Most run on
-the MNE ``sample`` dataset, downloaded on first run via
+Worked examples demonstrating the mne-beamlab beamformers end to end. Several run
+on the MNE ``sample`` dataset, downloaded on first run via
 :func:`mne.datasets.sample.data_path`, and show a beamformer on real MEG data.
-One is a self-contained simulation that needs no download and isolates, in a
-controlled setting, the correlated-source cancellation that MCMV is designed to
-overcome.
+Two are self-contained simulations that need no download and isolate, in
+controlled settings, the correlated-source cancellation that MCMV overcomes and
+the signal leakage that pairwise and augmented MCMV remove from connectivity
+estimates.

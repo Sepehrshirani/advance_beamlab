@@ -11,8 +11,18 @@ Currently implemented:
 - ReciPSIICOS data-covariance modification for correlated-source robustness
   (:func:`~mne_beamlab.make_recipsiicos_cov` and
   :func:`~mne_beamlab.make_recipsiicos_lcmv`), after Kuznetsova et al. (2021).
+- Pairwise and augmented-pairwise MCMV for leakage-free connectivity
+  (:func:`~mne_beamlab.pairwise_mcmv_connectivity` and
+  :func:`~mne_beamlab.augmented_pairwise_mcmv_connectivity`), after Nunes et
+  al. (2020).
 """
 
+from ._connectivity import (
+    ar1_surrogate_significance,
+    augmented_pairwise_mcmv_connectivity,
+    pairwise_mcmv_connectivity,
+    reconstruct_pairwise_mcmv,
+)
 from ._localizers import (
     MCMVScanResult,
     localizer_value,
@@ -43,6 +53,10 @@ __all__ = [
     "make_recipsiicos_cov",
     "make_recipsiicos_lcmv",
     "recipsiicos_rank_curve",
+    "reconstruct_pairwise_mcmv",
+    "pairwise_mcmv_connectivity",
+    "augmented_pairwise_mcmv_connectivity",
+    "ar1_surrogate_significance",
 ]
 
 __version__ = "0.1.0.dev0"

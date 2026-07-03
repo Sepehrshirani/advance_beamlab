@@ -39,6 +39,17 @@ ReciPSIICOS covariance modification
    make_recipsiicos_lcmv
    recipsiicos_rank_curve
 
+Connectivity (pairwise and augmented-pairwise MCMV)
+---------------------------------------------------
+
+.. autosummary::
+   :toctree: generated/
+
+   reconstruct_pairwise_mcmv
+   pairwise_mcmv_connectivity
+   augmented_pairwise_mcmv_connectivity
+   ar1_surrogate_significance
+
 References
 ----------
 
