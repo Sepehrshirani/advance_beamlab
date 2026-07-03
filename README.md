@@ -520,26 +520,38 @@ constraints (≈ "losing $n$ sensors"), and sources sharing a lobe are seen by f
 fewer than $M$ sensors, so the effective $n/M_\text{actual}$ degrades SNR well
 before $n=M$.
 
-**Two things the paper insists on.** (i) Build the weights from a *band-limited*
-covariance matching the analysis band; broadband weights are mis-tuned at the
-band edges and invent spurious high-frequency connectivity. (ii) Use *plain*
+**Two things the paper insists on.** (i) Tune the weights to the analysis band.
+For the resting-state envelope analyses — the setting APW-MCMV targets — the
+sensor data are band-passed (8–12 Hz in the paper) before the covariance and the
+filters are built, so pass band-limited `data`/`data_cov`. The Discussion shows
+why: broadband weights stay near-optimal only where the power concentrates (the
+low end), and for close source pairs they become suboptimal at higher
+frequencies and report spurious connectivity there, which a narrow-band
+covariance removes. (Task coherence/PLV analyses in the paper instead use
+broadband weights with a multitaper spectral estimate.) (ii) Use *plain*
 connectivity on the MCMV output — MCMV already removes leakage, so applying
 leakage-orthogonalisation as well (the symmetric-orthogonalisation baseline)
 would double-correct and discard the genuine zero-lag coupling MCMV is designed
-to preserve.
+to preserve; hence `orthogonalize=False` and a *signed* envelope correlation
+(`absolute=False`, matching the paper's Pearson-of-envelopes) are the defaults.
 
 **Significance.** Edges are tested against an AR(1) surrogate null
 (`ar1_surrogate_significance`): fit a first-order autoregressive model to each
 reconstructed course, generate independent Gaussian surrogates with the same
-temporal smoothness, take the Fisher-$z$ null standard deviation of their
-connectivity, $z$-score the real edges, and threshold with a False Discovery
-Rate of 0.05. A first-order model captures the temporal smoothness of the
-reconstructions but not the slow envelope of a strongly narrow-band signal, for
-which the null is anticonservative — a property of the procedure, noted in the
-function's documentation. The connectivity metrics themselves are delegated to
+temporal smoothness, Fisher-transform their connectivity, and *standardise the
+real edges by the null mean and standard deviation* (giving z-scores that are
+zero-mean, unit-variance under the null, per Colclough et al. 2015) before
+converting to p-values and thresholding with a False Discovery Rate of 0.05. A
+first-order model captures the temporal smoothness of the reconstructions but
+not the slow envelope of a strongly narrow-band signal, for which the null is
+anticonservative — a property of the procedure, noted in the function's
+documentation. The connectivity metrics themselves are delegated to
 `mne-connectivity` (`envelope_correlation`; `spectral_connectivity_epochs` for
 coherence and phase measures), so nothing already implemented there is
-duplicated.
+duplicated. One delegation boundary worth noting: the paper additionally
+low-pass filters each amplitude envelope to 0.5 Hz before correlating (a
+noise-reduction step); `envelope_correlation` correlates the envelopes directly,
+which does not affect the leakage suppression that is this module's contribution.
 
 ---
 

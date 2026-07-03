@@ -67,6 +67,20 @@ def _as_pairs(n_sources):
     return list(combinations(range(n_sources), 2))
 
 
+def _validate_conn_params(method, sfreq, fmin, fmax):
+    """Validate the connectivity metric and its band arguments up front."""
+    _validate_type(method, str, "method")
+    if method not in _CONN_METHODS:
+        raise ValueError(f"method must be one of {_CONN_METHODS}, got {method!r}.")
+    if method in _SPECTRAL_METHODS:
+        if sfreq is None:
+            raise ValueError(f"method={method!r} requires ``sfreq`` to be given.")
+        if fmin is None or fmax is None:
+            raise ValueError(
+                f"method={method!r} requires a frequency band ``fmin`` and ``fmax``."
+            )
+
+
 def _epoched(time_courses):
     """Return ``(n_epochs, n_signals, n_times)`` from an :func:`apply_mcmv` output.
 
@@ -98,11 +112,17 @@ def _pair_connectivity(
     if method == "envelope":
         from mne_connectivity import envelope_correlation
 
+        # Delegated to mne-connectivity: the Hilbert amplitude envelopes are
+        # correlated directly. The paper additionally low-pass filters each
+        # envelope to 0.5 Hz before correlating (a noise-reduction step from
+        # Colclough et al., 2015); that smoothing is not applied here, as it is
+        # not exposed by ``envelope_correlation`` and does not affect the
+        # leakage suppression that is this module's contribution.
         conn = envelope_correlation(
             data, orthogonalize=orthogonalize, absolute=absolute
         )
-        # (n_epochs, 2, 2, 1) -> average the off-diagonal over epochs, as the
-        # paper computes a single envelope correlation per pair.
+        # (n_epochs, 2, 2, 1) -> average the off-diagonal over epochs (a single
+        # continuous segment is one epoch and returns one value).
         values = conn.get_data(output="dense")[:, 0, 1, 0]
         return float(np.mean(values))
 
@@ -110,6 +130,13 @@ def _pair_connectivity(
 
     if sfreq is None:
         raise ValueError(f"method={method!r} requires ``sfreq`` to be given.")
+    if fmin is None or fmax is None:
+        # Without a band the estimate is per-frequency; a single connectivity
+        # value would silently take only the first frequency bin. Require an
+        # explicit band so the value is the band-averaged connectivity.
+        raise ValueError(
+            f"method={method!r} requires a frequency band ``fmin`` and ``fmax``."
+        )
     if data.shape[0] < 2:
         warn(
             f"spectral connectivity (method={method!r}) is being estimated from a "
@@ -121,12 +148,11 @@ def _pair_connectivity(
         sfreq=sfreq,
         fmin=fmin,
         fmax=fmax,
-        faverage=fmin is not None,
+        faverage=True,
         mt_bandwidth=mt_bandwidth,
         verbose=False,
     )
-    # spectral output is (2, 2, n_freqs); the [1, 0] entry is the pair, and a
-    # frequency-averaged request collapses the last axis to length 1.
+    # spectral output is (2, 2, 1) after band averaging; [1, 0] is the pair.
     return float(conn.get_data(output="dense")[1, 0, 0])
 
 
@@ -242,7 +268,7 @@ def pairwise_mcmv_connectivity(
     weight_norm="unit-gain",
     rank=None,
     orthogonalize=False,
-    absolute=True,
+    absolute=False,
     mt_bandwidth=None,
 ):
     r"""Pairwise-MCMV connectivity matrix (PW-MCMV, Nunes et al., 2020).
@@ -265,8 +291,9 @@ def pairwise_mcmv_connectivity(
     sfreq : float | None
         Sampling frequency; required for the spectral methods.
     fmin, fmax : float | None
-        Frequency band for the spectral methods; when given, the metric is
-        averaged over the band.
+        Frequency band for the spectral methods; the metric is averaged over the
+        band. Both are required for the spectral methods (the value is otherwise
+        per-frequency and ill-defined for a single edge).
     orthogonalize : bool | 'pairwise'
         Passed to :func:`mne_connectivity.envelope_correlation`. The default
         ``False`` gives *plain* envelope correlation, as MCMV already removes
@@ -274,9 +301,12 @@ def pairwise_mcmv_connectivity(
         baseline of Nunes et al., 2020) would double-correct and discard genuine
         zero-lag coupling.
     absolute : bool
-        Passed to :func:`mne_connectivity.envelope_correlation`.
+        Passed to :func:`mne_connectivity.envelope_correlation`. The default
+        ``False`` returns the *signed* Pearson correlation of the amplitude
+        envelopes, as in Nunes et al. (2020); ``True`` returns its magnitude.
     mt_bandwidth : float | None
-        Multitaper bandwidth for the spectral methods.
+        Multitaper frequency smoothing (Hz) for the spectral methods (the paper
+        uses 2 Hz for its task coherence/PLV analyses).
 
     Returns
     -------
@@ -285,9 +315,7 @@ def pairwise_mcmv_connectivity(
         connectivity between ``sources[i]`` and ``sources[j]``. The diagonal is
         zero.
     """
-    _validate_type(method, str, "method")
-    if method not in _CONN_METHODS:
-        raise ValueError(f"method must be one of {_CONN_METHODS}, got {method!r}.")
+    _validate_conn_params(method, sfreq, fmin, fmax)
     sources = list(sources)
     n = len(sources)
     pairs, time_courses = reconstruct_pairwise_mcmv(
@@ -367,7 +395,7 @@ def augmented_pairwise_mcmv_connectivity(
     weight_norm="unit-gain",
     rank=None,
     orthogonalize=False,
-    absolute=True,
+    absolute=False,
     mt_bandwidth=None,
 ):
     r"""Augmented pairwise-MCMV connectivity (APW-MCMV, Nunes et al., 2020, Sec. 2.4).
@@ -419,9 +447,7 @@ def augmented_pairwise_mcmv_connectivity(
         Connectivity matrix with the significant edges re-estimated under
         augmentation and the non-significant edges left at their PW-MCMV value.
     """
-    _validate_type(method, str, "method")
-    if method not in _CONN_METHODS:
-        raise ValueError(f"method must be one of {_CONN_METHODS}, got {method!r}.")
+    _validate_conn_params(method, sfreq, fmin, fmax)
     sources = list(sources)
     n = len(sources)
     connectivity = np.array(connectivity, dtype=float)
@@ -502,7 +528,7 @@ def ar1_surrogate_significance(
     fmin=None,
     fmax=None,
     orthogonalize=False,
-    absolute=True,
+    absolute=False,
     mt_bandwidth=None,
     random_state=None,
 ):
@@ -556,6 +582,8 @@ def ar1_surrogate_significance(
     smoothness. The surrogate connectivity is computed directly on the surrogate
     source signals, which by construction contain no leakage.
     """
+    _validate_conn_params(method, sfreq, fmin, fmax)
+
     rng = np.random.default_rng(random_state)
     connectivity = np.asarray(connectivity, float)
     ref = np.asarray(reference_time_courses, float)
@@ -601,18 +629,23 @@ def ar1_surrogate_significance(
                 mt_bandwidth=mt_bandwidth,
             )
 
-    # Fisher z-transform, null std, z-scores, two-sided p, then FDR.
+    # Fisher z-transform, standardise by the null mean and std (so the z-scores
+    # have zero mean and unit variance under the null, per Colclough et al.,
+    # 2015), two-sided p, then FDR. Subtracting the null mean matters when the
+    # metric is non-negative (e.g. ``absolute=True``); for signed correlation the
+    # null mean is ~0 and this reduces to dividing by the null std.
     def _fisher(r):
         return np.arctanh(np.clip(r, -0.999999, 0.999999))
 
     from scipy.stats import norm
 
     null_z = _fisher(null)
+    null_mean = null_z.mean(axis=0)
     null_std = null_z.std(axis=0, ddof=1)
     null_std[null_std == 0] = np.finfo(float).eps
 
     real = np.array([connectivity[i, j] for i, j in pairs])
-    zscores = _fisher(real) / null_std
+    zscores = (_fisher(real) - null_mean) / null_std
     pvals = 2.0 * norm.sf(np.abs(zscores))
 
     # Benjamini-Hochberg FDR at ``alpha``.
