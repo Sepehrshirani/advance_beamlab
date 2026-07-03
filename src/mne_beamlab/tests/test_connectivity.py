@@ -383,6 +383,15 @@ def test_spectral_method_requires_sfreq(scenario):
         )
 
 
+def test_spectral_method_requires_band(scenario):
+    d = scenario
+    with pytest.raises(ValueError, match="requires a frequency band"):
+        pairwise_mcmv_connectivity(
+            d["evoked"], d["info"], d["fwd"], d["dcov"], d["sources"],
+            method="coh", sfreq=200.0, noise_cov=d["ncov"],
+        )
+
+
 def test_augmented_validates_shapes(scenario):
     d = scenario
     n = len(d["sources"])
