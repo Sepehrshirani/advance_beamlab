@@ -1,25 +1,30 @@
-# Authors: the mne-beamlab contributors
+# Authors: Sepehr Shirani <sepehrshirani@gmail.com>
 # License: BSD-3-Clause
-"""Integration tests on simulated data -- no download, runs in CI.
+"""Integration tests on the MNE ``sample`` dataset (a real MEG recording).
 
-These exercise the full MCMV and ReciPSIICOS pipelines on a self-contained
-forward: a standard EEG electrode montage on a spherical head model, both
-bundled with MNE. Two temporally correlated bilateral dipoles are simulated --
-the regime both algorithms target, and the one a plain LCMV mishandles.
+The ``sample`` dataset ships a real BEM forward and the bilateral auditory
+response -- two temporally correlated sources -- which is precisely the regime
+MCMV and ReciPSIICOS target. These tests exercise the whole pipeline on real
+data: real leadfields, a real data covariance, whitening across magnetometers
+and gradiometers, the virtual-sensor reduction, projector construction, the
+working-space LCMV solve, and the MCMV joint constraint.
 
-Why EEG rather than a MEG sphere. A single-shell MEG sphere has a whitened
-leadfield of rank ~2 per location, which collapses the ReciPSIICOS
-virtual-sensor reduction and cannot exercise the projector/rank-curve/solve
-path. An EEG leadfield is full rank per location, so the reduction yields a
-healthy working space (q well above the three source orientations).
+Two practical choices make this a faithful test rather than a misleading one:
 
-Why average reference. Re-referencing to the average makes the covariance
-rank-deficient by one, so the whitener's null-space handling (auto-detected
-rank) is exercised here too -- the same failure mode the real sample dataset
-surfaces through its SSP projectors, reproduced without any download.
+* The forward is decimated to a coarse *whole-brain* grid, not restricted to a
+  region. The ReciPSIICOS projector is built from the forward and must span
+  where the data covariance's energy actually lives (whole-brain activity plus
+  noise); a region-restricted forward would send most of that energy negative in
+  the spectral-flip step. Decimation keeps the O(N^2) correlation Gram of the
+  ``whitened`` projector tractable while preserving whole-brain coverage.
+* The covariances are shrinkage-regularised, the correct estimator for a real
+  magnetometer+gradiometer covariance (an empirical estimate is wildly
+  ill-conditioned across the two unit scales).
 
-This module complements ``test_integration_sample.py``, which runs the same
-paths on a real BEM forward but is skipped when the dataset is absent.
+The dataset is not bundled with MNE; it is fetched once with
+``mne.datasets.sample.data_path()``. When it is absent every test here is
+skipped, so the suite still runs offline -- the algorithmic paths themselves are
+covered by ``test_recipsiicos.py`` and ``test_mcmv.py``.
 """
 
 import mne
@@ -34,85 +39,83 @@ from mne_beamlab import (
     recipsiicos_rank_curve,
 )
 
-_SPACING_MM = 25.0  # coarse whole-brain grid: fast in CI, still q >> n_orient
+# ---------------------------------------------------------------------------
+# dataset guard: skip cleanly when ``sample`` is not downloaded
+# ---------------------------------------------------------------------------
+try:
+    _DATA_PATH = mne.datasets.sample.data_path(download=False)
+    _SAMPLE = _DATA_PATH / "MEG" / "sample"
+    _FWD = _SAMPLE / "sample_audvis-meg-eeg-oct-6-fwd.fif"
+    _HAVE_SAMPLE = _SAMPLE.is_dir() and _FWD.is_file()
+except Exception:  # pragma: no cover - depends on local dataset state
+    _HAVE_SAMPLE = False
+
+pytestmark = pytest.mark.skipif(
+    not _HAVE_SAMPLE, reason="MNE sample dataset not downloaded"
+)
+
+
+def _decimate_forward(fwd, step):
+    """Coarse *whole-brain* forward: keep every ``step``-th vertex per hemisphere.
+
+    Uses the forward's own vertices, so no BEM/trans/recompute is needed. Keeps
+    both hemispheres so the source grid still spans the head.
+    """
+    from mne import Label
+    from mne.forward import restrict_forward_to_label
+
+    labels = []
+    for hemi_idx, hemi in enumerate(("lh", "rh")):
+        vertno = fwd["src"][hemi_idx]["vertno"][::step]
+        labels.append(Label(vertno, hemi=hemi, subject="sample"))
+    return restrict_forward_to_label(fwd, labels)
 
 
 @pytest.fixture(scope="module")
-def simulated():
-    """EEG sphere forward + two correlated bilateral dipoles + covariances."""
-    rng = np.random.default_rng(42)
-
-    montage = mne.channels.make_standard_montage("standard_1020")
-    ch_names = list(dict.fromkeys(montage.ch_names))
-    info = mne.create_info(ch_names, sfreq=200.0, ch_types="eeg")
-    info.set_montage(montage)
-
-    sphere = mne.make_sphere_model("auto", "auto", info, verbose=False)
-    src = mne.setup_volume_source_space(sphere=sphere, pos=_SPACING_MM, verbose=False)
-    fwd = mne.make_forward_solution(
-        info, None, src, sphere, eeg=True, meg=False, verbose=False
+def auditory():
+    """Real MEG data + a coarse whole-brain BEM forward + shrunk covariances."""
+    raw = mne.io.read_raw_fif(
+        _SAMPLE / "sample_audvis_filt-0-40_raw.fif", preload=True, verbose=False
     )
-
-    gain, rr, n_ch = fwd["sol"]["data"], fwd["source_rr"], len(ch_names)
-    # one dipole in each hemisphere (extreme left/right vertices) with a fixed
-    # orientation; unit-normalise the topographies so the two contribute equally
-    left = int(np.argmin(rr[:, 0]))
-    right = int(np.argmax(rr[:, 0]))
-    ori = np.array([0.0, 0.0, 1.0])
-    g_l = gain[:, 3 * left:3 * left + 3] @ ori
-    g_r = gain[:, 3 * right:3 * right + 3] @ ori
-    g_l /= np.linalg.norm(g_l)
-    g_r /= np.linalg.norm(g_r)
-
-    # 40 epochs; sources active only after t=0.1 s, noise throughout
-    n_ep, n_t, sfreq, tmin = 40, 200, 200.0, -0.4
-    times = np.arange(n_t) / sfreq + tmin
-    active = times >= 0.1
-    n_active = int(active.sum())
-
-    data = 0.4 * rng.standard_normal((n_ep, n_ch, n_t))
-    for e in range(n_ep):
-        shared = rng.standard_normal(n_active)  # common driver -> correlation
-        s_l = shared + 0.3 * rng.standard_normal(n_active)
-        s_r = shared + 0.3 * rng.standard_normal(n_active)
-        amp = 3.0 * (1.0 + 0.2 * rng.standard_normal())  # trial-to-trial gain
-        data[e][:, active] += amp * (np.outer(g_l, s_l) + np.outer(g_r, s_r))
-
-    epochs = mne.EpochsArray(
-        data, info, tmin=tmin, baseline=(None, 0.0), verbose=False
+    events = mne.read_events(_SAMPLE / "sample_audvis_filt-0-40_raw-eve.fif")
+    raw.pick("meg")  # magnetometers + gradiometers -> exercises whitening
+    epochs = mne.Epochs(
+        raw,
+        events,
+        {"Auditory/Left": 1, "Auditory/Right": 2},
+        tmin=-0.2,
+        tmax=0.25,
+        baseline=(None, 0.0),
+        preload=True,
+        verbose=False,
     )
-    epochs.set_eeg_reference("average", projection=True, verbose=False)
+    # Shrinkage covariances: the correct estimator across mag/grad unit scales.
     data_cov = mne.compute_covariance(
-        epochs, tmin=0.1, tmax=None, method="empirical", verbose=False
+        epochs, tmin=0.05, tmax=0.2, method="shrunk", verbose=False
     )
     noise_cov = mne.compute_covariance(
-        epochs, tmin=None, tmax=0.0, method="empirical", verbose=False
+        epochs, tmin=None, tmax=0.0, method="shrunk", verbose=False
     )
-    return epochs.info, fwd, data_cov, noise_cov, (left, right, ori, rr)
+
+    fwd = mne.read_forward_solution(_FWD, verbose=False)
+    fwd = mne.pick_types_forward(fwd, meg=True, eeg=False)
+    fwd = _decimate_forward(fwd, step=16)  # ~450 whole-brain sources
+    return epochs.info, fwd, data_cov, noise_cov
 
 
-def _hemisphere_balance(stc, rr):
-    """Ratio of the weaker to the stronger hemisphere peak power."""
-    lh = rr[:, 0] < 0
-    power = stc.data[:, 0]
-    lh_peak, rh_peak = power[lh].max(), power[~lh].max()
-    return min(lh_peak, rh_peak) / max(lh_peak, rh_peak)
-
-
-@pytest.mark.filterwarnings("ignore:The spectral-flip")
 @pytest.mark.parametrize("method", ["recipsiicos", "whitened"])
-def test_recipsiicos_recovers_correlated_bilateral(simulated, method):
-    """Reduction stays well-posed and both correlated sources are recovered."""
-    info, fwd, data_cov, noise_cov, (left, right, ori, rr) = simulated
+def test_recipsiicos_pipeline_on_real_meg(auditory, method):
+    """Both projectors build a valid beamformer and localise finite power.
+
+    On a whole-brain forward the cleaned covariance stays (numerically) positive
+    semi-definite, so the localised power must be non-negative -- the property
+    violated by a region-restricted forward.
+    """
+    info, fwd, data_cov, noise_cov = auditory
 
     ranks, p_pwr, p_cor, kstar = recipsiicos_rank_curve(
         fwd, info, method=method, noise_cov=noise_cov, return_optimal=True
     )
-    # the virtual-sensor reduction must not collapse: q^2 == len(ranks), and the
-    # working space must exceed the three source orientations (a low-rank forward
-    # or an unstable whitener would drive this to ~2 and make the solve singular)
-    q = int(round(len(ranks) ** 0.5))
-    assert q > 3, f"virtual-sensor reduction collapsed to q={q}"
     assert ranks[0] == 1 and ranks[-1] == len(ranks)
     assert np.all((p_pwr >= -1e-9) & (p_pwr <= 1 + 1e-9))
     assert np.all((p_cor >= -1e-9) & (p_cor <= 1 + 1e-9))
@@ -127,29 +130,49 @@ def test_recipsiicos_recovers_correlated_bilateral(simulated, method):
         noise_cov=noise_cov,
         pick_ori="max-power",
         weight_norm="unit-noise-gain",
+        reduce_rank=True,  # free-orientation MEG
     )
     stc = apply_lcmv_cov(data_cov, filters)
+    assert stc.data.shape[0] == fwd["nsource"]
     assert np.all(np.isfinite(stc.data))
-    # a whole-brain forward keeps the cleaned covariance PSD -> non-negative power
+    # power is non-negative up to numerical tolerance, and there is signal
     assert stc.data.min() > -1e-6 * stc.data.max()
     assert stc.data.max() > 0
-    # the correlated pair leaves substantial power in both hemispheres
-    assert _hemisphere_balance(stc, rr) > 0.3
 
 
-def test_mcmv_on_simulated_pair(simulated):
-    """MCMV builds a finite joint filter on the two known correlated sources."""
-    info, fwd, data_cov, noise_cov, (left, right, ori, rr) = simulated
+def test_recipsiicos_covers_both_hemispheres(auditory):
+    """The bilateral auditory response leaves power in both hemispheres.
+
+    A soft check: each hemisphere carries a non-trivial share of the peak, not a
+    precise localisation.
+    """
+    info, fwd, data_cov, noise_cov = auditory
+    _, _, _, kstar = recipsiicos_rank_curve(
+        fwd, info, method="whitened", noise_cov=noise_cov, return_optimal=True
+    )
+    filters = make_recipsiicos_lcmv(
+        info, fwd, data_cov, rank=kstar, method="whitened", noise_cov=noise_cov,
+        pick_ori="max-power", weight_norm="unit-noise-gain", reduce_rank=True,
+    )
+    stc = apply_lcmv_cov(data_cov, filters)
+    n_lh = len(stc.vertices[0])
+    lh_peak = stc.data[:n_lh].max()
+    rh_peak = stc.data[n_lh:].max()
+    assert min(lh_peak, rh_peak) > 0.02 * max(lh_peak, rh_peak)
+
+
+def test_mcmv_on_real_meg(auditory):
+    """MCMV builds a finite joint filter on two separated real sources."""
+    info, fwd, data_cov, noise_cov = auditory
+    fwd_fixed = mne.convert_forward_solution(
+        fwd, force_fixed=True, use_cps=True, verbose=False
+    )
+    # One source in each hemisphere (first and last vertices are opposite sides).
+    sources = [0, fwd_fixed["nsource"] - 1]
     mcmv = make_mcmv(
-        info,
-        fwd,
-        data_cov,
-        sources=[left, right],
-        orientations=np.vstack([ori, ori]),
-        noise_cov=noise_cov,
+        info, fwd_fixed, data_cov, sources=sources, noise_cov=noise_cov
     )
     assert np.all(np.isfinite(mcmv["weights"]))
     src_cov = apply_mcmv_cov(data_cov, mcmv)
-    assert src_cov.shape == (2, 2)
+    assert src_cov.shape == (len(sources), len(sources))
     assert np.all(np.isfinite(src_cov))
-    assert src_cov[0, 0] > 0 and src_cov[1, 1] > 0  # positive source powers

@@ -1,6 +1,6 @@
 """Tests for the ReciPSIICOS covariance modification and beamformer."""
 
-# Authors: the mne-beamlab contributors
+# Authors: Sepehr Shirani <sepehrshirani@gmail.com>
 # License: BSD-3-Clause
 
 import mne

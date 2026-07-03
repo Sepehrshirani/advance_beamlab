@@ -1,6 +1,6 @@
 """Tests for the Multiple Constrained Minimum Variance (MCMV) beamformer."""
 
-# Authors: Sepehr Shirani
+# Authors: Sepehr Shirani <sepehrshirani@gmail.com>
 # License: BSD-3-Clause
 
 import mne

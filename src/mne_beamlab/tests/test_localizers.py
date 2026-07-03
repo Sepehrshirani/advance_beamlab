@@ -1,6 +1,6 @@
 """Tests for the MCMV localizers and data-driven orientation."""
 
-# Authors: Sepehr Shirani
+# Authors: Sepehr Shirani <sepehrshirani@gmail.com>
 # License: BSD-3-Clause
 
 import mne
