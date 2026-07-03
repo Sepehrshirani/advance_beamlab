@@ -226,9 +226,11 @@ ax.set(
 ax.legend(loc="upper right")
 
 # %%
-# Now the reconstructed waveforms from the same data: the LCMV estimate of the
-# first source is strongly attenuated by its correlated neighbour, while MCMV
-# recovers the injected oscillation.
+# Now compare the reconstructed waveforms against ground truth. Because both
+# beamformers use unit gain, their output is on the same scale as the injected
+# signal, so we can overlay the true source directly. We quantify recovery two
+# ways: peak amplitude (does the source keep its size?) and waveform fidelity
+# (the correlation with the true time course -- does it keep its shape?).
 
 lcmv = make_lcmv(evoked.info, fwd, data_cov, reg=0.02, noise_cov=noise_cov,
                  pick_ori=None, weight_norm=None)
@@ -237,13 +239,26 @@ mcmv = make_mcmv(evoked.info, fwd, data_cov, sources=sources, noise_cov=noise_co
 rec_lcmv = apply_lcmv(evoked, lcmv).data[center]
 rec_mcmv = apply_mcmv(evoked, mcmv)[0]
 
-fig, ax = plt.subplots(constrained_layout=True, figsize=(7, 4))
-ax.plot(times * 1e3, rec_mcmv, color="C3", label="MCMV (joint)")
-ax.plot(times * 1e3, rec_lcmv, color="C0", label="LCMV (per-source)")
+truth = s0  # the injected source-0 waveform
+fidelity_lcmv = np.corrcoef(rec_lcmv[active], truth[active])[0, 1]
+fidelity_mcmv = np.corrcoef(rec_mcmv[active], truth[active])[0, 1]
+peak_lcmv = np.abs(rec_lcmv[active]).max()
+peak_mcmv = np.abs(rec_mcmv[active]).max()
+
+fig, ax = plt.subplots(constrained_layout=True, figsize=(7.5, 4))
+ax.plot(times * 1e3, truth, color="0.6", lw=3, label="ground truth")
+ax.plot(
+    times * 1e3, rec_mcmv, color="C3",
+    label=f"MCMV: peak {peak_mcmv:.2f}, fidelity {fidelity_mcmv:.2f}",
+)
+ax.plot(
+    times * 1e3, rec_lcmv, color="C0",
+    label=f"LCMV: peak {peak_lcmv:.2f}, fidelity {fidelity_lcmv:.2f}",
+)
 ax.axvline(0, color="k", lw=0.5)
 ax.set(
     xlabel="time (ms)",
-    ylabel="recovered amplitude (a.u.)",
-    title=f"Recovered source time course at $\\rho = {rho_demo}$",
+    ylabel="source amplitude (a.u.)",
+    title=f"Recovery of the true source (peak 1.0) at $\\rho = {rho_demo}$",
 )
 ax.legend(loc="upper right")

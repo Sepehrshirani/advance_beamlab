@@ -177,11 +177,16 @@ peaks = [
 ]
 
 times = evoked.times * 1e3
+post = evoked.times >= 0.0
 fig, axes = plt.subplots(2, 1, sharex=True, figsize=(7, 5), constrained_layout=True)
 for ax, idx, hemi in zip(axes, peaks, ("Left", "Right"), strict=True):
+    r_peak = np.abs(tc_recip.data[idx, post]).max()
+    l_peak = np.abs(tc_lcmv.data[idx, post]).max()
+    ratio = r_peak / l_peak
     ax.plot(times, tc_lcmv.data[idx], color="C0", label="LCMV")
     ax.plot(times, tc_recip.data[idx], color="C3", label="ReciPSIICOS")
     ax.axvline(0, color="k", lw=0.5)
-    ax.set(title=f"{hemi} auditory peak", ylabel="amplitude (a.u.)")
+    ax.set(title=f"{hemi} auditory peak  (ReciPSIICOS/LCMV = {ratio:.2f})",
+           ylabel="amplitude (a.u.)")
     ax.legend(loc="upper right")
 axes[-1].set_xlabel("time (ms)")
