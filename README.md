@@ -586,6 +586,24 @@ If a ReciPSIICOS run warns about negative-eigenvalue energy above the threshold,
 lower `rank`: too much of the covariance was projected away and the
 positive-definite repair had to flip a large amount of energy.
 
+## `pairwise_mcmv_connectivity` / `augmented_pairwise_mcmv_connectivity`
+
+The reconstruction parameters (`reg`, `weight_norm`, `noise_cov`, `rank`,
+`orientations`) go straight to `make_mcmv` and behave exactly as in the MCMV
+table above. The connectivity-specific knobs:
+
+| Parameter | What it controls | Effect of changing it |
+|---|---|---|
+| `method` | Connectivity metric | `'envelope'` (signed amplitude-envelope correlation) for resting-state coupling; `'coh'`, `'plv'`, `'imcoh'`, … for task phase/spectral measures. The spectral metrics require `sfreq`, `fmin`, `fmax`. |
+| `radius` (APW) | Neighbour search radius for augmentation | Default 0.04 m (4 cm), from the paper's ~2 cm resolution rule. Larger admits more candidate conductors (higher order → better indirect-leakage suppression but lower SNR); smaller admits fewer. |
+| `max_neighbours` (APW) | Neighbours added per source of the pair | Default 2, capping beamformer order at $2 + 2\cdot\text{max\_neighbours} = 6$. Raising it suppresses more indirect leakage but erodes SNR (an $n$-source filter spends $n$ degrees of freedom — see §11), so keep the total order ≲ 8. |
+| `orthogonalize` | Leakage-orthogonalisation of the envelopes | Default `False` (plain correlation). MCMV already removes leakage; enabling this is the competing symmetric-orthogonalisation baseline and discards genuine zero-lag coupling. |
+| `absolute` | Sign of the envelope correlation | Default `False` (signed Pearson of envelopes, as in the paper); `True` returns the magnitude. |
+| `fmin`, `fmax`, `mt_bandwidth` | Band and multitaper smoothing (spectral methods) | Set the band for `coh`/`plv`/…; the paper uses 2 Hz multitaper smoothing for its task analyses. For resting envelope work, band-pass the data and covariance to the analysis band instead (§11). |
+
+For `ar1_surrogate_significance`, `n_surrogates` (default 200) trades null-estimate
+precision against runtime, and `alpha` (default 0.05) is the FDR level.
+
 ---
 
 # API
