@@ -29,8 +29,9 @@ magnetometer/gradiometer unit scales.
 
 import matplotlib.pyplot as plt
 import mne
+import numpy as np
 from mne import Label
-from mne.beamformer import apply_lcmv_cov, make_lcmv
+from mne.beamformer import apply_lcmv, apply_lcmv_cov, make_lcmv
 from mne.forward import restrict_forward_to_label
 
 from mne_beamlab import make_recipsiicos_lcmv, recipsiicos_rank_curve
@@ -158,3 +159,29 @@ brain = stc_recip.plot(
     views="lateral",
     clim=dict(kind="percent", lims=[90, 95, 99]),
 )
+
+# %%
+# Finally, the reconstructed time courses at the two hemispheric peaks. This is
+# the same LCMV-versus-repaired-covariance comparison as the power map, now as a
+# waveform: where a plain LCMV attenuates one side of the correlated pair, the
+# ReciPSIICOS filter recovers a fuller time course on both.
+
+evoked = epochs.average()
+tc_lcmv = apply_lcmv(evoked, lcmv)
+tc_recip = apply_lcmv(evoked, recip)
+
+n_lh = len(stc_recip.vertices[0])
+peaks = [
+    int(np.argmax(stc_recip.data[:n_lh, 0])),
+    n_lh + int(np.argmax(stc_recip.data[n_lh:, 0])),
+]
+
+times = evoked.times * 1e3
+fig, axes = plt.subplots(2, 1, sharex=True, figsize=(7, 5), constrained_layout=True)
+for ax, idx, hemi in zip(axes, peaks, ("Left", "Right"), strict=True):
+    ax.plot(times, tc_lcmv.data[idx], color="C0", label="LCMV")
+    ax.plot(times, tc_recip.data[idx], color="C3", label="ReciPSIICOS")
+    ax.axvline(0, color="k", lw=0.5)
+    ax.set(title=f"{hemi} auditory peak", ylabel="amplitude (a.u.)")
+    ax.legend(loc="upper right")
+axes[-1].set_xlabel("time (ms)")

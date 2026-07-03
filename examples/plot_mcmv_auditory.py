@@ -32,10 +32,11 @@ import mne
 import numpy as np
 from mne.beamformer import apply_lcmv, apply_lcmv_cov, make_lcmv
 
-from mne_beamlab import apply_mcmv, make_mcmv
+from mne_beamlab import apply_mcmv, apply_mcmv_cov, make_mcmv
 
 data_path = mne.datasets.sample.data_path()
 meg = data_path / "MEG" / "sample"
+subjects_dir = data_path / "subjects"
 
 # %%
 # Load the auditory epochs (left and right stimulation), the evoked response,
@@ -87,6 +88,19 @@ sources = [lh_idx, rh_idx]
 print(f"selected sources (left, right hemisphere): {sources}")
 
 # %%
+# The LCMV power map itself is the localisation figure: the two auditory sources
+# selected above appear as the bilateral peaks on the inflated cortex. MCMV will
+# then jointly constrain exactly these two locations.
+
+brain = stc_pow.plot(
+    subject="sample",
+    subjects_dir=subjects_dir,
+    hemi="both",
+    views="lateral",
+    clim=dict(kind="percent", lims=[90, 95, 99]),
+)
+
+# %%
 # Build the MCMV joint filter on those two sources and reconstruct their time
 # courses. For comparison, take the two matching rows of the per-source LCMV
 # reconstruction.
@@ -117,3 +131,27 @@ for ax, i, hemi in zip(axes, range(2), ("Left", "Right"), strict=True):
     ax.set(title=f"{hemi} auditory source", ylabel="amplitude (a.u.)")
     ax.legend(loc="upper right")
 axes[-1].set_xlabel("time (ms)")
+
+# %%
+# Unlike a set of independent LCMV filters, MCMV also returns the joint source
+# covariance directly (:func:`~mne_beamlab.apply_mcmv_cov`). Its diagonal is the
+# two source powers and its off-diagonal is the recovered coupling between the
+# hemispheres -- a quantity the joint constraint estimates and the per-source
+# LCMV cannot.
+
+src_cov = apply_mcmv_cov(data_cov, mcmv)
+corr = src_cov[0, 1] / np.sqrt(src_cov[0, 0] * src_cov[1, 1])
+
+fig, ax = plt.subplots(constrained_layout=True, figsize=(4.2, 3.6))
+im = ax.imshow(src_cov, cmap="magma")
+ax.set(
+    xticks=[0, 1], yticks=[0, 1],
+    xticklabels=["Left", "Right"], yticklabels=["Left", "Right"],
+    title=f"MCMV source covariance\nrecovered correlation r = {corr:.2f}",
+)
+for a in range(2):
+    for b in range(2):
+        ax.text(
+            b, a, f"{src_cov[a, b]:.2g}", ha="center", va="center", color="tab:cyan"
+        )
+fig.colorbar(im, ax=ax, label="source (co)variance")
