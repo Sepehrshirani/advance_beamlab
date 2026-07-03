@@ -19,11 +19,17 @@ without reading the papers.
   cancellation that biases single-source LCMV when sources are correlated. It
   comes with the four **scanning localizers** (MAI, MPZ, MER, rMER) and the
   **sequential source search** that turn it into a discovery tool. After
-  Moiseev et al. (2011); connectivity/APW-MCMV after Nunes et al. (2020).
+  Moiseev et al. (2011).
 - **ReciPSIICOS** — makes an *ordinary* LCMV beamformer robust to correlated
   sources by cleaning the data covariance before the beamformer is built, with
   noise-whitening and virtual-sensor reduction so it applies to real,
   mixed-sensor MEG arrays. After Kuznetsova, Nurislamova & Ossadtchi (2021).
+- **Pairwise & Augmented Pairwise MCMV (PW-/APW-MCMV) connectivity** — leakage-
+  free functional connectivity built on MCMV: each region pair is reconstructed
+  with a 2-source MCMV (removing *direct* leakage between them), and every
+  statistically significant pair is re-estimated with neighbouring regions added
+  to the beamformer (suppressing *indirect* leakage through them). Connectivity
+  metrics are delegated to `mne-connectivity`. After Nunes et al. (2020).
 
 ## Installation
 
@@ -66,6 +72,26 @@ ranks, p_pwr, p_cor, k_opt = recipsiicos_rank_curve(
 filters = make_recipsiicos_lcmv(info, forward, data_cov, rank=k_opt,
                                 method="whitened", noise_cov=noise_cov)
 stc = apply_lcmv(evoked, filters)
+```
+
+**Estimate leakage-free connectivity with PW-/APW-MCMV** (resting-state alpha):
+
+```python
+from mne_beamlab import (pairwise_mcmv_connectivity,
+                         augmented_pairwise_mcmv_connectivity,
+                         ar1_surrogate_significance)
+
+# rois: grid indices of the regions of interest. Band-pass the data to the
+# analysis band (e.g. 8-12 Hz) and estimate data_cov from the *same* band, so
+# the weights are tuned to it (broadband weights invent spurious connectivity).
+conn = pairwise_mcmv_connectivity(band_data, info, forward, data_cov, rois,
+                                  method="envelope", noise_cov=noise_cov)
+
+# keep the significant edges, then re-estimate them with neighbour augmentation
+sig = ar1_surrogate_significance(conn, reference_time_courses, method="envelope")
+conn_apw = augmented_pairwise_mcmv_connectivity(
+    band_data, info, forward, data_cov, rois, conn, sig,
+    method="envelope", noise_cov=noise_cov)
 ```
 
 ---
@@ -458,6 +484,63 @@ simulations to recordings:
   separable curve the 45° criterion expects; on a degenerate curve $K^*$ falls
   back to a near-identity rank rather than one that empties the covariance.
 
+## 11. Connectivity: pairwise and augmented-pairwise MCMV
+
+Functional connectivity asks whether two regions' time courses are coupled —
+through coherence, phase locking, or amplitude-envelope correlation. Any inverse
+operator that leaks one region into another manufactures coupling that is not
+there, and the correlated-source cancellation of Section 3 can equally *hide*
+real coupling. Connectivity is therefore exactly where a leakage-free filter
+pays off (Nunes et al. 2020).
+
+**Direct leakage, and PW-MCMV.** Reconstruct a single pair $(a,b)$ with a
+2-source MCMV constraining $\{a,b\}$. The zero-gain condition
+$\mathbf{w}_a^{\mathsf T}\mathbf{g}_b=0$ (Section 4) means $\hat s_a$ contains no
+copy of source $b$, and $\hat s_b$ none of $a$: the pair carries **no direct
+leakage**, so their connectivity is not biased by spatial spread or by the
+mutual cancellation that collapses correlated LCMV estimates. Doing this for
+every pair is *pairwise MCMV* (`pairwise_mcmv_connectivity`); note the
+reconstruction of a given region differs from pair to pair — intrinsic to the
+method, since each pair uses its own two-column constraint.
+
+**Indirect leakage, and APW-MCMV.** PW-MCMV nulls the *partner* but not third
+regions. If $a$ leaks into a neighbour $k$ that is genuinely coupled to $b$, that
+leaked copy of $k$ correlates with $\hat s_b$ and a spurious $a$–$b$ edge
+survives. The sharpest measure of the residual is the leakage coefficient
+$\alpha_k=\mathbf{w}_a^{\mathsf T}\mathbf{g}_k$: for a pairwise filter it is
+nonzero — the indirect path — and adding $k$ to the beamformer drives it to
+*machine zero* by construction (the new zero-gain row). This is **augmented
+pairwise MCMV**: for every statistically significant pair, add up to two
+neighbouring regions of *each* source — those within a 4 cm radius that
+themselves carry significant connections, ranked by their number of connections
+— giving a beamformer of order 2 to 6, and re-estimate the pair
+(`augmented_pairwise_mcmv_connectivity`). The order is capped for a concrete
+reason: an $n$-source filter spends $n$ of its $M$ degrees of freedom on the
+constraints (≈ "losing $n$ sensors"), and sources sharing a lobe are seen by far
+fewer than $M$ sensors, so the effective $n/M_\text{actual}$ degrades SNR well
+before $n=M$.
+
+**Two things the paper insists on.** (i) Build the weights from a *band-limited*
+covariance matching the analysis band; broadband weights are mis-tuned at the
+band edges and invent spurious high-frequency connectivity. (ii) Use *plain*
+connectivity on the MCMV output — MCMV already removes leakage, so applying
+leakage-orthogonalisation as well (the symmetric-orthogonalisation baseline)
+would double-correct and discard the genuine zero-lag coupling MCMV is designed
+to preserve.
+
+**Significance.** Edges are tested against an AR(1) surrogate null
+(`ar1_surrogate_significance`): fit a first-order autoregressive model to each
+reconstructed course, generate independent Gaussian surrogates with the same
+temporal smoothness, take the Fisher-$z$ null standard deviation of their
+connectivity, $z$-score the real edges, and threshold with a False Discovery
+Rate of 0.05. A first-order model captures the temporal smoothness of the
+reconstructions but not the slow envelope of a strongly narrow-band signal, for
+which the null is anticonservative — a property of the procedure, noted in the
+function's documentation. The connectivity metrics themselves are delegated to
+`mne-connectivity` (`envelope_correlation`; `spectral_connectivity_epochs` for
+coherence and phase measures), so nothing already implemented there is
+duplicated.
+
 ---
 
 # Parameter tuning
@@ -503,6 +586,10 @@ positive-definite repair had to flip a large amount of energy.
 | `make_recipsiicos_cov` | ReciPSIICOS-cleaned `mne.Covariance` |
 | `make_recipsiicos_lcmv` | ReciPSIICOS + `make_lcmv` in one call |
 | `recipsiicos_rank_curve` | Retained-energy-versus-$K$ curve (and optional 45° optimum $K^*$) for choosing the rank |
+| `reconstruct_pairwise_mcmv` | Per-pair 2-source MCMV reconstructions (the PW-MCMV primitive) |
+| `pairwise_mcmv_connectivity` | PW-MCMV connectivity matrix (direct-leakage-free) |
+| `augmented_pairwise_mcmv_connectivity` | APW-MCMV: re-estimate significant pairs with neighbour augmentation |
+| `ar1_surrogate_significance` | AR(1)-surrogate significance mask (Fisher-$z$ + FDR) |
 
 # References
 
@@ -511,8 +598,9 @@ positive-definite repair had to flip a large amount of energy.
   correlated neural activity. *NeuroImage*, 58(2), 481–496.
   [doi:10.1016/j.neuroimage.2011.05.081](https://doi.org/10.1016/j.neuroimage.2011.05.081)
 - Nunes, A. S., Moiseev, A., Kozhemiako, N., Cheung, T., Ribary, U., & Doesburg,
-  S. M. (2020). Multiple constrained minimum variance beamformer (MCMV) and its
-  application to MEG. *NeuroImage*, 208, 116386.
+  S. M. (2020). Multiple constrained minimum variance beamformer (MCMV)
+  performance in connectivity analyses. *NeuroImage*, 208, 116386.
+  [doi:10.1016/j.neuroimage.2019.116386](https://doi.org/10.1016/j.neuroimage.2019.116386)
 - Kuznetsova, A., Nurislamova, Y., & Ossadtchi, A. (2021). Modified covariance
   beamformer for solving MEG inverse problem in the environment with correlated
   sources. *NeuroImage*, 228, 117677.
