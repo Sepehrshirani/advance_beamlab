@@ -279,8 +279,9 @@ def pairwise_mcmv_connectivity(
 
     Parameters
     ----------
-    data, info, forward, data_cov, sources, orientations, noise_cov, reg, \
-    weight_norm, rank
+    data, info, forward, data_cov, sources
+        See :func:`reconstruct_pairwise_mcmv`.
+    orientations, noise_cov, reg, weight_norm, rank
         See :func:`reconstruct_pairwise_mcmv`.
     method : 'envelope' | 'coh' | 'imcoh' | 'plv' | 'ciplv' | 'pli' | 'wpli' | ...
         Connectivity metric. ``'envelope'`` uses
@@ -421,8 +422,9 @@ def augmented_pairwise_mcmv_connectivity(
 
     Parameters
     ----------
-    data, info, forward, data_cov, sources, orientations, noise_cov, reg, \
-    weight_norm, rank
+    data, info, forward, data_cov, sources
+        See :func:`reconstruct_pairwise_mcmv`.
+    orientations, noise_cov, reg, weight_norm, rank
         See :func:`reconstruct_pairwise_mcmv`.
     connectivity : ndarray, shape (n_sources, n_sources)
         The PW-MCMV connectivity matrix to refine (from
@@ -662,4 +664,4 @@ def ar1_surrogate_significance(
     significance = np.zeros((n, n), dtype=bool)
     for p, (i, j) in enumerate(pairs):
         significance[i, j] = significance[j, i] = keep[p]
-    return significance
+    return significanceq
