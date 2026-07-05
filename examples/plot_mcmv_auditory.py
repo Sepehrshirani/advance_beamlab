@@ -92,13 +92,18 @@ print(f"selected sources (left, right hemisphere): {sources}")
 # selected above appear as the bilateral peaks on the inflated cortex. MCMV will
 # then jointly constrain exactly these two locations.
 
-brain = stc_pow.plot(
-    subject="sample",
-    subjects_dir=subjects_dir,
-    hemi="both",
-    views="lateral",
-    clim=dict(kind="percent", lims=[90, 95, 99]),
-)
+try:
+    brain = stc_pow.plot(
+        subject="sample",
+        subjects_dir=subjects_dir,
+        hemi="both",
+        views="lateral",
+        clim=dict(kind="percent", lims=[90, 95, 99]),
+        time_viewer=False,  # static image: no interactive picking (offscreen-safe)
+    )
+except Exception as exc:  # 3-D rendering is optional
+    brain = None
+    print(f"3-D brain plot skipped (no working 3-D backend): {exc}")
 
 # %%
 # Build the MCMV joint filter on those two sources, and a per-source LCMV, both

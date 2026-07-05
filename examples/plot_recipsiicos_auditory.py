@@ -152,13 +152,18 @@ for name, stc in [("LCMV", stc_lcmv), ("ReciPSIICOS", stc_recip)]:
 # %%
 # Plot the ReciPSIICOS source estimate on the inflated cortex.
 
-brain = stc_recip.plot(
-    subject="sample",
-    subjects_dir=subjects_dir,
-    hemi="both",
-    views="lateral",
-    clim=dict(kind="percent", lims=[90, 95, 99]),
-)
+try:
+    brain = stc_recip.plot(
+        subject="sample",
+        subjects_dir=subjects_dir,
+        hemi="both",
+        views="lateral",
+        clim=dict(kind="percent", lims=[90, 95, 99]),
+        time_viewer=False,  # static image: no interactive picking (offscreen-safe)
+    )
+except Exception as exc:  # 3-D rendering is optional
+    brain = None
+    print(f"3-D brain plot skipped (no working 3-D backend): {exc}")
 
 # %%
 # Finally, the reconstructed time courses at the two hemispheric peaks. This is
