@@ -5,7 +5,7 @@ All public functions and classes, documented from their in-code docstrings
 (which carry the equation references used throughout the
 :doc:`mathematical background <index>`).
 
-.. currentmodule:: mne_beamlab
+.. currentmodule:: advance_beamlab
 
 MCMV beamformer
 ---------------

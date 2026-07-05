@@ -53,7 +53,7 @@ import numpy as np
 from mne.beamformer import apply_lcmv, make_lcmv
 from scipy.signal import hilbert
 
-from mne_beamlab import (
+from advance_beamlab import (
     augmented_pairwise_mcmv_connectivity,
     make_mcmv,
     pairwise_mcmv_connectivity,

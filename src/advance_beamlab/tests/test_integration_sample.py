@@ -1,4 +1,4 @@
-# Authors: Sepehr Shirani and Muzhi Wang <sepehrshirani@gmail.com>
+# Authors: Sepehr Shirani and Muzhi Wang
 # License: BSD-3-Clause
 """Integration tests on the MNE ``sample`` dataset (a real MEG recording).
 
@@ -32,7 +32,7 @@ import numpy as np
 import pytest
 from mne.beamformer import apply_lcmv_cov
 
-from mne_beamlab import (
+from advance_beamlab import (
     apply_mcmv_cov,
     make_mcmv,
     make_recipsiicos_lcmv,

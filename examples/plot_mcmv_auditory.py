@@ -32,7 +32,7 @@ import mne
 import numpy as np
 from mne.beamformer import apply_lcmv, apply_lcmv_cov, make_lcmv
 
-from mne_beamlab import apply_mcmv, apply_mcmv_cov, make_mcmv
+from advance_beamlab import apply_mcmv, apply_mcmv_cov, make_mcmv
 
 data_path = mne.datasets.sample.data_path()
 meg = data_path / "MEG" / "sample"
@@ -156,7 +156,7 @@ axes[-1].set_xlabel("time (ms)")
 
 # %%
 # Unlike a set of independent LCMV filters, MCMV also returns the joint source
-# covariance directly (:func:`~mne_beamlab.apply_mcmv_cov`). Normalised to a
+# covariance directly (:func:`~advance_beamlab.apply_mcmv_cov`). Normalised to a
 # correlation matrix, its off-diagonal is the recovered coupling between the two
 # hemispheres -- a quantity the joint constraint estimates and per-source LCMV
 # cannot provide at all.

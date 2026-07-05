@@ -1,4 +1,4 @@
-# mne-beamlab
+# advance_beamlab
 
 Advanced minimum-variance beamformers for MEG/EEG source reconstruction, built
 to be fully compatible with [MNE-Python](https://mne.tools) and to its
@@ -47,7 +47,7 @@ Requires Python ≥ 3.10 and MNE-Python ≥ 1.6.
 
 ```python
 import mne
-from mne_beamlab import scan_mcmv, apply_mcmv
+from advance_beamlab import scan_mcmv, apply_mcmv
 
 # info, forward (free orientation), data_cov, noise_cov as usual in MNE
 result = scan_mcmv(info, forward, data_cov, noise_cov=noise_cov,
@@ -61,7 +61,7 @@ stc_time_courses = apply_mcmv(epochs, result["filters"])  # jointly-optimal filt
 **Make LCMV robust to correlation with ReciPSIICOS**:
 
 ```python
-from mne_beamlab import make_recipsiicos_lcmv, recipsiicos_rank_curve
+from advance_beamlab import make_recipsiicos_lcmv, recipsiicos_rank_curve
 from mne.beamformer import apply_lcmv
 
 # The projector is built from the forward model alone; K lives in the
@@ -77,7 +77,7 @@ stc = apply_lcmv(evoked, filters)
 **Estimate leakage-free connectivity with PW-/APW-MCMV** (resting-state alpha):
 
 ```python
-from mne_beamlab import (pairwise_mcmv_connectivity,
+from advance_beamlab import (pairwise_mcmv_connectivity,
                          augmented_pairwise_mcmv_connectivity,
                          ar1_surrogate_significance)
 

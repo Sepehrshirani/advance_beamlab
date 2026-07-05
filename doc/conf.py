@@ -1,15 +1,15 @@
-"""Sphinx configuration for the mne-beamlab documentation."""
+"""Sphinx configuration for the advance_beamlab documentation."""
 
 # Authors: Sepehr Shirani and Muzhi Wang <sepehrshirani@gmail.com>
 # License: BSD-3-Clause
 
-import mne_beamlab
+import advance_beamlab
 
 # -- Project information ----------------------------------------------------- #
-project = "mne-beamlab"
+project = "advance_beamlab"
 author = "Sepehr Shirani and Muzhi Wang"
 copyright = "2026, Sepehr Shirani and Muzhi Wang"
-release = mne_beamlab.__version__
+release = advance_beamlab.__version__
 version = release
 
 # -- General configuration --------------------------------------------------- #
@@ -76,13 +76,13 @@ sphinx_gallery_conf = {
     "gallery_dirs": "auto_examples",
     "filename_pattern": r"/plot_",
     "image_scrapers": tuple(image_scrapers),
-    "doc_module": ("mne_beamlab",),
+    "doc_module": ("advance_beamlab",),
     "backreferences_dir": "generated/backreferences",
-    "reference_url": {"mne_beamlab": None},
+    "reference_url": {"advance_beamlab": None},
     "remove_config_comments": True,
     "abort_on_example_error": False,
 }
 
 # -- HTML output ------------------------------------------------------------- #
 html_theme = "pydata_sphinx_theme"
-html_title = f"mne-beamlab {release}"
+html_title = f"advance_beamlab {release}"

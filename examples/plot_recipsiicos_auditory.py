@@ -34,7 +34,7 @@ from mne import Label
 from mne.beamformer import apply_lcmv, apply_lcmv_cov, make_lcmv
 from mne.forward import restrict_forward_to_label
 
-from mne_beamlab import make_recipsiicos_lcmv, recipsiicos_rank_curve
+from advance_beamlab import make_recipsiicos_lcmv, recipsiicos_rank_curve
 
 data_path = mne.datasets.sample.data_path()
 meg = data_path / "MEG" / "sample"

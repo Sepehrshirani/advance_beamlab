@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite both the software and the original method papers listed below."
-title: "mne-beamlab"
+title: "advance_beamlab"
 abstract: "Advanced minimum-variance beamformers for MEG/EEG source reconstruction, compatible with MNE-Python."
 authors:
   - family-names: "Shirani"
@@ -9,7 +9,7 @@ authors:
     given-names: "Muzhi"
 version: 0.1.0.dev0
 license: BSD-3-Clause
-repository-code: "https://github.com/Sepehrshirani/mne-beamlab"
+repository-code: "https://github.com/Sepehrshirani/advance_beamlab"
 references:
   - type: article
     authors:
