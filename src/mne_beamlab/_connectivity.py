@@ -43,7 +43,7 @@ Connectivity metrics themselves are delegated to :mod:`mne_connectivity`
 ``spectral_connectivity_epochs`` for coherence / PLV), so nothing already
 implemented there is duplicated.
 """
-# Authors: Sepehr Shirani <sepehrshirani@gmail.com>
+# Authors: Sepehr Shirani and Muzhi Wang <sepehrshirani@gmail.com>
 # License: BSD-3-Clause
 
 from itertools import combinations

@@ -1,4 +1,4 @@
-# Authors: Sepehr Shirani <sepehrshirani@gmail.com>
+# Authors: Sepehr Shirani and Muzhi Wang <sepehrshirani@gmail.com>
 # License: BSD-3-Clause
 """Integration tests on the MNE ``sample`` dataset (a real MEG recording).
 
