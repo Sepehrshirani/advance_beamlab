@@ -664,4 +664,4 @@ def ar1_surrogate_significance(
     significance = np.zeros((n, n), dtype=bool)
     for p, (i, j) in enumerate(pairs):
         significance[i, j] = significance[j, i] = keep[p]
-    return significanceq
+    return significance
