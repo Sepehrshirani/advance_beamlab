@@ -61,7 +61,7 @@ image_scrapers = ["matplotlib"]
 try:
     import pyvista
 
-    pyvista.OFF_SCREEN = False
+    pyvista.OFF_SCREEN = True
     pyvista.BUILDING_GALLERY = True
 
     import mne
