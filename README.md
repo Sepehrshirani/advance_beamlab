@@ -643,4 +643,4 @@ precision against runtime, and `alpha` (default 0.05) is the FDR level.
 
 # License
 
-BSD-3-Clause. Copyright (c) 2026, Sepehr Shirani.
+BSD-3-Clause. Copyright (c) 2026, Sepehr Shirani and Muzhi Wang.

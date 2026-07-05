@@ -1,14 +1,14 @@
 """Sphinx configuration for the mne-beamlab documentation."""
 
-# Authors: Sepehr Shirani <sepehrshirani@gmail.com>
+# Authors: Sepehr Shirani and Muzhi Wang <sepehrshirani@gmail.com>
 # License: BSD-3-Clause
 
 import mne_beamlab
 
 # -- Project information ----------------------------------------------------- #
 project = "mne-beamlab"
-author = "Sepehr Shirani"
-copyright = "2026, Sepehr Shirani"
+author = "Sepehr Shirani and Muzhi Wang"
+copyright = "2026, Sepehr Shirani and Muzhi Wang"
 release = mne_beamlab.__version__
 version = release
 

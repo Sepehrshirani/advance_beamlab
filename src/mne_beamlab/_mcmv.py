@@ -22,7 +22,7 @@ References
 .. footbibliography::
 """
 
-# Authors: Sepehr Shirani <sepehrshirani@gmail.com>
+# Authors: Sepehr Shirani and Muzhi Wang <sepehrshirani@gmail.com>
 # License: BSD-3-Clause
 
 import warnings

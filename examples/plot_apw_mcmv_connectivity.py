@@ -42,7 +42,7 @@ Two details follow the paper. Connectivity is amplitude-envelope correlation
 computed *plainly* (no orthogonalisation -- MCMV already removes leakage), and
 the weights are built from a band-limited covariance matching the analysis band.
 """
-# Authors: Sepehr Shirani
+# Authors: Sepehr Shirani and Muzhi Wang
 # License: BSD-3-Clause
 
 # %%
