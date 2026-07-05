@@ -9,12 +9,12 @@ import pytest
 from mne.beamformer import apply_lcmv_cov
 from numpy.testing import assert_allclose
 
-from mne_beamlab import (
+from advance_beamlab import (
     make_recipsiicos_cov,
     make_recipsiicos_lcmv,
     recipsiicos_rank_curve,
 )
-from mne_beamlab._recipsiicos import (
+from advance_beamlab._recipsiicos import (
     _apply_projector,
     _correlation_gram,
     _optimal_rank,
@@ -376,7 +376,7 @@ def test_rank_curve_returns_optimal(fwd_fixed):
 
 def test_rank_curve_matches_bruteforce(fwd_fixed):
     """The closed-form curves equal the per-rank projector computation."""
-    from mne_beamlab._recipsiicos import (
+    from advance_beamlab._recipsiicos import (
         _correlation_gram,
         _forward_gain,
         _power_projector,

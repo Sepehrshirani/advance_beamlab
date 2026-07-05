@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
-from mne_beamlab import MCMVBeamformer, apply_mcmv, scan_mcmv
-from mne_beamlab._localizers import localizer_value, optimal_orientation
+from advance_beamlab import MCMVBeamformer, apply_mcmv, scan_mcmv
+from advance_beamlab._localizers import localizer_value, optimal_orientation
 
 mne.set_log_level("ERROR")
 

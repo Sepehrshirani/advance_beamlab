@@ -7,14 +7,14 @@ import numpy as np
 import pytest
 from scipy.signal import hilbert
 
-from mne_beamlab import (
+from advance_beamlab import (
     ar1_surrogate_significance,
     augmented_pairwise_mcmv_connectivity,
     make_mcmv,
     pairwise_mcmv_connectivity,
     reconstruct_pairwise_mcmv,
 )
-from mne_beamlab._connectivity import _as_pairs, _epoched, _select_neighbours
+from advance_beamlab._connectivity import _as_pairs, _epoched, _select_neighbours
 
 mne.set_log_level("ERROR")
 
@@ -319,7 +319,7 @@ def test_ar1_significance_flags_strong_not_weak():
     narrow-band signals, whose slow envelope a first-order process cannot capture;
     that is a property of the paper's procedure, not tested here.)
     """
-    from mne_beamlab._connectivity import _pair_connectivity
+    from advance_beamlab._connectivity import _pair_connectivity
 
     n_times = 20000
 

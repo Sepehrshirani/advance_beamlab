@@ -34,7 +34,7 @@ directly, and reconstruct each source with a standard LCMV and with MCMV. To see
 the cancellation we must read out the *physical* source amplitude, so both
 beamformers use unit-gain weights (``weight_norm=None`` for
 :func:`~mne.beamformer.make_lcmv`, ``"unit-gain"`` for
-:func:`~mne_beamlab.make_mcmv`); a noise-normalised readout rescales the axis and
+:func:`~advance_beamlab.make_mcmv`); a noise-normalised readout rescales the axis and
 obscures the comparison.
 """
 # Authors: Sepehr Shirani and Muzhi Wang
@@ -47,7 +47,7 @@ import mne
 import numpy as np
 from mne.beamformer import apply_lcmv, apply_lcmv_cov, make_lcmv
 
-from mne_beamlab import apply_mcmv, make_mcmv
+from advance_beamlab import apply_mcmv, make_mcmv
 
 # %%
 # Build a self-contained EEG forward: a standard 10-20 montage on a

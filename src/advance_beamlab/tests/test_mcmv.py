@@ -10,13 +10,13 @@ from mne.beamformer import make_lcmv
 from mne.beamformer._compute_beamformer import _reg_pinv
 from numpy.testing import assert_allclose
 
-from mne_beamlab import (
+from advance_beamlab import (
     MCMVBeamformer,
     apply_mcmv,
     apply_mcmv_cov,
     make_mcmv,
 )
-from mne_beamlab._mcmv import (
+from advance_beamlab._mcmv import (
     _check_source_separation,
     _compute_mcmv_weights,
     _make_whitener,

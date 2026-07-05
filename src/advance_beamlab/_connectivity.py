@@ -2,7 +2,7 @@ r"""Pairwise and augmented-pairwise MCMV for leakage-free connectivity.
 
 This module implements the connectivity estimators of Nunes et al. (2020),
 NeuroImage 208:116386, built on top of the multi-source MCMV beamformer
-(:func:`~mne_beamlab.make_mcmv`).
+(:func:`~advance_beamlab.make_mcmv`).
 
 The idea is that connectivity between two regions is confounded by the spatial
 spread ("signal leakage") and coherent-source cancellation of the inverse
@@ -207,12 +207,12 @@ def reconstruct_pairwise_mcmv(
         (ad-hoc) covariance is customary, as no baseline exists (Nunes et al.,
         2020, Sec. 2.3).
     reg : float
-        Regularisation passed through to :func:`~mne_beamlab.make_mcmv`.
+        Regularisation passed through to :func:`~advance_beamlab.make_mcmv`.
     weight_norm : 'unit-gain' | 'unit-noise-gain' | None
-        Weight normalisation passed through to :func:`~mne_beamlab.make_mcmv`.
+        Weight normalisation passed through to :func:`~advance_beamlab.make_mcmv`.
         ``'unit-gain'`` reconstructs physical source amplitude.
     rank : None | int | 'full'
-        Rank handling passed through to :func:`~mne_beamlab.make_mcmv`.
+        Rank handling passed through to :func:`~advance_beamlab.make_mcmv`.
 
     Returns
     -------

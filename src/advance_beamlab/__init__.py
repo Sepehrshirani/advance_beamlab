@@ -1,4 +1,4 @@
-"""mne-beamlab: advanced minimum-variance beamformers for MNE-Python.
+"""advance_beamlab: advanced minimum-variance beamformers for MNE-Python.
 
 A staging package of peer-reviewed beamforming algorithms that extend the
 adaptive spatial filters in :mod:`mne.beamformer`, written to MNE-Python's
@@ -7,13 +7,13 @@ contribution standards so that each algorithm can be upstreamed.
 Currently implemented:
 
 - Multiple Constrained Minimum Variance (MCMV) beamformer
-  (:func:`~mne_beamlab.make_mcmv`), after Moiseev et al. (2011).
+  (:func:`~advance_beamlab.make_mcmv`), after Moiseev et al. (2011).
 - ReciPSIICOS data-covariance modification for correlated-source robustness
-  (:func:`~mne_beamlab.make_recipsiicos_cov` and
-  :func:`~mne_beamlab.make_recipsiicos_lcmv`), after Kuznetsova et al. (2021).
+  (:func:`~advance_beamlab.make_recipsiicos_cov` and
+  :func:`~advance_beamlab.make_recipsiicos_lcmv`), after Kuznetsova et al. (2021).
 - Pairwise and augmented-pairwise MCMV for leakage-free connectivity
-  (:func:`~mne_beamlab.pairwise_mcmv_connectivity` and
-  :func:`~mne_beamlab.augmented_pairwise_mcmv_connectivity`), after Nunes et
+  (:func:`~advance_beamlab.pairwise_mcmv_connectivity` and
+  :func:`~advance_beamlab.augmented_pairwise_mcmv_connectivity`), after Nunes et
   al. (2020).
 """
 

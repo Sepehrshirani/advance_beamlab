@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "mne-beamlab"
+name = "advance_beamlab"
 version = "0.1.0.dev0"
 description = "Advanced minimum-variance beamformers for MEG/EEG, compatible with MNE-Python"
 readme = "README.md"
@@ -31,14 +31,14 @@ doc = [
     "pyvista",
     "pyvistaqt",
 ]
-dev = ["mne-beamlab[test,doc]", "ruff>=0.6"]
+dev = ["advance_beamlab[test,doc]", "ruff>=0.6"]
 
 [project.urls]
-Homepage = "https://github.com/mne-tools/mne-beamlab"
-"Source Code" = "https://github.com/mne-tools/mne-beamlab"
+Homepage = "https://github.com/Sepehrshirani/advance_beamlab"
+"Source Code" = "https://github.com/Sepehrshirani/advance_beamlab"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/mne_beamlab"]
+packages = ["src/advance_beamlab"]
 
 # Linting + formatting configured to mirror MNE-Python's conventions, so that
 # upstreamed files pass the MNE CI checks unchanged.
@@ -58,4 +58,4 @@ convention = "numpy"
 "examples/*" = ["D"]
 
 [tool.pytest.ini_options]
-testpaths = ["src/mne_beamlab/tests"]
+testpaths = ["src/advance_beamlab/tests"]

@@ -45,4 +45,4 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[test]"
       - name: Run tests
-        run: pytest -q --cov=mne_beamlab --cov-report=term-missing
+        run: pytest -q --cov=advance_beamlab --cov-report=term-missing
