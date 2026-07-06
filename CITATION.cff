@@ -63,3 +63,25 @@ references:
     start: 117677
     year: 2021
     doi: "10.1016/j.neuroimage.2020.117677"
+  - type: article
+    authors:
+      - family-names: "Shirani"
+        given-names: "Sepehr"
+      - family-names: "Abdi-Sargezeh"
+        given-names: "Bahman"
+      - family-names: "Valentin"
+        given-names: "Antonio"
+      - family-names: "Alarcon"
+        given-names: "Gonzalo"
+      - family-names: "Bird"
+        given-names: "Jordan"
+      - family-names: "Sanei"
+        given-names: "Saeid"
+    title: "Do interictal epileptiform discharges and brain responses to electrical stimulation come from the same location? An advanced source localization solution"
+    journal: "IEEE Transactions on Biomedical Engineering"
+    volume: 71
+    issue: 9
+    start: 2771
+    end: 2781
+    year: 2024
+    doi: "10.1109/TBME.2024.3392603"

@@ -50,6 +50,16 @@ Connectivity (pairwise and augmented-pairwise MCMV)
    augmented_pairwise_mcmv_connectivity
    ar1_surrogate_significance
 
+ABMC (adaptive Bayesian beamformer with multiple constraints)
+-------------------------------------------------------------
+
+.. autosummary::
+   :toctree: generated/
+
+   sbl_covariance
+   make_abmc
+   ABMCResult
+
 References
 ----------
 

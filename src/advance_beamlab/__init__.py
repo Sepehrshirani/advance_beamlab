@@ -15,8 +15,17 @@ Currently implemented:
   (:func:`~advance_beamlab.pairwise_mcmv_connectivity` and
   :func:`~advance_beamlab.augmented_pairwise_mcmv_connectivity`), after Nunes et
   al. (2020).
+- Adaptive Bayesian beamformer with multiple constraints (ABMC) for localising
+  low-power spike-like transients such as epileptic IEDs and delayed responses
+  (:func:`~advance_beamlab.make_abmc`, with the sparse Bayesian learning
+  covariance :func:`~advance_beamlab.sbl_covariance`), after Shirani et al. (2024).
 """
 
+from ._abmc import (
+    ABMCResult,
+    make_abmc,
+    sbl_covariance,
+)
 from ._connectivity import (
     ar1_surrogate_significance,
     augmented_pairwise_mcmv_connectivity,
@@ -57,6 +66,9 @@ __all__ = [
     "pairwise_mcmv_connectivity",
     "augmented_pairwise_mcmv_connectivity",
     "ar1_surrogate_significance",
+    "sbl_covariance",
+    "make_abmc",
+    "ABMCResult",
 ]
 
 __version__ = "0.1.0.dev0"

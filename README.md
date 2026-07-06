@@ -30,6 +30,13 @@ without reading the papers.
   statistically significant pair is re-estimated with neighbouring regions added
   to the beamformer (suppressing *indirect* leakage through them). Connectivity
   metrics are delegated to `mne-connectivity`. After Nunes et al. (2020).
+- **Adaptive Bayesian beamformer with multiple constraints (ABMC)** — localises
+  low-power, spike-like transients (epileptic IEDs and delayed responses to
+  single-pulse electrical stimulation) that ordinary LCMV localises poorly. It
+  pairs a sparse Bayesian learning (Champagne) covariance that strips
+  correlated-source structure with a template-constrained iterative beamformer
+  that locks the output onto the known spike morphology. After Shirani et al.
+  (2024).
 
 ## Installation
 
@@ -39,7 +46,7 @@ pip install -e ".[dev]"     # from a clone, for development (tests + docs + lint
 pip install -e .
 ```
 
-Requires Python ≥ 3.10 and MNE-Python ≥ 1.6.
+Requires Python ≥ 3.10 and MNE-Python ≥ 1.10.
 
 ## Quick start
 
@@ -555,6 +562,58 @@ which does not affect the leakage suppression that is this module's contribution
 
 ---
 
+## 12. ABMC: a Bayesian beamformer for spike-like sources
+
+LCMV localises by output *power*, which fails for the low-power, morphologically
+distinctive transients of interest in epilepsy — interictal epileptiform
+discharges (IEDs) and delayed responses (DRs) to single-pulse electrical
+stimulation. ABMC (Shirani et al., 2024) addresses this in two stages.
+
+**Stage 1 — sparse Bayesian learning covariance** (`sbl_covariance`). Model the
+data as $x(t) = G s(t) + \varepsilon(t)$ with $x\sim\mathcal N(0,R)$ and
+
+$$ R = G\,\alpha\,G^\mathsf{T} + \Lambda, $$
+
+where $\alpha=\mathrm{diag}(\alpha_1,\dots)$ are per-source prior variances (one
+per leadfield column) and $\Lambda=\mathrm{diag}(\lambda_1,\dots,\lambda_M)$ is a
+diagonal sensor-noise covariance. Fitting $(\alpha,\Lambda)$ by type-II maximum
+likelihood — minimising $F=\mathrm{tr}(CR^{-1})+\log|R|$ over the data covariance
+$C$ — with the convex-bounding updates
+
+$$ \alpha_n \leftarrow \alpha_n\sqrt{\tfrac{g_n^\mathsf{T}R^{-1}CR^{-1}g_n}{g_n^\mathsf{T}R^{-1}g_n}}, \qquad \lambda_m \leftarrow \lambda_m\sqrt{\tfrac{(R^{-1}CR^{-1})_{mm}}{(R^{-1})_{mm}}}, $$
+
+yields a *model* covariance $R$ that, because the sources are modelled as mutually
+uncorrelated ($\alpha$ diagonal), does not carry the cross-source correlation that
+makes LCMV cancel correlated sources.
+
+**Stage 2 — template-constrained iterative beamformer** (`make_abmc`). Per grid
+point and orientation, solve
+
+$$ \min_W \tfrac12 W^\mathsf{T} R W \quad\text{s.t.}\quad G^\mathsf{T}W=f \;\text{ and }\; \max_W (W^\mathsf{T}X\cdot u), $$
+
+a distortionless minimum-variance beamformer with an added
+maximum-cross-correlation-to-template constraint, where $u$ is the **caller-supplied
+template of the target waveform** — an expert-annotated IED or DR in the paper, but
+any known source morphology in general, passed via the `template` argument. The
+Lagrangian is descended,
+
+$$ W(n{+}1) = W(n) - \mu\big(R W(n) - \beta_1 G - \beta_2 X u^\mathsf{T}\big), $$
+
+with $\beta_1$ eliminated via the gain constraint (which the update provably
+maintains at every step) and $\beta_2 = P\beta_1$; the template lag $j^\ast$ is
+fixed once per segment, seeded from an initial LCMV output.
+
+**Read-out.** Following the paper, the source is localised by the **maximum
+cross-correlation between the beamformer output and the template**,
+$|\mathrm{corr}(W^\mathsf{T}X,\,u_{j^\ast})|$, maximised over orientation — the grid
+location whose output best matches the desired morphology at the best lag (LCMV, by
+contrast, localises on output power). The output variance $\tfrac12 W^\mathsf{T}RW$
+is the beamformer's minimisation objective, not the localiser, and is kept per point
+only to pick the source orientation. The ratio $P$ trades the two constraints — too small
+and the template term vanishes (→ plain iterative LCMV); too large and the weights
+blow up (the paper's non-convergence regime) — so ABMC uses a small $P$ and reports
+the blow-up fraction.
+
 # Parameter tuning
 
 ## `make_mcmv` / `scan_mcmv`
@@ -606,6 +665,17 @@ precision against runtime, and `alpha` (default 0.05) is the FDR level.
 
 ---
 
+## `make_abmc` / `sbl_covariance`
+
+| Parameter | What it controls | Effect of changing it |
+|---|---|---|
+| `cov` | The beamformer covariance $R$ | `None` (default) estimates the SBL covariance from the data — the intended ABMC pipeline. Pass a precomputed `sbl_covariance` result, or any `mne.Covariance`, to override. |
+| `P` | Ratio $\beta_2/\beta_1$ weighting the template constraint | Default 0.03. Larger emphasises the template but risks the weight-blow-up / non-convergence regime; keep it small and watch `result.blowup_fraction` (a warning fires above ~5%). |
+| `mu` | Gradient step size | `None` sets it to $1/\lambda_{\max}(R)$, which is stable; only lower it if the iteration is unstable at large `P`. |
+| `max_iter` (`make_abmc`) | Weight-update iterations | Default 60; the constraint holds at every step, so this only governs how fully the power term settles. |
+| `max_lag` | Template-lag search window (samples) | `None` searches all lags; restrict it when the true delay range is known, to avoid spurious matches. |
+| `max_iter` / `tol` (`sbl_covariance`) | SBL convergence | Iterate the Champagne updates until the Eq. 6 cost changes by less than `tol` (default 1e-5) or `max_iter` (default 100) is reached. |
+
 # API
 
 | Function | Purpose |
@@ -620,6 +690,8 @@ precision against runtime, and `alpha` (default 0.05) is the FDR level.
 | `pairwise_mcmv_connectivity` | PW-MCMV connectivity matrix (direct-leakage-free) |
 | `augmented_pairwise_mcmv_connectivity` | APW-MCMV: re-estimate significant pairs with neighbour augmentation |
 | `ar1_surrogate_significance` | AR(1)-surrogate significance mask (Fisher-$z$ + FDR) |
+| `sbl_covariance` | Sparse Bayesian learning (Champagne) model covariance — ABMC Stage 1 |
+| `make_abmc` → `ABMCResult` | Template-constrained beamformer for spike-like sources — ABMC Stage 2 |
 
 # References
 
