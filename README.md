@@ -641,6 +641,13 @@ precision against runtime, and `alpha` (default 0.05) is the FDR level.
 - Sekihara, K., & Nagarajan, S. S. (2008). *Adaptive Spatial Filters for
   Electromagnetic Brain Imaging*. Springer.
 
+# Maintainers and contributors
+
+- **Sepehr Shirani** — maintainer and contributor (<sepehrshirani@gmail.com>)
+- **Muzhi Wang** — contributor
+
+Contributions are welcome — please open an issue or pull request.
+
 # License
 
 BSD-3-Clause. Copyright (c) 2026, Sepehr Shirani and Muzhi Wang.
