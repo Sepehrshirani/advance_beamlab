@@ -71,6 +71,39 @@ try:
 except Exception:
     pass
 
+def _reset_mpl_style(gallery_conf, fname):
+    """Journal-grade matplotlib defaults applied before each gallery example."""
+    import matplotlib.pyplot as plt
+    from cycler import cycler
+
+    # Wong colourblind-safe qualitative palette (Nature-style).
+    wong = ["#0072B2", "#D55E00", "#009E73", "#CC79A7",
+            "#E69F00", "#56B4E9", "#F0E442", "#000000"]
+    plt.rcParams.update({
+        "figure.dpi": 160,
+        "savefig.dpi": 220,
+        "savefig.bbox": "tight",
+        "font.size": 11,
+        "axes.titlesize": 12,
+        "axes.titleweight": "bold",
+        "axes.labelsize": 11,
+        "axes.linewidth": 0.9,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "axes.axisbelow": True,
+        "axes.grid": True,
+        "axes.prop_cycle": cycler(color=wong),
+        "grid.color": "#9e9e9e",
+        "grid.alpha": 0.28,
+        "grid.linewidth": 0.6,
+        "legend.frameon": False,
+        "legend.fontsize": 9.5,
+        "xtick.direction": "out",
+        "ytick.direction": "out",
+        "lines.linewidth": 2.0,
+    })
+
+
 sphinx_gallery_conf = {
     "examples_dirs": "../examples",
     "gallery_dirs": "auto_examples",
@@ -81,6 +114,7 @@ sphinx_gallery_conf = {
     "reference_url": {"advance_beamlab": None},
     "remove_config_comments": True,
     "abort_on_example_error": False,
+    "reset_modules": ("matplotlib", _reset_mpl_style),
 }
 
 # -- HTML output ------------------------------------------------------------- #

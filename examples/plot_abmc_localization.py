@@ -1,20 +1,20 @@
 """
-ABMC vs LCMV across the source grid: localisation accuracy
-==========================================================
+ABMC: localising spike-like sources
+===================================
 
-ABMC targets low-power, spike-like sources -- epileptic interictal discharges and
-delayed responses to stimulation -- where an ordinary power-based LCMV beamformer
-is easily pulled off target by noise. This example places the *same* low-SNR spike
-at several grid locations across the volume and, at each, compares how close ABMC
-(:func:`~advance_beamlab.make_abmc`, template match) and a power-based LCMV map get
-to the true source. Repeating over locations shows the ABMC advantage is
-consistent, not a quirk of one spot.
+The adaptive Bayesian beamformer with multiple constraints (ABMC) targets
+low-power, spike-like sources -- epileptic interictal discharges and delayed
+responses to stimulation -- that a power-based LCMV beamformer localises poorly.
 
-It then reconstructs the source time course at one location with both ABMC and a
-unit-gain LCMV filter, and closes with the multi-template API
-(:func:`~advance_beamlab.make_abmc_dictionary`), which localises a whole dictionary
-of desired waveforms in one call while estimating the sparse Bayesian covariance
-only once.
+This example shows four things on a spherical EEG model:
+
+1. **Localisation maps** at a single source -- ABMC's template-match map versus the
+   LCMV power map across the whole grid.
+2. **Accuracy across the volume** -- the same spike placed at eight locations, with
+   the ABMC and LCMV localisation error at each.
+3. **Reconstructed source** -- the recovered time course from both filters.
+4. **A dictionary of templates** -- :func:`~advance_beamlab.make_abmc_dictionary`
+   localising several desired waveforms in one call.
 """
 
 # Authors: Sepehr Shirani and Muzhi Wang <sepehrshirani@gmail.com>
@@ -28,6 +28,31 @@ from advance_beamlab import make_abmc, make_abmc_dictionary
 
 mne.set_log_level("ERROR")
 
+# Journal-style figure defaults (high-DPI, clean spines, distinctive palette).
+plt.rcParams.update({
+    "figure.dpi": 140,
+    "savefig.dpi": 220,
+    "savefig.bbox": "tight",
+    "font.size": 11,
+    "axes.titlesize": 12,
+    "axes.titleweight": "bold",
+    "axes.labelsize": 11,
+    "axes.linewidth": 0.9,
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "axes.axisbelow": True,
+    "axes.grid": True,
+    "grid.color": "#9e9e9e",
+    "grid.alpha": 0.28,
+    "grid.linewidth": 0.6,
+    "legend.frameon": False,
+    "legend.fontsize": 9.5,
+    "xtick.direction": "out",
+    "ytick.direction": "out",
+    "lines.linewidth": 2.0,
+})
+C_ABMC, C_LCMV, C_TRUE = "#0072B2", "#D55E00", "#111111"  # Wong colourblind-safe
+
 
 def spike(n, t0, width=8.0):
     """A unit-amplitude biphasic (derivative-of-Gaussian) spike."""
@@ -37,11 +62,8 @@ def spike(n, t0, width=8.0):
 
 
 def lcmv_power_map(data, info, leadfield, reg=0.05):
-    """A simple power-based LCMV localiser map (one value per grid point)."""
-    data_cov = mne.compute_covariance(
-        mne.make_fixed_length_epochs(mne.io.RawArray(data, info), duration=1.0)
-    )
-    cov = data_cov.data
+    """A power-based LCMV localiser map (one value per grid point)."""
+    cov = data @ data.T / data.shape[1]
     n_ch = cov.shape[0]
     inv = np.linalg.inv(cov + reg * np.trace(cov) / n_ch * np.eye(n_ch))
     return 1.0 / np.einsum("mk,mn,nk->k", leadfield, inv, leadfield)
@@ -63,88 +85,110 @@ fwd = mne.convert_forward_solution(
 leadfield = fwd["sol"]["data"]
 rr = fwd["source_rr"]
 n_ch = leadfield.shape[0]
+n_times = 400
 
 # %%
-# Pick several true source locations spread across the (localisable) volume, and
-# at each simulate the same biphasic spike buried in sensor noise. The template is
-# the same morphology, shifted, so the beamformer must also recover the lag.
-n_times = 400
+# Place the same biphasic spike at eight grid locations spread across the volume,
+# and localise each with ABMC (template match) and a power-based LCMV map. The
+# template is the same morphology, shifted, so the lag must also be recovered. We
+# keep the maps from the source where LCMV struggles most, to visualise below.
 depth = np.linalg.norm(rr - rr.mean(0), axis=1)
 shell = np.where(depth > np.percentile(depth, 55))[0]
 rng = np.random.default_rng(0)
 locations = np.sort(rng.choice(shell, size=8, replace=False))
 template = spike(n_times, 180)
 
-abmc_err, lcmv_err = [], []
+abmc_err, lcmv_err, worst = [], [], None
 for i_src in locations:
     clean = np.outer(leadfield[:, i_src], spike(n_times, 230))
     data = clean + 1.3 * np.abs(clean).max() * rng.standard_normal((n_ch, n_times))
     res = make_abmc(info, fwd, data, template)
-    abmc_peak = int(np.argmax(res.template_match))
-    abmc_err.append(np.linalg.norm(rr[abmc_peak] - rr[i_src]) * 100)
-    lcmv_map = lcmv_power_map(data, info, leadfield)
-    lcmv_peak = int(np.argmax(lcmv_map))
-    lcmv_err.append(np.linalg.norm(rr[lcmv_peak] - rr[i_src]) * 100)
+    a_map, a_pk = res.template_match, int(np.argmax(res.template_match))
+    a_err = np.linalg.norm(rr[a_pk] - rr[i_src]) * 100
+    l_map = lcmv_power_map(data, info, leadfield)
+    l_pk = int(np.argmax(l_map))
+    l_err = np.linalg.norm(rr[l_pk] - rr[i_src]) * 100
+    abmc_err.append(a_err)
+    lcmv_err.append(l_err)
+    if worst is None or l_err > worst["l_err"]:
+        worst = dict(i_src=int(i_src), data=data, a_map=a_map, l_map=l_map,
+                     a_pk=a_pk, l_pk=l_pk, l_err=l_err)
 
 print(f"mean error  ABMC {np.mean(abmc_err):.1f} cm   LCMV {np.mean(lcmv_err):.1f} cm")
 
 # %%
-# ABMC lands close to every true source; the power-based LCMV map wanders under
-# the same noise.
-fig, ax = plt.subplots(figsize=(9, 4))
-xp = np.arange(len(locations))
-ax.bar(xp - 0.2, abmc_err, 0.4, color="tab:blue",
-       label=f"ABMC (mean {np.mean(abmc_err):.1f} cm)")
-ax.bar(xp + 0.2, lcmv_err, 0.4, color="tab:orange",
-       label=f"LCMV (mean {np.mean(lcmv_err):.1f} cm)")
-ax.set_xticks(xp)
-ax.set_xticklabels([str(int(i)) for i in locations])
-ax.set(xlabel="true source (grid index)", ylabel="localisation error (cm)",
-       title="ABMC vs LCMV localisation error across source locations")
-ax.legend()
+# **Localisation maps** at the hardest source. ABMC's template-match map peaks
+# sharply at the true location; the LCMV power map, driven by noise, peaks away.
+i_src = worst["i_src"]
+gi = np.arange(leadfield.shape[1])
+fig, axes = plt.subplots(2, 1, figsize=(9, 5.2), sharex=True)
+panels = [("ABMC template-match map", worst["a_map"], worst["a_pk"], C_ABMC),
+          ("LCMV output-power map", worst["l_map"], worst["l_pk"], C_LCMV)]
+for ax, (name, m, pk, col) in zip(axes, panels, strict=True):
+    mm = m / m.max()
+    ax.fill_between(gi, mm, color=col, alpha=0.22, lw=0)
+    ax.plot(gi, mm, color=col, lw=1.1)
+    ax.axvline(i_src, color=C_TRUE, ls=(0, (5, 3)), lw=1.6, label="true source")
+    err = np.linalg.norm(rr[pk] - rr[i_src]) * 100
+    ax.plot(pk, mm[pk], "v", color=col, ms=12, mec="white", mew=1.1,
+            label=f"peak ({err:.1f} cm off)")
+    ax.set(ylabel="normalised", ylim=(0, 1.08))
+    ax.set_title(name, loc="left")
+    ax.legend(loc="upper right", ncol=2)
+    ax.margins(x=0.01)
+    ax.grid(axis="x", visible=False)
+axes[-1].set_xlabel("source grid index")
 fig.tight_layout()
 
 # %%
-# Reconstructed source time course: ABMC vs LCMV. At the true source, compare the
-# beamformer output waveforms against the clean spike. Both are unit-gain at the
-# source, so both recover the morphology; ABMC's template constraint yields a
-# modestly cleaner trace. ABMC's decisive advantage is in *localisation* (the plot
-# above) -- the larger waveform gains reported in the paper come with realistic
-# iEEG noise rather than this idealised sphere model.
-i_demo = int(locations[0])
-clean = np.outer(leadfield[:, i_demo], spike(n_times, 230))
-data = clean + 1.3 * np.abs(clean).max() * rng.standard_normal((n_ch, n_times))
-
-res = make_abmc(info, fwd, data, template, return_weights=True)
-abmc_out = res.weights[:, i_demo] @ data
-
-data_cov = mne.compute_covariance(
-    mne.make_fixed_length_epochs(mne.io.RawArray(data, info), duration=1.0)
-)
-cov = data_cov.data
-r_reg = cov + 0.05 * np.trace(cov) / n_ch * np.eye(n_ch)
-g = leadfield[:, i_demo]
-rinv_g = np.linalg.solve(r_reg, g)
-w_lcmv = rinv_g / (g @ rinv_g)
-lcmv_out = w_lcmv @ data
-
-cs = spike(n_times, 230)
-r_abmc = np.corrcoef(abmc_out, cs)[0, 1]
-r_lcmv = np.corrcoef(lcmv_out, cs)[0, 1]
-t_ms = np.arange(n_times) / info["sfreq"] * 1000
-fig2, ax2 = plt.subplots(figsize=(9, 3.5))
-ax2.plot(t_ms, cs, color="0.6", lw=2.5, label="true source")
-ax2.plot(t_ms, abmc_out, color="tab:blue", label=f"ABMC (r={r_abmc:.2f})")
-ax2.plot(t_ms, lcmv_out, color="tab:orange", alpha=0.8, label=f"LCMV (r={r_lcmv:.2f})")
-ax2.set(xlabel="time (ms)", ylabel="source amplitude (a.u.)",
-        title="Reconstructed source at the true location (r: correlation with truth)")
-ax2.legend(loc="upper right")
-fig2.tight_layout()
+# **Accuracy across the volume.** ABMC stays close everywhere; LCMV degrades badly
+# at the harder (often deeper) sources. Dashed lines mark the means.
+xp = np.arange(len(locations))
+fig, ax = plt.subplots(figsize=(9, 4.2))
+ax.axhline(np.mean(abmc_err), color=C_ABMC, ls="--", lw=1.1, alpha=0.7)
+ax.axhline(np.mean(lcmv_err), color=C_LCMV, ls="--", lw=1.1, alpha=0.7)
+ax.bar(xp - 0.21, abmc_err, 0.42, color=C_ABMC, zorder=3,
+       label=f"ABMC (mean {np.mean(abmc_err):.1f} cm)")
+ax.bar(xp + 0.21, lcmv_err, 0.42, color=C_LCMV, zorder=3,
+       label=f"LCMV (mean {np.mean(lcmv_err):.1f} cm)")
+ax.set_xticks(xp)
+ax.set_xticklabels([str(int(i)) for i in locations])
+ax.set(xlabel="true source (grid index)", ylabel="localisation error (cm)")
+ax.set_title("ABMC vs LCMV localisation accuracy", loc="left")
+ax.legend(loc="upper left")
+ax.grid(axis="x", visible=False)
+fig.tight_layout()
 
 # %%
-# The multi-template API: localise a dictionary of desired waveforms in one call.
-# The sparse Bayesian covariance is estimated once and reused for every template.
-i_src = i_demo  # reuse the reconstructed-source segment above
+# **Reconstructed source** at that location. Both filters are unit-gain at the
+# source, so both recover the spike; ABMC's template constraint yields a modestly
+# cleaner trace (``r`` = correlation with the noiseless source). ABMC's decisive
+# edge is in *localisation* above -- the larger waveform gains in the paper come
+# with realistic iEEG noise, not this idealised sphere.
+data = worst["data"]
+res = make_abmc(info, fwd, data, template, return_weights=True)
+abmc_out = res.weights[:, i_src] @ data
+cov = data @ data.T / n_times
+r_reg = cov + 0.05 * np.trace(cov) / n_ch * np.eye(n_ch)
+g = leadfield[:, i_src]
+rinv_g = np.linalg.solve(r_reg, g)
+lcmv_out = (rinv_g / (g @ rinv_g)) @ data
+cs = spike(n_times, 230)
+t_ms = np.arange(n_times) / info["sfreq"] * 1000
+fig, ax = plt.subplots(figsize=(9, 3.4))
+ax.plot(t_ms, cs, color=C_TRUE, lw=2.6, alpha=0.5, label="true source")
+ax.plot(t_ms, abmc_out, color=C_ABMC,
+        label=f"ABMC (r={np.corrcoef(abmc_out, cs)[0, 1]:.2f})")
+ax.plot(t_ms, lcmv_out, color=C_LCMV, alpha=0.85,
+        label=f"LCMV (r={np.corrcoef(lcmv_out, cs)[0, 1]:.2f})")
+ax.set(xlabel="time (ms)", ylabel="source amplitude (a.u.)")
+ax.set_title("Reconstructed source at the true location", loc="left")
+ax.legend(loc="upper right", ncol=3)
+fig.tight_layout()
+
+# %%
+# **A dictionary of templates.** ``make_abmc_dictionary`` localises several desired
+# waveforms in one call, estimating the sparse Bayesian covariance only once.
 templates = {
     "early": spike(n_times, 180),
     "on-time": spike(n_times, 230),
