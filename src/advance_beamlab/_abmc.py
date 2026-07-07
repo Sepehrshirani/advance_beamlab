@@ -516,3 +516,114 @@ def make_abmc(
         converged=converged,
         blowup_fraction=blowup,
     )
+
+
+def make_abmc_dictionary(
+    info,
+    forward,
+    data,
+    templates,
+    *,
+    cov=None,
+    noise_cov=None,
+    P=0.03,
+    mu=None,
+    reg=0.05,
+    f=1.0,
+    max_iter=60,
+    tol=1e-4,
+    max_lag=None,
+    return_weights=False,
+    verbose=None,
+):
+    r"""Localise with ABMC for each template in a dictionary of desired waveforms.
+
+    The paper matches several expert-annotated templates per case. Because the
+    sparse Bayesian covariance :math:`R` depends only on the data -- not on the
+    template -- it is estimated **once** here and reused for every template, so
+    this is materially cheaper than calling :func:`make_abmc` once per template.
+    Stage 2 (the template-constrained beamformer) is then run independently for
+    each template, and the per-template results are returned in a dictionary.
+
+    Parameters
+    ----------
+    info : mne.Info
+        Measurement info (channel set only).
+    forward : mne.Forward
+        Forward solution (volume source space). Fixed- or free-orientation.
+    data : mne.Evoked | mne.io.Raw | ndarray, shape (n_channels, n_times)
+        The sensor data segment :math:`X` to localise.
+    templates : dict of {label: ndarray} | sequence of ndarray
+        The desired-source waveforms :math:`u` to localise, each the same length
+        as ``data``. A plain sequence is labelled by integer position. Each entry
+        is handled independently -- ABMC is run once per template.
+    cov : mne.Covariance | None
+        Covariance :math:`R` for the beamformer, shared across all templates. If
+        ``None`` (default) it is estimated once from ``data`` by
+        :func:`sbl_covariance`.
+    noise_cov : mne.Covariance | None
+        Passed to :func:`sbl_covariance` when ``cov`` is ``None``.
+    P : float
+        Ratio :math:`\beta_2/\beta_1` for the template constraint; see
+        :func:`make_abmc`. Applied to every template.
+    mu, reg, f, max_iter, tol, max_lag, return_weights, verbose
+        As in :func:`make_abmc`; applied to every template.
+
+    Returns
+    -------
+    results : dict
+        ``{label: ABMCResult}`` -- one ABMC scan per template, keyed by the
+        dictionary key (or by integer position for a sequence).
+
+    See Also
+    --------
+    make_abmc : Localise a single template.
+    """
+    from mne import Covariance
+
+    if isinstance(templates, dict):
+        items = list(templates.items())
+    else:
+        items = list(enumerate(templates))
+    if not items:
+        raise ValueError("templates must be a non-empty dict or sequence.")
+
+    leadfield, x, ch_names = _aligned_leadfield_and_data(info, forward, data)
+    n_times = x.shape[1]
+    for label, template in items:
+        length = np.asarray(template, float).ravel().shape[0]
+        if length != n_times:
+            raise ValueError(
+                f"template {label!r} has length {length}, must match data "
+                f"length {n_times}."
+            )
+
+    # estimate the SBL covariance once -- it does not depend on the template
+    if cov is None:
+        data_cov = Covariance(
+            x @ x.T / n_times, ch_names, bads=[], projs=[], nfree=n_times
+        )
+        cov = sbl_covariance(
+            info, forward, data_cov, noise_cov=noise_cov, verbose=verbose
+        )
+
+    return {
+        label: make_abmc(
+            info,
+            forward,
+            data,
+            template,
+            cov=cov,
+            noise_cov=noise_cov,
+            P=P,
+            mu=mu,
+            reg=reg,
+            f=f,
+            max_iter=max_iter,
+            tol=tol,
+            max_lag=max_lag,
+            return_weights=return_weights,
+            verbose=verbose,
+        )
+        for label, template in items
+    }

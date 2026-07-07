@@ -58,6 +58,7 @@ ABMC (adaptive Bayesian beamformer with multiple constraints)
 
    sbl_covariance
    make_abmc
+   make_abmc_dictionary
    ABMCResult
 
 References

@@ -614,6 +614,11 @@ and the template term vanishes (→ plain iterative LCMV); too large and the wei
 blow up (the paper's non-convergence regime) — so ABMC uses a small $P$ and reports
 the blow-up fraction.
 
+**Multiple templates.** The paper matches several expert-annotated templates
+per case; `make_abmc_dictionary` runs the ABMC scan for a whole dictionary of
+desired waveforms in one call, estimating the SBL covariance once (it depends
+only on the data) and reusing it for every template.
+
 # Parameter tuning
 
 ## `make_mcmv` / `scan_mcmv`
@@ -692,6 +697,7 @@ precision against runtime, and `alpha` (default 0.05) is the FDR level.
 | `ar1_surrogate_significance` | AR(1)-surrogate significance mask (Fisher-$z$ + FDR) |
 | `sbl_covariance` | Sparse Bayesian learning (Champagne) model covariance — ABMC Stage 1 |
 | `make_abmc` → `ABMCResult` | Template-constrained beamformer for spike-like sources — ABMC Stage 2 |
+| `make_abmc_dictionary` | Run ABMC for a dictionary of desired templates, reusing one SBL covariance |
 
 # References
 

@@ -8,7 +8,12 @@ import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
-from advance_beamlab import ABMCResult, make_abmc, sbl_covariance
+from advance_beamlab import (
+    ABMCResult,
+    make_abmc,
+    make_abmc_dictionary,
+    sbl_covariance,
+)
 
 mne.set_log_level("ERROR")
 
@@ -167,3 +172,46 @@ def test_abmc_free_orientation():
     res = make_abmc(info, fwd, x, _spike(400, 250))
     assert len(res.power) == fwd["nsource"]
     assert res.orientation[int(np.argmax(res.template_match))] == 2
+
+
+def test_abmc_dictionary(sphere_fwd):
+    """make_abmc_dictionary runs one scan per template, reusing one covariance."""
+    fwd, info = sphere_fwd
+    lf = fwd["sol"]["data"]
+    rng = np.random.default_rng(6)
+    (i,) = _shell_sources(fwd, 1)
+    x = np.outer(lf[:, i], _spike(400, 250))
+    x = x + 0.3 * np.abs(x).max() * rng.standard_normal(x.shape)
+    templates = {"early": _spike(400, 200), "late": _spike(400, 300)}
+    results = make_abmc_dictionary(info, fwd, x, templates)
+    assert set(results) == {"early", "late"}
+    assert all(isinstance(r, ABMCResult) for r in results.values())
+    # every template localises the same underlying source
+    for r in results.values():
+        peak = int(np.argmax(r.template_match))
+        assert np.linalg.norm(fwd["source_rr"][peak] - fwd["source_rr"][i]) < 0.03
+    # the two templates are offset in opposite directions -> different lags
+    e_peak = int(np.argmax(results["early"].template_match))
+    l_peak = int(np.argmax(results["late"].template_match))
+    assert results["early"].lag[e_peak] > results["late"].lag[l_peak]
+
+
+def test_abmc_dictionary_accepts_sequence(sphere_fwd):
+    """A plain sequence of templates is labelled by integer position."""
+    fwd, info = sphere_fwd
+    lf = fwd["sol"]["data"]
+    rng = np.random.default_rng(7)
+    x = np.outer(lf[:, 0], _spike(400, 250))
+    x = x + 0.3 * np.abs(x).max() * rng.standard_normal(x.shape)
+    results = make_abmc_dictionary(info, fwd, x, [_spike(400, 200), _spike(400, 250)])
+    assert set(results) == {0, 1}
+
+
+def test_abmc_dictionary_validation(sphere_fwd):
+    """Empty templates and length mismatches raise ValueError."""
+    fwd, info = sphere_fwd
+    x = np.outer(fwd["sol"]["data"][:, 0], _spike(400, 250))
+    with pytest.raises(ValueError, match="non-empty"):
+        make_abmc_dictionary(info, fwd, x, {})
+    with pytest.raises(ValueError, match="must match data"):
+        make_abmc_dictionary(info, fwd, x, {"bad": _spike(300, 150)})

@@ -24,6 +24,7 @@ Currently implemented:
 from ._abmc import (
     ABMCResult,
     make_abmc,
+    make_abmc_dictionary,
     sbl_covariance,
 )
 from ._connectivity import (
@@ -68,6 +69,7 @@ __all__ = [
     "ar1_surrogate_significance",
     "sbl_covariance",
     "make_abmc",
+    "make_abmc_dictionary",
     "ABMCResult",
 ]
 
