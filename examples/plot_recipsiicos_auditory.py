@@ -191,7 +191,9 @@ for ax, idx, hemi in zip(axes, peaks, ("Left", "Right"), strict=True):
     ax.plot(times, tc_lcmv.data[idx], color="C0", label="LCMV")
     ax.plot(times, tc_recip.data[idx], color="C3", label="ReciPSIICOS")
     ax.axvline(0, color="k", lw=0.5)
-    ax.set(title=f"{hemi} auditory peak  (ReciPSIICOS/LCMV = {ratio:.2f})",
-           ylabel="amplitude (a.u.)")
+    ax.set(
+        title=f"{hemi} auditory peak  (ReciPSIICOS/LCMV = {ratio:.2f})",
+        ylabel="amplitude (a.u.)",
+    )
     ax.legend(loc="upper right")
 axes[-1].set_xlabel("time (ms)")

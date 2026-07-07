@@ -120,13 +120,17 @@ def test_pairwise_is_direct_leakage_free(scenario):
     """2-source MCMV: unit gain on self, exact zero gain on the partner."""
     d = scenario
     filt = make_mcmv(
-        d["info"], d["fwd"], d["dcov"], sources=[d["A"], d["B"]],
-        noise_cov=d["ncov"], weight_norm="unit-gain",
+        d["info"],
+        d["fwd"],
+        d["dcov"],
+        sources=[d["A"], d["B"]],
+        noise_cov=d["ncov"],
+        weight_norm="unit-gain",
     )
     w = filt["weights"]
     g = d["gain"]
     assert abs(w[0] @ g[:, d["A"]] - 1.0) < 1e-8  # unit gain on A
-    assert abs(w[0] @ g[:, d["B"]]) < 1e-8        # zero gain on B (no direct leakage)
+    assert abs(w[0] @ g[:, d["B"]]) < 1e-8  # zero gain on B (no direct leakage)
     assert abs(w[1] @ g[:, d["B"]] - 1.0) < 1e-8
     assert abs(w[1] @ g[:, d["A"]]) < 1e-8
 
@@ -135,12 +139,20 @@ def test_augmentation_nulls_the_neighbour(scenario):
     """PW-MCMV leaks a neighbour; adding it (APW-MCMV) places an exact null on it."""
     d = scenario
     pw = make_mcmv(
-        d["info"], d["fwd"], d["dcov"], sources=[d["A"], d["B"]],
-        noise_cov=d["ncov"], weight_norm="unit-gain",
+        d["info"],
+        d["fwd"],
+        d["dcov"],
+        sources=[d["A"], d["B"]],
+        noise_cov=d["ncov"],
+        weight_norm="unit-gain",
     )
     aug = make_mcmv(
-        d["info"], d["fwd"], d["dcov"], sources=[d["A"], d["B"], d["C"]],
-        noise_cov=d["ncov"], weight_norm="unit-gain",
+        d["info"],
+        d["fwd"],
+        d["dcov"],
+        sources=[d["A"], d["B"], d["C"]],
+        noise_cov=d["ncov"],
+        weight_norm="unit-gain",
     )
     g = d["gain"]
     # PW-MCMV has a non-trivial leakage coefficient onto the conductor C ...
@@ -181,8 +193,14 @@ def test_epoched_helper():
 def test_connectivity_matrix_is_symmetric_zero_diagonal(scenario):
     d = scenario
     conn = pairwise_mcmv_connectivity(
-        d["evoked"], d["info"], d["fwd"], d["dcov"], d["sources"],
-        method="envelope", noise_cov=d["ncov"], absolute=False,
+        d["evoked"],
+        d["info"],
+        d["fwd"],
+        d["dcov"],
+        d["sources"],
+        method="envelope",
+        noise_cov=d["ncov"],
+        absolute=False,
     )
     n = len(d["sources"])
     assert conn.shape == (n, n)
@@ -195,11 +213,20 @@ def test_spectral_method_runs(scenario):
     d = scenario
     ep = mne.make_fixed_length_epochs(
         mne.io.RawArray(d["evoked"].data, d["info"], verbose=False),
-        duration=2.0, verbose=False,
+        duration=2.0,
+        verbose=False,
     ).get_data()
     conn = pairwise_mcmv_connectivity(
-        ep, d["info"], d["fwd"], d["dcov"], d["sources"],
-        method="coh", sfreq=200.0, fmin=8.0, fmax=12.0, noise_cov=d["ncov"],
+        ep,
+        d["info"],
+        d["fwd"],
+        d["dcov"],
+        d["sources"],
+        method="coh",
+        sfreq=200.0,
+        fmin=8.0,
+        fmax=12.0,
+        noise_cov=d["ncov"],
     )
     n = len(d["sources"])
     assert conn.shape == (n, n)
@@ -271,16 +298,30 @@ def test_apw_reduces_indirect_leakage_bias(scenario):
     """APW-MCMV moves the spurious A-B edge closer to its true value than PW-MCMV."""
     d = scenario
     conn = pairwise_mcmv_connectivity(
-        d["evoked"], d["info"], d["fwd"], d["dcov"], d["sources"],
-        method="envelope", noise_cov=d["ncov"], absolute=False,
+        d["evoked"],
+        d["info"],
+        d["fwd"],
+        d["dcov"],
+        d["sources"],
+        method="envelope",
+        noise_cov=d["ncov"],
+        absolute=False,
     )
     sig = np.zeros((4, 4), bool)
     sig[0, 1] = sig[1, 0] = True  # treat A-B as (spuriously) significant
     sig[1, 2] = sig[2, 1] = True  # C-B genuinely significant -> C is a conductor
     apw = augmented_pairwise_mcmv_connectivity(
-        d["evoked"], d["info"], d["fwd"], d["dcov"], d["sources"], conn, sig,
-        positions=d["positions"], method="envelope",
-        noise_cov=d["ncov"], absolute=False,
+        d["evoked"],
+        d["info"],
+        d["fwd"],
+        d["dcov"],
+        d["sources"],
+        conn,
+        sig,
+        positions=d["positions"],
+        method="envelope",
+        noise_cov=d["ncov"],
+        absolute=False,
     )
     truth = _env_corr(d["s_a"], d["s_b"])  # ~ -0.09
     # APW is at least as close to the truth as PW on the augmented A-B edge
@@ -295,17 +336,28 @@ def test_apw_beats_lcmv(scenario):
 
     d = scenario
     conn = pairwise_mcmv_connectivity(
-        d["evoked"], d["info"], d["fwd"], d["dcov"], d["sources"],
-        method="envelope", noise_cov=d["ncov"], absolute=False,
+        d["evoked"],
+        d["info"],
+        d["fwd"],
+        d["dcov"],
+        d["sources"],
+        method="envelope",
+        noise_cov=d["ncov"],
+        absolute=False,
     )
     lcmv = make_lcmv(
-        d["info"], d["fwd"], d["dcov"], reg=0.05, noise_cov=d["ncov"],
-        pick_ori=None, weight_norm=None,
+        d["info"],
+        d["fwd"],
+        d["dcov"],
+        reg=0.05,
+        noise_cov=d["ncov"],
+        pick_ori=None,
+        weight_norm=None,
     )
     sl = apply_lcmv(d["evoked"], lcmv).data
     lcmv_ab = _env_corr(sl[d["A"]], sl[d["B"]])
-    assert abs(conn[0, 1]) < abs(lcmv_ab)   # PW-MCMV less spurious than LCMV on A-B
-    assert conn[1, 2] > 0.5                 # genuine C-B coupling preserved
+    assert abs(conn[0, 1]) < abs(lcmv_ab)  # PW-MCMV less spurious than LCMV on A-B
+    assert conn[1, 2] > 0.5  # genuine C-B coupling preserved
 
 
 # --------------------------------------------------------------------------- #
@@ -338,20 +390,31 @@ def test_ar1_significance_flags_strong_not_weak():
     conn = np.zeros((4, 4))
     for i, j in _as_pairs(4):
         value = _pair_connectivity(
-            np.stack([ref[i], ref[j]]), "envelope", sfreq=None, fmin=None,
-            fmax=None, orthogonalize=False, absolute=True, mt_bandwidth=None,
+            np.stack([ref[i], ref[j]]),
+            "envelope",
+            sfreq=None,
+            fmin=None,
+            fmax=None,
+            orthogonalize=False,
+            absolute=True,
+            mt_bandwidth=None,
         )
         conn[i, j] = conn[j, i] = value
 
     mask = ar1_surrogate_significance(
-        conn, ref, method="envelope", n_surrogates=200, alpha=0.05,
-        absolute=True, random_state=0,
+        conn,
+        ref,
+        method="envelope",
+        n_surrogates=200,
+        alpha=0.05,
+        absolute=True,
+        random_state=0,
     )
     assert mask.shape == (4, 4)
     assert not mask.diagonal().any()
     assert np.array_equal(mask, mask.T)
-    assert mask[2, 3]        # coupled pair flagged significant
-    assert not mask[0, 1]    # independent pair not flagged
+    assert mask[2, 3]  # coupled pair flagged significant
+    assert not mask[0, 1]  # independent pair not flagged
 
 
 # --------------------------------------------------------------------------- #
@@ -369,8 +432,13 @@ def test_unknown_method_raises(scenario):
     d = scenario
     with pytest.raises(ValueError, match="method must be one of"):
         pairwise_mcmv_connectivity(
-            d["evoked"], d["info"], d["fwd"], d["dcov"], d["sources"],
-            method="not-a-method", noise_cov=d["ncov"],
+            d["evoked"],
+            d["info"],
+            d["fwd"],
+            d["dcov"],
+            d["sources"],
+            method="not-a-method",
+            noise_cov=d["ncov"],
         )
 
 
@@ -378,8 +446,13 @@ def test_spectral_method_requires_sfreq(scenario):
     d = scenario
     with pytest.raises(ValueError, match="requires ``sfreq``"):
         pairwise_mcmv_connectivity(
-            d["evoked"], d["info"], d["fwd"], d["dcov"], d["sources"],
-            method="coh", noise_cov=d["ncov"],
+            d["evoked"],
+            d["info"],
+            d["fwd"],
+            d["dcov"],
+            d["sources"],
+            method="coh",
+            noise_cov=d["ncov"],
         )
 
 
@@ -387,8 +460,14 @@ def test_spectral_method_requires_band(scenario):
     d = scenario
     with pytest.raises(ValueError, match="requires a frequency band"):
         pairwise_mcmv_connectivity(
-            d["evoked"], d["info"], d["fwd"], d["dcov"], d["sources"],
-            method="coh", sfreq=200.0, noise_cov=d["ncov"],
+            d["evoked"],
+            d["info"],
+            d["fwd"],
+            d["dcov"],
+            d["sources"],
+            method="coh",
+            sfreq=200.0,
+            noise_cov=d["ncov"],
         )
 
 
@@ -399,16 +478,35 @@ def test_augmented_validates_shapes(scenario):
     sig = np.zeros((n, n), bool)
     with pytest.raises(ValueError, match="connectivity must be shape"):
         augmented_pairwise_mcmv_connectivity(
-            d["evoked"], d["info"], d["fwd"], d["dcov"], d["sources"],
-            np.zeros((n, n + 1)), sig, noise_cov=d["ncov"],
+            d["evoked"],
+            d["info"],
+            d["fwd"],
+            d["dcov"],
+            d["sources"],
+            np.zeros((n, n + 1)),
+            sig,
+            noise_cov=d["ncov"],
         )
     with pytest.raises(ValueError, match="significance must be shape"):
         augmented_pairwise_mcmv_connectivity(
-            d["evoked"], d["info"], d["fwd"], d["dcov"], d["sources"],
-            good, np.zeros((n + 1, n + 1), bool), noise_cov=d["ncov"],
+            d["evoked"],
+            d["info"],
+            d["fwd"],
+            d["dcov"],
+            d["sources"],
+            good,
+            np.zeros((n + 1, n + 1), bool),
+            noise_cov=d["ncov"],
         )
     with pytest.raises(ValueError, match="positions must be"):
         augmented_pairwise_mcmv_connectivity(
-            d["evoked"], d["info"], d["fwd"], d["dcov"], d["sources"],
-            good, sig, positions=np.zeros((n, 2)), noise_cov=d["ncov"],
+            d["evoked"],
+            d["info"],
+            d["fwd"],
+            d["dcov"],
+            d["sources"],
+            good,
+            sig,
+            positions=np.zeros((n, 2)),
+            noise_cov=d["ncov"],
         )

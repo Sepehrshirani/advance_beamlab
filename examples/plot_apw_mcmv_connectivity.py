@@ -123,8 +123,9 @@ def slow_envelope(seed):
     raw = np.convolve(white, smoother, "same")
     return 1.0 + 0.8 * (raw - raw.mean()) / raw.std()
 
+
 env_shared = slow_envelope(1)  # drives both C and B -> genuine coupling
-env_a = slow_envelope(2)       # independent -> no true A-B coupling
+env_a = slow_envelope(2)  # independent -> no true A-B coupling
 sig_c = 2.0 * alpha_carrier(env_shared, 0.0)
 sig_b = alpha_carrier(env_shared, 1.3)
 sig_a = alpha_carrier(env_a, 2.1)
@@ -164,8 +165,13 @@ true_cb = envelope_correlation(sig_c, sig_b)
 # single-source, unit-gain LCMV, then correlate the envelopes.
 
 lcmv = make_lcmv(
-    evoked.info, fwd, data_cov, reg=0.05, noise_cov=noise_cov,
-    pick_ori=None, weight_norm=None,
+    evoked.info,
+    fwd,
+    data_cov,
+    reg=0.05,
+    noise_cov=noise_cov,
+    pick_ori=None,
+    weight_norm=None,
 )
 lcmv_tc = apply_lcmv(evoked, lcmv).data
 lcmv_ab = envelope_correlation(lcmv_tc[idx_a], lcmv_tc[idx_b])
@@ -176,8 +182,14 @@ lcmv_cb = envelope_correlation(lcmv_tc[idx_c], lcmv_tc[idx_b])
 # metric is delegated to ``mne-connectivity`` (plain envelope correlation).
 
 conn_pw = pairwise_mcmv_connectivity(
-    evoked, evoked.info, fwd, data_cov, rois,
-    method="envelope", noise_cov=noise_cov, absolute=False,
+    evoked,
+    evoked.info,
+    fwd,
+    data_cov,
+    rois,
+    method="envelope",
+    noise_cov=noise_cov,
+    absolute=False,
 )
 
 # %%
@@ -190,8 +202,17 @@ significance = np.zeros((3, 3), dtype=bool)
 significance[0, 1] = significance[1, 0] = True  # A-B (spurious)
 significance[1, 2] = significance[2, 1] = True  # C-B (genuine) -> makes C a conductor
 conn_apw = augmented_pairwise_mcmv_connectivity(
-    evoked, evoked.info, fwd, data_cov, rois, conn_pw, significance,
-    positions=source_rr[rois], method="envelope", noise_cov=noise_cov, absolute=False,
+    evoked,
+    evoked.info,
+    fwd,
+    data_cov,
+    rois,
+    conn_pw,
+    significance,
+    positions=source_rr[rois],
+    method="envelope",
+    noise_cov=noise_cov,
+    absolute=False,
 )
 
 # %%
@@ -200,12 +221,20 @@ conn_apw = augmented_pairwise_mcmv_connectivity(
 # adding ``C`` to the beamformer nulls it to machine precision.
 
 filt_pw = make_mcmv(
-    evoked.info, fwd, data_cov, sources=[idx_a, idx_b],
-    noise_cov=noise_cov, weight_norm="unit-gain",
+    evoked.info,
+    fwd,
+    data_cov,
+    sources=[idx_a, idx_b],
+    noise_cov=noise_cov,
+    weight_norm="unit-gain",
 )
 filt_apw = make_mcmv(
-    evoked.info, fwd, data_cov, sources=[idx_a, idx_b, idx_c],
-    noise_cov=noise_cov, weight_norm="unit-gain",
+    evoked.info,
+    fwd,
+    data_cov,
+    sources=[idx_a, idx_b, idx_c],
+    noise_cov=noise_cov,
+    weight_norm="unit-gain",
 )
 alpha_c_pw = abs(float(filt_pw["weights"][0] @ lead_c))
 alpha_c_apw = abs(float(filt_apw["weights"][0] @ lead_c))

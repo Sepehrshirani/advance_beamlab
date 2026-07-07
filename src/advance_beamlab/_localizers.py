@@ -185,8 +185,7 @@ def optimal_orientation(name, H_ref, H_loc, R, N, *, evoked_cov=None):
     _check_localizer(name, evoked_cov)
     if H_loc.shape[1] != 3:
         raise ValueError(
-            f"H_loc must have 3 columns (x, y, z leadfields), got "
-            f"{H_loc.shape[1]}."
+            f"H_loc must have 3 columns (x, y, z leadfields), got {H_loc.shape[1]}."
         )
     a_key, b_key, _ = _LOCALIZERS[name]
     metrics = _metric_matrices(R, N, evoked_cov)
@@ -349,9 +348,7 @@ def scan_mcmv(
         ncov_set = set(noise_cov.ch_names)
         keep = [i for i, ch in enumerate(common_ch) if ch in ncov_set]
         if len(keep) == 0:
-            raise ValueError(
-                "noise_cov shares no channels with info/forward/data_cov."
-            )
+            raise ValueError("noise_cov shares no channels with info/forward/data_cov.")
         if len(keep) < len(common_ch):
             common_ch = [common_ch[i] for i in keep]
             R = R[np.ix_(keep, keep)]
@@ -359,8 +356,7 @@ def scan_mcmv(
     n_loc = forward["nsource"]
     if n_sources > n_loc:
         raise ValueError(
-            f"n_sources={n_sources} exceeds the number of grid locations "
-            f"({n_loc})."
+            f"n_sources={n_sources} exceeds the number of grid locations ({n_loc})."
         )
 
     # -- whiten: in this space the noise covariance is the identity --------- #
@@ -436,13 +432,17 @@ def scan_mcmv(
     else:
         ori_out = np.array(orientations)
         filters = make_mcmv(
-            info, forward, data_cov, sources, orientations=ori_out,
-            noise_cov=noise_cov, reg=reg, rank=rank,
+            info,
+            forward,
+            data_cov,
+            sources,
+            orientations=ori_out,
+            noise_cov=noise_cov,
+            reg=reg,
+            rank=rank,
         )
 
-    logger.info(
-        f"    MCMV scan ({localizer}) found {n_sources} source(s): {sources}."
-    )
+    logger.info(f"    MCMV scan ({localizer}) found {n_sources} source(s): {sources}.")
     return MCMVScanResult(
         sources=sources,
         orientations=ori_out,

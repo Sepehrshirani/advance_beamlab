@@ -29,28 +29,30 @@ from advance_beamlab import make_abmc, make_abmc_dictionary
 mne.set_log_level("ERROR")
 
 # Journal-style figure defaults (high-DPI, clean spines, distinctive palette).
-plt.rcParams.update({
-    "figure.dpi": 140,
-    "savefig.dpi": 220,
-    "savefig.bbox": "tight",
-    "font.size": 11,
-    "axes.titlesize": 12,
-    "axes.titleweight": "bold",
-    "axes.labelsize": 11,
-    "axes.linewidth": 0.9,
-    "axes.spines.top": False,
-    "axes.spines.right": False,
-    "axes.axisbelow": True,
-    "axes.grid": True,
-    "grid.color": "#9e9e9e",
-    "grid.alpha": 0.28,
-    "grid.linewidth": 0.6,
-    "legend.frameon": False,
-    "legend.fontsize": 9.5,
-    "xtick.direction": "out",
-    "ytick.direction": "out",
-    "lines.linewidth": 2.0,
-})
+plt.rcParams.update(
+    {
+        "figure.dpi": 140,
+        "savefig.dpi": 220,
+        "savefig.bbox": "tight",
+        "font.size": 11,
+        "axes.titlesize": 12,
+        "axes.titleweight": "bold",
+        "axes.labelsize": 11,
+        "axes.linewidth": 0.9,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "axes.axisbelow": True,
+        "axes.grid": True,
+        "grid.color": "#9e9e9e",
+        "grid.alpha": 0.28,
+        "grid.linewidth": 0.6,
+        "legend.frameon": False,
+        "legend.fontsize": 9.5,
+        "xtick.direction": "out",
+        "ytick.direction": "out",
+        "lines.linewidth": 2.0,
+    }
+)
 C_ABMC, C_LCMV, C_TRUE = "#0072B2", "#D55E00", "#111111"  # Wong colourblind-safe
 
 
@@ -111,8 +113,15 @@ for i_src in locations:
     abmc_err.append(a_err)
     lcmv_err.append(l_err)
     if worst is None or l_err > worst["l_err"]:
-        worst = dict(i_src=int(i_src), data=data, a_map=a_map, l_map=l_map,
-                     a_pk=a_pk, l_pk=l_pk, l_err=l_err)
+        worst = dict(
+            i_src=int(i_src),
+            data=data,
+            a_map=a_map,
+            l_map=l_map,
+            a_pk=a_pk,
+            l_pk=l_pk,
+            l_err=l_err,
+        )
 
 print(f"mean error  ABMC {np.mean(abmc_err):.1f} cm   LCMV {np.mean(lcmv_err):.1f} cm")
 
@@ -122,16 +131,26 @@ print(f"mean error  ABMC {np.mean(abmc_err):.1f} cm   LCMV {np.mean(lcmv_err):.1
 i_src = worst["i_src"]
 gi = np.arange(leadfield.shape[1])
 fig, axes = plt.subplots(2, 1, figsize=(9, 5.2), sharex=True)
-panels = [("ABMC template-match map", worst["a_map"], worst["a_pk"], C_ABMC),
-          ("LCMV output-power map", worst["l_map"], worst["l_pk"], C_LCMV)]
+panels = [
+    ("ABMC template-match map", worst["a_map"], worst["a_pk"], C_ABMC),
+    ("LCMV output-power map", worst["l_map"], worst["l_pk"], C_LCMV),
+]
 for ax, (name, m, pk, col) in zip(axes, panels, strict=True):
     mm = m / m.max()
     ax.fill_between(gi, mm, color=col, alpha=0.22, lw=0)
     ax.plot(gi, mm, color=col, lw=1.1)
     ax.axvline(i_src, color=C_TRUE, ls=(0, (5, 3)), lw=1.6, label="true source")
     err = np.linalg.norm(rr[pk] - rr[i_src]) * 100
-    ax.plot(pk, mm[pk], "v", color=col, ms=12, mec="white", mew=1.1,
-            label=f"peak ({err:.1f} cm off)")
+    ax.plot(
+        pk,
+        mm[pk],
+        "v",
+        color=col,
+        ms=12,
+        mec="white",
+        mew=1.1,
+        label=f"peak ({err:.1f} cm off)",
+    )
     ax.set(ylabel="normalised", ylim=(0, 1.08))
     ax.set_title(name, loc="left")
     ax.legend(loc="upper right", ncol=2)
@@ -147,10 +166,22 @@ xp = np.arange(len(locations))
 fig, ax = plt.subplots(figsize=(9, 4.2))
 ax.axhline(np.mean(abmc_err), color=C_ABMC, ls="--", lw=1.1, alpha=0.7)
 ax.axhline(np.mean(lcmv_err), color=C_LCMV, ls="--", lw=1.1, alpha=0.7)
-ax.bar(xp - 0.21, abmc_err, 0.42, color=C_ABMC, zorder=3,
-       label=f"ABMC (mean {np.mean(abmc_err):.1f} cm)")
-ax.bar(xp + 0.21, lcmv_err, 0.42, color=C_LCMV, zorder=3,
-       label=f"LCMV (mean {np.mean(lcmv_err):.1f} cm)")
+ax.bar(
+    xp - 0.21,
+    abmc_err,
+    0.42,
+    color=C_ABMC,
+    zorder=3,
+    label=f"ABMC (mean {np.mean(abmc_err):.1f} cm)",
+)
+ax.bar(
+    xp + 0.21,
+    lcmv_err,
+    0.42,
+    color=C_LCMV,
+    zorder=3,
+    label=f"LCMV (mean {np.mean(lcmv_err):.1f} cm)",
+)
 ax.set_xticks(xp)
 ax.set_xticklabels([str(int(i)) for i in locations])
 ax.set(xlabel="true source (grid index)", ylabel="localisation error (cm)")
@@ -177,10 +208,19 @@ cs = spike(n_times, 230)
 t_ms = np.arange(n_times) / info["sfreq"] * 1000
 fig, ax = plt.subplots(figsize=(9, 3.4))
 ax.plot(t_ms, cs, color=C_TRUE, lw=2.6, alpha=0.5, label="true source")
-ax.plot(t_ms, abmc_out, color=C_ABMC,
-        label=f"ABMC (r={np.corrcoef(abmc_out, cs)[0, 1]:.2f})")
-ax.plot(t_ms, lcmv_out, color=C_LCMV, alpha=0.85,
-        label=f"LCMV (r={np.corrcoef(lcmv_out, cs)[0, 1]:.2f})")
+ax.plot(
+    t_ms,
+    abmc_out,
+    color=C_ABMC,
+    label=f"ABMC (r={np.corrcoef(abmc_out, cs)[0, 1]:.2f})",
+)
+ax.plot(
+    t_ms,
+    lcmv_out,
+    color=C_LCMV,
+    alpha=0.85,
+    label=f"LCMV (r={np.corrcoef(lcmv_out, cs)[0, 1]:.2f})",
+)
 ax.set(xlabel="time (ms)", ylabel="source amplitude (a.u.)")
 ax.set_title("Reconstructed source at the true location", loc="left")
 ax.legend(loc="upper right", ncol=3)

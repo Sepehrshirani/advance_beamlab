@@ -149,8 +149,10 @@ for ax, i, hemi in zip(axes, range(2), ("Left", "Right"), strict=True):
     ax.plot(times, s_lcmv[i], color="C0", label="LCMV (per-source)")
     ax.plot(times, s_mcmv[i], color="C3", label="MCMV (joint)")
     ax.axvline(0, color="k", lw=0.5)
-    ax.set(title=f"{hemi} auditory source  (MCMV/LCMV peak = {ratio:.2f})",
-           ylabel="amplitude (Am)")
+    ax.set(
+        title=f"{hemi} auditory source  (MCMV/LCMV peak = {ratio:.2f})",
+        ylabel="amplitude (Am)",
+    )
     ax.legend(loc="upper right")
 axes[-1].set_xlabel("time (ms)")
 
@@ -168,8 +170,10 @@ src_corr = src_cov / np.outer(std, std)  # scale-invariant correlation matrix
 fig, ax = plt.subplots(constrained_layout=True, figsize=(4.2, 3.6))
 im = ax.imshow(src_corr, cmap="RdBu_r", vmin=-1, vmax=1)
 ax.set(
-    xticks=[0, 1], yticks=[0, 1],
-    xticklabels=["Left", "Right"], yticklabels=["Left", "Right"],
+    xticks=[0, 1],
+    yticks=[0, 1],
+    xticklabels=["Left", "Right"],
+    yticklabels=["Left", "Right"],
     title=f"MCMV source coupling\nrecovered correlation r = {src_corr[0, 1]:.2f}",
 )
 for a in range(2):

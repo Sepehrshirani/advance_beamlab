@@ -105,8 +105,13 @@ def test_core_matches_mne_vector_lcmv(fwd_info):
     data_cov = _random_cov(info)
     R = np.asarray(data_cov.data)
     filt = make_lcmv(
-        info, fwd, data_cov, reg=REG, noise_cov=None,
-        pick_ori="vector", weight_norm=None,
+        info,
+        fwd,
+        data_cov,
+        reg=REG,
+        noise_cov=None,
+        pick_ori="vector",
+        weight_norm=None,
     )
     W_lcmv = filt["weights"]  # (n_src * 3, n_ch)
 
@@ -262,7 +267,11 @@ def test_unit_noise_gain_without_noise_cov_warns(fwd_info):
     data_cov = _random_cov(info)
     with pytest.warns(RuntimeWarning, match="ad-hoc"):
         filt = make_mcmv(
-            info, fwd, data_cov, [1, 2], orientations=np.eye(3)[:2],
+            info,
+            fwd,
+            data_cov,
+            [1, 2],
+            orientations=np.eye(3)[:2],
             weight_norm="unit-noise-gain",
         )
     # Unit noise gain is defined w.r.t. the noise model actually used (ad-hoc):
@@ -286,8 +295,13 @@ def test_unit_noise_gain_with_explicit_noise_cov(fwd_info):
         np.diag(d), info["ch_names"], info["bads"], list(info["projs"]), nfree=1
     )
     filt = make_mcmv(
-        info, fwd, data_cov, [1, 2], orientations=np.eye(3)[:2],
-        noise_cov=ncov, weight_norm="unit-noise-gain",
+        info,
+        fwd,
+        data_cov,
+        [1, 2],
+        orientations=np.eye(3)[:2],
+        noise_cov=ncov,
+        weight_norm="unit-noise-gain",
     )
     ng = np.einsum("ij,jk,ik->i", filt["weights"], np.diag(d), filt["weights"])
     assert_allclose(ng, 1.0, atol=1e-9)
@@ -308,7 +322,7 @@ def test_whitened_mcmv_matches_closed_form_whitened_lcmv():
 
     # Whitener with W N W^T = I (full rank here), via eigendecomposition.
     evals, evecs = np.linalg.eigh(N)
-    W = (evecs * evals ** -0.5).T  # (n_ch, n_ch)
+    W = (evecs * evals**-0.5).T  # (n_ch, n_ch)
     assert_allclose(W @ N @ W.T, np.eye(n_ch), atol=1e-10)
 
     h_w, R_w = W @ h, W @ R @ W.T
@@ -339,7 +353,7 @@ def test_single_sensor_type_invariant_to_whitening():
     c = 3.7  # arbitrary single-type noise level
     N = c**2 * np.eye(n_ch)
     evals, evecs = np.linalg.eigh(N)
-    W = (evecs * evals ** -0.5).T
+    W = (evecs * evals**-0.5).T
     H_w, R_w = W @ H, W @ R @ W.T
     w_white = _compute_mcmv_weights(H_w, np.linalg.inv(R_w)) @ W
 
@@ -417,8 +431,12 @@ def test_noise_cov_disjoint_raises(fwd_info):
     ncov = mne.Covariance(np.eye(2), ["ZZ1", "ZZ2"], [], [], nfree=1)
     with pytest.raises(ValueError, match="shares no channels"):
         make_mcmv(
-            info, fwd, _random_cov(info), [1, 2],
-            orientations=np.eye(3)[:2], noise_cov=ncov,
+            info,
+            fwd,
+            _random_cov(info),
+            [1, 2],
+            orientations=np.eye(3)[:2],
+            noise_cov=ncov,
         )
 
 
@@ -427,7 +445,10 @@ def test_non_unit_orientations_warn(fwd_info):
     fwd, info = fwd_info
     with pytest.warns(RuntimeWarning, match="unit vectors"):
         filt = make_mcmv(
-            info, fwd, _random_cov(info), [1, 2],
+            info,
+            fwd,
+            _random_cov(info),
+            [1, 2],
             orientations=np.array([[2.0, 0, 0], [0, 3.0, 0]]),
         )
     assert_allclose(filt["weights"] @ filt["leadfield"], np.eye(2), atol=1e-9)
@@ -459,7 +480,10 @@ def test_zero_orientation_raises(fwd_info):
     fwd, info = fwd_info
     with pytest.raises(ValueError, match="zero vector"):
         make_mcmv(
-            info, fwd, _random_cov(info), [1, 2],
+            info,
+            fwd,
+            _random_cov(info),
+            [1, 2],
             orientations=np.array([[1.0, 0, 0], [0, 0, 0]]),
         )
 
@@ -505,7 +529,8 @@ def test_order_exceeds_rank_raises(fwd_info):
     B = rng.standard_normal((n, 3))  # rank-3 data covariance
     cov = mne.Covariance(B @ B.T, info["ch_names"], [], [], nfree=1)
     oris = np.eye(3)[[0, 1, 2, 0, 1]]
-    with pytest.warns(RuntimeWarning, match="rank-deficient"), pytest.raises(
-        ValueError, match="exceeds the data-covariance rank"
+    with (
+        pytest.warns(RuntimeWarning, match="rank-deficient"),
+        pytest.raises(ValueError, match="exceeds the data-covariance rank"),
     ):
         make_mcmv(info, fwd, cov, [1, 2, 3, 4, 5], orientations=oris, reg=0.0)

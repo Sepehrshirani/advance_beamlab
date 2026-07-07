@@ -151,8 +151,15 @@ def test_recipsiicos_covers_both_hemispheres(auditory):
         fwd, info, method="whitened", noise_cov=noise_cov, return_optimal=True
     )
     filters = make_recipsiicos_lcmv(
-        info, fwd, data_cov, rank=kstar, method="whitened", noise_cov=noise_cov,
-        pick_ori="max-power", weight_norm="unit-noise-gain", reduce_rank=True,
+        info,
+        fwd,
+        data_cov,
+        rank=kstar,
+        method="whitened",
+        noise_cov=noise_cov,
+        pick_ori="max-power",
+        weight_norm="unit-noise-gain",
+        reduce_rank=True,
     )
     stc = apply_lcmv_cov(data_cov, filters)
     n_lh = len(stc.vertices[0])
@@ -169,9 +176,7 @@ def test_mcmv_on_real_meg(auditory):
     )
     # One source in each hemisphere (first and last vertices are opposite sides).
     sources = [0, fwd_fixed["nsource"] - 1]
-    mcmv = make_mcmv(
-        info, fwd_fixed, data_cov, sources=sources, noise_cov=noise_cov
-    )
+    mcmv = make_mcmv(info, fwd_fixed, data_cov, sources=sources, noise_cov=noise_cov)
     assert np.all(np.isfinite(mcmv["weights"]))
     src_cov = apply_mcmv_cov(data_cov, mcmv)
     assert src_cov.shape == (len(sources), len(sources))

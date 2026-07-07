@@ -755,9 +755,7 @@ def make_recipsiicos_lcmv(
     )
 
     if fixed and pick_ori is not None:
-        raise ValueError(
-            f"pick_ori={pick_ori!r} requires a free-orientation forward."
-        )
+        raise ValueError(f"pick_ori={pick_ori!r} requires a free-orientation forward.")
 
     n_orient = 1 if fixed else 3
 
@@ -960,9 +958,7 @@ def recipsiicos_rank_curve(
     else:
         bads = set(info["bads"])
         fwd_set = set(forward["sol"]["row_names"])
-        common_ch = [
-            ch for ch in info["ch_names"] if ch in fwd_set and ch not in bads
-        ]
+        common_ch = [ch for ch in info["ch_names"] if ch in fwd_set and ch not in bads]
         if len(common_ch) == 0:
             raise ValueError("No common good channels between info and forward.")
 
@@ -989,9 +985,7 @@ def recipsiicos_rank_curve(
     if method == "recipsiicos":
         p_pwr, p_cor = _power_rank_curve(g_pwr, c_pwr, c_cor, tr_pwr, tr_cor)
     else:
-        p_pwr, p_cor = _whitened_rank_curve(
-            g_pwr, c_pwr, c_cor, tr_pwr, tr_cor, reg
-        )
+        p_pwr, p_cor = _whitened_rank_curve(g_pwr, c_pwr, c_cor, tr_pwr, tr_cor, reg)
 
     if return_optimal:
         return ranks, p_pwr, p_cor, _optimal_rank(p_pwr, p_cor, method)

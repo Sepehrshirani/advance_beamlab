@@ -258,6 +258,7 @@ def _check_source_separation(forward, sources, min_dist=5e-3):
                     stacklevel=2,
                 )
 
+
 @verbose
 def make_mcmv(
     info,
@@ -436,9 +437,7 @@ def make_mcmv(
         ncov_set = set(noise_cov.ch_names)
         keep = [i for i, ch in enumerate(common_ch) if ch in ncov_set]
         if len(keep) == 0:
-            raise ValueError(
-                "noise_cov shares no channels with info/forward/data_cov."
-            )
+            raise ValueError("noise_cov shares no channels with info/forward/data_cov.")
         if len(keep) < len(common_ch):
             common_ch = [common_ch[i] for i in keep]
             R = R[np.ix_(keep, keep)]

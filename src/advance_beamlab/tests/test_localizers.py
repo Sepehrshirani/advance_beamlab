@@ -61,9 +61,7 @@ def test_mer_and_rmer_reduce_to_evoked_ratios():
     mer = num / (h @ Rinv @ N @ Rinv @ h)
     rmer = num / (h @ Rinv @ h)
     assert_allclose(localizer_value("mer", H, R, N, evoked_cov=Rbar), mer, atol=1e-10)
-    assert_allclose(
-        localizer_value("rmer", H, R, N, evoked_cov=Rbar), rmer, atol=1e-10
-    )
+    assert_allclose(localizer_value("rmer", H, R, N, evoked_cov=Rbar), rmer, atol=1e-10)
 
 
 # --------------------------------------------------------------------------- #
@@ -116,8 +114,10 @@ def _brute_force_max(name, H_ref, H_loc, R, N, evoked_cov, rng, n=4000):
     for _ in range(n):
         u = rng.standard_normal(3)
         u /= np.linalg.norm(u)
-        H = np.column_stack([H_ref, H_loc @ u]) if H_ref.shape[1] else (
-            (H_loc @ u)[:, None]
+        H = (
+            np.column_stack([H_ref, H_loc @ u])
+            if H_ref.shape[1]
+            else ((H_loc @ u)[:, None])
         )
         best = max(best, localizer_value(name, H, R, N, evoked_cov=evoked_cov))
     return best
@@ -299,9 +299,7 @@ def test_scan_event_related_with_diagonal_evoked_cov(sphere_fwd):
     evoked_cov = mne.Covariance(
         np.ones(len(info["ch_names"])), info["ch_names"], [], [], nfree=1
     )
-    res = scan_mcmv(
-        info, fwd, cov, localizer="mer", n_sources=1, evoked_cov=evoked_cov
-    )
+    res = scan_mcmv(info, fwd, cov, localizer="mer", n_sources=1, evoked_cov=evoked_cov)
     assert len(res["sources"]) == 1
 
 
@@ -333,7 +331,5 @@ def test_scan_mer_with_full_evoked_cov(sphere_fwd):
     A = rng.standard_normal((len(info["ch_names"]), 3))
     Rbar = A @ A.T + np.eye(len(info["ch_names"]))  # dense evoked covariance
     evoked_cov = mne.Covariance(Rbar, info["ch_names"], [], [], nfree=1)
-    res = scan_mcmv(
-        info, fwd, cov, localizer="mer", n_sources=1, evoked_cov=evoked_cov
-    )
+    res = scan_mcmv(info, fwd, cov, localizer="mer", n_sources=1, evoked_cov=evoked_cov)
     assert len(res["sources"]) == 1

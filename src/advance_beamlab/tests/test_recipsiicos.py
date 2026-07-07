@@ -226,21 +226,36 @@ def test_reduction_operator_shapes_and_variance(fwd_info):
     fwd, info = fwd_info
     ch = fwd["sol"]["row_names"]
     b_full, q_full, r = _reduction_operator(
-        info, fwd, ch, noise_cov=None, whitener_rank="full",
-        pct_var=1.0, n_virtual=None,
+        info,
+        fwd,
+        ch,
+        noise_cov=None,
+        whitener_rank="full",
+        pct_var=1.0,
+        n_virtual=None,
     )
     assert b_full.shape == (q_full, len(ch))
     assert q_full == r  # keeping 100% of variance keeps the whitened rank
 
     b_small, q_small, _ = _reduction_operator(
-        info, fwd, ch, noise_cov=None, whitener_rank="full",
-        pct_var=0.90, n_virtual=None,
+        info,
+        fwd,
+        ch,
+        noise_cov=None,
+        whitener_rank="full",
+        pct_var=0.90,
+        n_virtual=None,
     )
     assert q_small <= q_full
 
     b_fixed, q_fixed, _ = _reduction_operator(
-        info, fwd, ch, noise_cov=None, whitener_rank="full",
-        pct_var=1.0, n_virtual=3,
+        info,
+        fwd,
+        ch,
+        noise_cov=None,
+        whitener_rank="full",
+        pct_var=1.0,
+        n_virtual=3,
     )
     assert q_fixed == 3
 
@@ -251,8 +266,13 @@ def test_reduction_whitens_noise_to_identity(fwd_info):
     ch = fwd["sol"]["row_names"]
     noise = _ident_noise_cov(fwd, scale=2.0)
     b_op, q, _ = _reduction_operator(
-        info, fwd, ch, noise_cov=noise, whitener_rank="full",
-        pct_var=1.0, n_virtual=None,
+        info,
+        fwd,
+        ch,
+        noise_cov=noise,
+        whitener_rank="full",
+        pct_var=1.0,
+        n_virtual=None,
     )
     working_noise = b_op @ noise.data @ b_op.T
     assert_allclose(working_noise, np.eye(q), atol=1e-8)
@@ -267,7 +287,12 @@ def test_make_recipsiicos_cov_is_valid_covariance(fwd_fixed):
     info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
     info.set_montage("standard_1020")
     cov = make_recipsiicos_cov(
-        data_cov, fwd_fixed, info, rank=20, method="recipsiicos", pct_var=1.0,
+        data_cov,
+        fwd_fixed,
+        info,
+        rank=20,
+        method="recipsiicos",
+        pct_var=1.0,
     )
     assert isinstance(cov, mne.Covariance)
     assert cov.ch_names == list(fwd_fixed["sol"]["row_names"])
@@ -287,7 +312,12 @@ def test_make_recipsiicos_cov_whitened_runs(fwd_fixed):
     info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
     info.set_montage("standard_1020")
     cov = make_recipsiicos_cov(
-        data_cov, fwd_fixed, info, rank=8, method="whitened", pct_var=1.0,
+        data_cov,
+        fwd_fixed,
+        info,
+        rank=8,
+        method="whitened",
+        pct_var=1.0,
     )
     assert isinstance(cov, mne.Covariance)
     assert np.linalg.eigvalsh(cov.data).min() > -1e-8
@@ -303,7 +333,12 @@ def test_make_recipsiicos_lcmv_returns_usable_beamformer(fwd_fixed):
     info.set_montage("standard_1020")
     n_src = fwd_fixed["nsource"]
     filters = make_recipsiicos_lcmv(
-        info, fwd_fixed, data_cov, rank=20, method="recipsiicos", pct_var=1.0,
+        info,
+        fwd_fixed,
+        data_cov,
+        rank=20,
+        method="recipsiicos",
+        pct_var=1.0,
     )
     assert filters["kind"] == "LCMV"
     assert filters["weights"].shape[0] == n_src
@@ -321,7 +356,12 @@ def test_beamformer_whitener_folding_matches_manual(fwd_fixed):
     info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
     info.set_montage("standard_1020")
     filters = make_recipsiicos_lcmv(
-        info, fwd_fixed, data_cov, rank=20, method="recipsiicos", pct_var=1.0,
+        info,
+        fwd_fixed,
+        data_cov,
+        rank=20,
+        method="recipsiicos",
+        pct_var=1.0,
     )
     b_op = filters["whitener"]
     w = filters["weights"]
@@ -337,8 +377,13 @@ def test_free_orientation_beamformer_and_pick_ori(fwd_info):
     idx = [3, 3 * (fwd["nsource"] - 2)]  # two source columns
     data_cov = _cov_from_sources(fwd, idx=idx, rho=0.9)
     filters = make_recipsiicos_lcmv(
-        info, fwd, data_cov, rank=20, method="whitened",
-        pick_ori="max-power", pct_var=1.0,
+        info,
+        fwd,
+        data_cov,
+        rank=20,
+        method="whitened",
+        pick_ori="max-power",
+        pct_var=1.0,
     )
     stc = apply_lcmv_cov(data_cov, filters)
     assert stc.data.shape[0] == fwd["nsource"]
@@ -353,7 +398,10 @@ def test_rank_curve_shapes_and_bounds(fwd_fixed):
     info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
     info.set_montage("standard_1020")
     ranks, p_pwr, p_cor = recipsiicos_rank_curve(
-        fwd_fixed, info, method="recipsiicos", pct_var=1.0,
+        fwd_fixed,
+        info,
+        method="recipsiicos",
+        pct_var=1.0,
     )
     q_sq = ranks[-1]
     assert ranks.shape == p_pwr.shape == p_cor.shape == (q_sq,)
@@ -369,7 +417,11 @@ def test_rank_curve_returns_optimal(fwd_fixed):
     info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
     info.set_montage("standard_1020")
     ranks, p_pwr, p_cor, kstar = recipsiicos_rank_curve(
-        fwd_fixed, info, method="whitened", pct_var=1.0, return_optimal=True,
+        fwd_fixed,
+        info,
+        method="whitened",
+        pct_var=1.0,
+        return_optimal=True,
     )
     assert 1 <= kstar <= ranks[-1]
 
@@ -389,8 +441,13 @@ def test_rank_curve_matches_bruteforce(fwd_fixed):
     info.set_montage("standard_1020")
     ch = fwd_fixed["sol"]["row_names"]
     b_op, _, _ = _reduction_operator(
-        info, fwd_fixed, ch, noise_cov=None, whitener_rank="full",
-        pct_var=1.0, n_virtual=None,
+        info,
+        fwd_fixed,
+        ch,
+        noise_cov=None,
+        whitener_rank="full",
+        pct_var=1.0,
+        n_virtual=None,
     )
     gain, fixed = _forward_gain(fwd_fixed, ch)
     topos = _tangential_topographies(b_op @ gain, fixed)
@@ -403,7 +460,11 @@ def test_rank_curve_matches_bruteforce(fwd_fixed):
 
     for method in ("recipsiicos", "whitened"):
         _, p_pwr, p_cor = recipsiicos_rank_curve(
-            fwd_fixed, info, method=method, pct_var=1.0, reg=reg,
+            fwd_fixed,
+            info,
+            method=method,
+            pct_var=1.0,
+            reg=reg,
         )
         bp = np.empty(msq)
         bc = np.empty(msq)
@@ -487,7 +548,12 @@ def test_pick_ori_requires_free_orientation(fwd_fixed):
     info.set_montage("standard_1020")
     with pytest.raises(ValueError, match="free-orientation"):
         make_recipsiicos_lcmv(
-            info, fwd_fixed, data_cov, rank=5, pick_ori="max-power", pct_var=1.0,
+            info,
+            fwd_fixed,
+            data_cov,
+            rank=5,
+            pick_ori="max-power",
+            pct_var=1.0,
         )
 
 
@@ -500,15 +566,24 @@ def test_underdetermined_working_space_raises(fwd_info):
     # Force only two virtual sensors: fewer than the three source orientations.
     with pytest.raises(ValueError, match="underdetermined"):
         make_recipsiicos_lcmv(
-            info, fwd, data_cov, rank=2, method="recipsiicos",
-            pick_ori="max-power", n_virtual=2,
+            info,
+            fwd,
+            data_cov,
+            rank=2,
+            method="recipsiicos",
+            pick_ori="max-power",
+            n_virtual=2,
         )
 
 
 def test_no_common_channels_raises(fwd_fixed):
     """Disjoint channel sets raise a clear error."""
     bad = mne.Covariance(
-        np.eye(3), ["X1", "X2", "X3"], [], [], nfree=1,
+        np.eye(3),
+        ["X1", "X2", "X3"],
+        [],
+        [],
+        nfree=1,
     )
     info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
     info.set_montage("standard_1020")
