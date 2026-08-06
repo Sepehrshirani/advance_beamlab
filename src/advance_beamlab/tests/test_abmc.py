@@ -368,7 +368,6 @@ def test_abmc_excludes_bad_channels(sphere_fwd):
         evoked,
         _spike(200, 100),
         cov=user_cov,
-        max_iter=400,
         return_weights=True,
     )
     assert res.weights.shape[0] == len(good)
@@ -426,21 +425,71 @@ def test_abmc_template_constraint_is_active(sphere_fwd):
     assert rel > 1e-3, rel
 
 
-def test_abmc_warns_when_the_weight_iteration_does_not_converge(sphere_fwd):
-    """A truncated descent is reported, not silently returned as a settled fit."""
+def test_abmc_matches_the_fixed_point_of_the_papers_iteration(sphere_fwd):
+    """The closed-form solve equals the limit of the paper's Eqs. 17-19 descent.
+
+    ``make_abmc`` solves the template-constrained beamformer at its fixed point
+    rather than descending to it. This pins the two together: running the paper's
+    own gradient iteration to a very tight tolerance reproduces the weights the
+    closed form returns.
+    """
+    from advance_beamlab._abmc import (
+        _aligned_leadfield_and_data,
+        _noise_scaling,
+        _restrict_to_cov,
+        _shift_template,
+        sbl_covariance,
+    )
+
     fwd, info = sphere_fwd
     (i,) = _shell_sources(fwd, 1)
     x = _si_data(fwd, i, n=200, t0=100, seed=12)
-    with pytest.warns(RuntimeWarning, match="did not converge"):
-        res = make_abmc(info, fwd, x, _spike(200, 100), max_iter=3)
-    assert not res.converged
-    assert res.n_iter == 3
-    # the gain constraint holds even so, which is why the map is still usable
-    with pytest.warns(RuntimeWarning, match="did not converge"):
-        res = make_abmc(info, fwd, x, _spike(200, 100), max_iter=3, return_weights=True)
-    lf = fwd["sol"]["data"]
-    picks = [fwd["sol"]["row_names"].index(ch) for ch in info["ch_names"]]
-    assert_allclose(np.einsum("mk,mk->k", lf[picks], res.weights), 1.0, atol=1e-6)
+    template = _spike(200, 100)
+    P, reg = 0.03, 0.05
+    res = make_abmc(info, fwd, x, template, P=P, reg=reg, return_weights=True)
+
+    # Rebuild exactly what the solver used, in the same noise-scaled space.
+    lf, xx, ch = _aligned_leadfield_and_data(info, fwd, x)
+    dcov = mne.Covariance(xx @ xx.T / xx.shape[1], ch, [], [], nfree=xx.shape[1])
+    lf, xx, ch, cov_mat = _restrict_to_cov(sbl_covariance(info, fwd, dcov), lf, xx, ch)
+    sd = _noise_scaling(info, ch, None)
+    lf, xx = lf / sd[:, None], xx / sd[:, None]
+    cov_mat = cov_mat / np.outer(sd, sd)
+    r = 0.5 * (cov_mat + cov_mat.T)
+    n_ch, n_col = lf.shape
+    r_reg = r + reg * np.trace(r) / n_ch * np.eye(n_ch)
+
+    w0 = np.linalg.solve(r_reg, lf)
+    w0 = w0 / np.einsum("mk,mk->k", lf, w0)[None, :]
+    y0 = w0.T @ xx
+    lags = np.arange(-(len(template) - 1), len(template))
+    c = np.empty((n_ch, n_col))
+    for k in range(n_col):
+        xc = np.correlate(y0[k], template, mode="full")
+        c[:, k] = xx @ _shift_template(template, int(lags[np.argmax(np.abs(xc))]))
+    c *= (
+        np.linalg.norm(lf, axis=0)
+        / np.clip(np.linalg.norm(c, axis=0), np.finfo(float).tiny, None)
+    )[None, :]
+
+    gg = np.einsum("mk,mk->k", lf, lf)
+    gc = np.einsum("mk,mk->k", lf, c)
+    mu = 1.0 / np.linalg.eigvalsh(r_reg).max()
+    denom = mu * (gg + P * gc)
+    w = np.zeros((n_ch, n_col))
+    for _ in range(100000):
+        rw = r_reg @ w
+        beta1 = (
+            1.0 - np.einsum("mk,mk->k", lf, w) + mu * np.einsum("mk,mk->k", lf, rw)
+        ) / denom
+        w_new = w - mu * (rw - lf * beta1[None, :] - c * (P * beta1)[None, :])
+        step = np.linalg.norm(w_new - w)
+        w = w_new
+        if step <= 1e-14 * max(np.linalg.norm(w), 1e-300):
+            break
+
+    assert_allclose(res.weights, w / sd[:, None], rtol=1e-4, atol=0)
+    assert res.converged
 
 
 def test_abmc_distortionless_constraint(sphere_fwd):

@@ -55,11 +55,12 @@ With ``envelope_lowpass=None`` the estimator reduces exactly to
 # Authors: Sepehr Shirani and Muzhi Wang <sepehrshirani@gmail.com>
 # License: BSD-3-Clause
 
+import warnings
 from itertools import combinations
 
 import numpy as np
 from mne.filter import filter_data, next_fast_len, resample
-from mne.utils import _validate_type, logger, warn
+from mne.utils import _validate_type, logger
 from scipy.signal import hilbert, lfilter
 
 from ._mcmv import apply_mcmv, make_mcmv
@@ -252,9 +253,11 @@ def _pair_connectivity(
             f"method={method!r} requires a frequency band ``fmin`` and ``fmax``."
         )
     if data.shape[0] < 2:
-        warn(
+        warnings.warn(
             f"spectral connectivity (method={method!r}) is being estimated from a "
-            "single epoch; provide epoched data for a meaningful spectral estimate."
+            "single epoch; provide epoched data for a meaningful spectral estimate.",
+            RuntimeWarning,
+            stacklevel=2,
         )
     conn = spectral_connectivity_epochs(
         data,
@@ -672,6 +675,10 @@ def augmented_pairwise_mcmv_connectivity(
         raise ValueError(
             f"connectivity must be shape ({n}, {n}), got {connectivity.shape}."
         )
+    if int(max_neighbours) < 0:
+        raise ValueError(f"max_neighbours must be >= 0, got {max_neighbours}.")
+    if float(radius) < 0:
+        raise ValueError(f"radius must be >= 0 metres, got {radius}.")
     significance = np.asarray(significance, dtype=bool)
     if significance.shape != (n, n):
         raise ValueError(
@@ -700,7 +707,11 @@ def augmented_pairwise_mcmv_connectivity(
             f"{len(neighbours)} neighbour(s), beamformer order {order}."
         )
         if order > max_order:  # defensive; _select_neighbours already caps this
-            warn(f"APW-MCMV beamformer order {order} exceeds the cap {max_order}.")
+            warnings.warn(
+                f"APW-MCMV beamformer order {order} exceeds the cap {max_order}.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         aug_indices = [i, j, *neighbours]
         aug_sources = [sources[k] for k in aug_indices]
         filters = make_mcmv(
@@ -946,11 +957,13 @@ def ar1_surrogate_significance(
         null_std = null_z.std(axis=0, ddof=1)
     degenerate = ~np.isfinite(null_mean) | ~np.isfinite(null_std) | (null_std <= 0)
     if degenerate.any():
-        warn(
+        warnings.warn(
             f"{int(degenerate.sum())} of {len(pairs)} edges have a degenerate "
             "AR(1) surrogate null (zero or non-finite standard deviation); they "
             "are reported as non-significant. Check that "
-            "``reference_time_courses`` are long enough for the envelope filter."
+            "``reference_time_courses`` are long enough for the envelope filter.",
+            RuntimeWarning,
+            stacklevel=2,
         )
         null_mean = np.where(degenerate, 0.0, null_mean)
         null_std = np.where(degenerate, np.inf, null_std)

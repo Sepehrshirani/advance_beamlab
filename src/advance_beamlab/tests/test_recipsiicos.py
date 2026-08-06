@@ -227,7 +227,7 @@ def test_whitened_reduces_correlation_orthogonal():
 
     g_pwr = _power_columns(topos)
     c_cor = _correlation_gram(topos)
-    projector, _ = _whitened_projector(g_pwr, c_cor, rank=1, reg=1e-6)
+    projector, _, _ = _whitened_projector(g_pwr, c_cor, rank=1, reg=1e-6)
     cleaned, _ = _spectral_flip(_apply_projector(projector, r_corr))
 
     base_err = np.linalg.norm(r_corr - r_uncorr)
@@ -494,7 +494,7 @@ def test_rank_curve_matches_bruteforce(fwd_fixed):
             if method == "recipsiicos":
                 proj, _ = _power_projector(g_pwr, k)
             else:
-                proj, _ = _whitened_projector(g_pwr, c_cor, k, reg=reg)
+                proj, _, _ = _whitened_projector(g_pwr, c_cor, k, reg=reg)
             bp[i] = np.trace(proj @ c_pwr @ proj.T) / tr_pwr
             bc[i] = np.trace(proj @ c_cor @ proj.T) / tr_cor
         assert_allclose(p_pwr, bp, atol=1e-9)

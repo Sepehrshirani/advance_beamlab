@@ -17,10 +17,12 @@ ABMC has two stages:
   \Lambda`. Because the sources are modelled as mutually uncorrelated
   (:math:`\alpha` diagonal), :math:`R` does not carry the cross-source
   correlation structure that makes an LCMV beamformer cancel correlated sources.
-- **Stage 2 -- template-constrained iterative beamformer** (Eqs. 14-19). A
+- **Stage 2 -- template-constrained beamformer** (Eqs. 14-19). A
   minimum-variance beamformer with the usual distortionless constraint *plus* a
   maximum-cross-correlation-to-template constraint that locks the output onto the
-  known DR/IED morphology.
+  known DR/IED morphology. The paper reaches it by gradient descent; this
+  implementation solves it at that descent's fixed point, which is available in
+  closed form (see :func:`make_abmc`).
 
 Localization follows the paper's criterion: the source is the grid location whose
 beamformer output has the **maximum cross-correlation with the desired template**
@@ -86,7 +88,12 @@ from scipy.linalg import cho_factor, cho_solve
 # algorithm in the package reads the forward, the data and the covariances in
 # the same channel space -- in particular, so that all of them drop
 # ``info['bads']``, which ``mne.compute_covariance`` has already dropped.
-from ._mcmv import _align_channels, _cov_as_matrix, _intersect_noise_cov
+from ._mcmv import (
+    _align_channels,
+    _check_noise_cov_required,
+    _cov_as_matrix,
+    _intersect_noise_cov,
+)
 
 _TINY = np.finfo(float).tiny
 _EPS = np.finfo(float).eps
@@ -537,18 +544,15 @@ def make_abmc(
     cov=None,
     noise_cov=None,
     P=0.03,
-    mu=None,
     reg=0.05,
     f=1.0,
-    max_iter=200,
-    tol=1e-4,
     max_lag=None,
     return_weights=False,
     verbose=None,
 ):
     r"""Localise a spike-like source with the ABMC beamformer.
 
-    Runs the template-constrained iterative beamformer of Shirani et al. (2024)
+    Runs the template-constrained beamformer of Shirani et al. (2024)
     :footcite:`Shirani2024`, Eqs. 14-19, over the source grid. For each grid point
     and orientation the weight vector solves
 
@@ -559,7 +563,7 @@ def make_abmc(
 
     a distortionless minimum-variance beamformer with an added
     maximum-cross-correlation-to-template constraint. The unconstrained
-    Lagrangian is descended (Eqs. 15-17) with :math:`\beta_1` eliminated via the
+    Lagrangian (Eqs. 15-17) has :math:`\beta_1` eliminated via the
     gain constraint (Eq. 19) and :math:`\beta_2 = P\beta_1`. The template lag
     :math:`j^*` is fixed once per grid point (seeded from an initial LCMV output),
     per the confirmed reading of the paper.
@@ -604,21 +608,11 @@ def make_abmc(
         perceptible but subordinate weight, ``P`` far below that reduces ABMC to
         an iterative LCMV, and large ``P`` enters the paper's weight-blow-up /
         non-convergence regime. Watch ``result.blowup_fraction``.
-    mu : float | None
-        Gradient step size. If ``None``, set to :math:`1/\lambda_{\max}(R)`.
     reg : float
         Diagonal loading (fraction of :math:`\mathrm{tr}(R)/M`) for the inverse
         used to seed the lag (default 0.05).
     f : float
         Distortionless gain (default 1.0).
-    max_iter : int
-        Maximum weight-update iterations (default 200). The gain constraint
-        holds exactly at every step, so this governs only how far the
-        output-variance term has settled; the number of steps needed grows with
-        the condition number of :math:`R`, and a warning is emitted if ``tol``
-        is not met.
-    tol : float
-        Stop when the relative change in :math:`\|W\|` falls below this.
     max_lag : int | None
         Restrict the template lag search to :math:`|j|\le` ``max_lag`` samples.
         ``None`` searches all lags.
@@ -635,6 +629,8 @@ def make_abmc(
     ----------
     .. footbibliography::
     """
+    if max_lag is not None and int(max_lag) < 0:
+        raise ValueError(f"max_lag must be >= 0 samples, got {max_lag}.")
     if not 0 < P:
         raise ValueError(f"P must be > 0, got {P}.")
     leadfield, x, ch_names = _aligned_leadfield_and_data(info, forward, data)
@@ -654,10 +650,24 @@ def make_abmc(
         _validate_type(cov, Covariance, "cov")
     leadfield, x, ch_names, cov_mat = _restrict_to_cov(cov, leadfield, x, ch_names)
     n_channels, n_columns = leadfield.shape
+    _check_noise_cov_required(info, ch_names, noise_cov)
+
+    # Stage 2 runs in the noise-scaled space, for the same reason Stage 1 does.
+    # In recorded units a magnetometer/gradiometer/EEG covariance spans ~16
+    # orders of magnitude, R is numerically indefinite, and the solve is driven
+    # by whichever sensor type has the larger numerical scale -- on a
+    # Neuromag + EEG array the EEG channels contributed essentially all of the
+    # filter output and the 305 MEG channels ~1e-10 of it. Dividing each channel
+    # by its noise standard deviation makes the types commensurable and R
+    # positive definite (condition number ~1e6 rather than ~1e16). The filter is
+    # scale-covariant, so the localiser, the output and the power are unchanged;
+    # only the returned weights are mapped back to recorded units at the end.
+    sd = _noise_scaling(info, ch_names, noise_cov)
+    leadfield = leadfield / sd[:, None]
+    x = x / sd[:, None]
+    cov_mat = cov_mat / np.outer(sd, sd)
 
     r = 0.5 * (cov_mat + cov_mat.T)
-    if mu is None:
-        mu = 1.0 / np.linalg.eigvalsh(r).max()
 
     # seed the per-column lag from an initial (distortionless LCMV) output
     r_reg = r + reg * np.trace(r) / n_channels * np.eye(n_channels)
@@ -691,7 +701,6 @@ def make_abmc(
         / np.clip(np.linalg.norm(c, axis=0), _TINY, None)
     )[None, :]
 
-    # iterate the weights (Eqs. 17-19), vectorised over all columns
     gg = np.einsum("mk,mk->k", leadfield, leadfield)
     gc = np.einsum("mk,mk->k", leadfield, c)
     coupling = float(np.max(np.abs(P * gc / np.clip(gg, _TINY, None))))
@@ -704,37 +713,36 @@ def make_abmc(
             RuntimeWarning,
             stacklevel=2,
         )
-    denom = mu * (gg + P * gc)
-    w = np.zeros((n_channels, n_columns))
-    converged = False
-    n_run = 0
-    delta = np.inf
-    for iteration in range(max_iter):
-        rw = r @ w
-        g_w = np.einsum("mk,mk->k", leadfield, w)
-        g_rw = np.einsum("mk,mk->k", leadfield, rw)
-        beta1 = (f - g_w + mu * g_rw) / denom
-        beta2 = P * beta1
-        step = rw - leadfield * beta1[None, :] - c * beta2[None, :]
-        w_new = w - mu * step
-        n_run = iteration + 1
-        delta = np.linalg.norm(w_new - w) / max(np.linalg.norm(w_new), _TINY)
-        w = w_new
-        if np.all(np.isfinite(w)) and delta < tol:
-            converged = True
-            break
-    if not np.all(np.isfinite(w)):
+    # Solve Eqs. 17-19 at their fixed point rather than descending to it.
+    # Setting the update step to zero gives R w = (g + P c) beta1, and the
+    # consistency of Eq. 19 then forces g^T w = f, so the estimator the paper's
+    # iteration converges to is available in closed form:
+    #
+    #     w* = f R^-1 (g + P c) / (g^T R^-1 (g + P c)).
+    #
+    # This is the same estimator, not a different one -- the shipped iteration's
+    # own relative step at w* is ~2e-12 -- but it removes the tuning. The
+    # gradient descent needed several thousand steps on a real gradiometer
+    # covariance, and its tolerance test (on the size of the *step*) reported
+    # convergence while the weights were still ~40% away from w*, moving the
+    # localiser peak by ~9 cm. ``r_reg`` rather than ``r`` is inverted, so ``reg``
+    # regularises this solve exactly as it does in ``make_mcmv`` and ``make_lcmv``.
+    v = leadfield + P * c
+    ri_v = np.linalg.solve(r_reg, v)
+    denom_w = np.einsum("mk,mk->k", leadfield, ri_v)
+    # A column whose gain constraint is degenerate cannot be normalised; it is
+    # zeroed and excluded from the localiser below rather than poisoning the map.
+    scale = _EPS * np.linalg.norm(leadfield, axis=0) * np.linalg.norm(ri_v, axis=0)
+    degenerate = np.abs(denom_w) <= scale
+    w = np.where(degenerate[None, :], 0.0, ri_v / np.where(degenerate, 1.0, denom_w))
+    w *= f
+    n_run, converged = 0, True
+    if degenerate.any():
         warnings.warn(
-            "ABMC weights diverged; reduce P or mu.", RuntimeWarning, stacklevel=2
-        )
-    elif not converged:
-        warnings.warn(
-            f"the ABMC weight iteration did not converge in {max_iter} "
-            f"iterations (relative weight change {delta:.2e} > tol={tol}). The "
-            "gain constraint holds exactly at every step, so the localiser is "
-            "usable, but the output-variance term is not settled; raise "
-            "max_iter -- the number of steps needed grows with the condition "
-            "number of R.",
+            f"{int(degenerate.sum())} of {n_columns} grid columns have a "
+            "degenerate gain constraint (g^T R^-1 (g + P c) is numerically "
+            "zero); their localiser value is set to 0. Reduce P, or check the "
+            "forward model at those locations.",
             RuntimeWarning,
             stacklevel=2,
         )
@@ -751,9 +759,17 @@ def make_abmc(
     # variance) signal must be scale free too. An absolute floor carries the
     # units of the data times the template and silently returns a wrong -- and
     # unbounded -- value for a small-amplitude template.
-    floor = _EPS * float(out_norm.max(initial=0.0)) * float(us_norm.max(initial=0.0))
+    # Per column, and overflow-safe. A single blown-up column can make its own
+    # norm overflow to inf while every weight entry is still finite; a global
+    # floor built from ``max()`` would then be inf and zero the entire map.
+    ref = np.abs(out_c).max(axis=1) * np.sqrt(out_c.shape[1])
+    good = (
+        np.isfinite(out_norm)
+        & np.isfinite(us_norm)
+        & (out_norm > _EPS * ref)
+        & (us_norm > 0)
+    )
     tmatch = np.zeros(n_columns)
-    good = denom_corr > floor
     tmatch[good] = num_corr[good] / denom_corr[good]
     power = 0.5 * np.einsum("mk,mk->k", w, r @ w)
 
@@ -766,6 +782,11 @@ def make_abmc(
             RuntimeWarning,
             stacklevel=2,
         )
+
+    # ``out``, ``tmatch`` and ``power`` are invariant to the noise scaling, but
+    # the returned weights must act on the recorded data, so map them back:
+    # the solve enforced (g / sd)^T w = f, which is g^T (w / sd) = f.
+    w = w / sd[:, None]
 
     # combine orientations -> one value per grid point
     n_sources = forward["nsource"]
@@ -801,11 +822,8 @@ def make_abmc_dictionary(
     cov=None,
     noise_cov=None,
     P=0.03,
-    mu=None,
     reg=0.05,
     f=1.0,
-    max_iter=200,
-    tol=1e-4,
     max_lag=None,
     return_weights=False,
     verbose=None,
@@ -844,16 +862,10 @@ def make_abmc_dictionary(
     P : float
         Ratio :math:`\beta_2/\beta_1` for the template constraint; see
         :func:`make_abmc`. Applied to every template.
-    mu : float | None
-        Gradient step size, as in :func:`make_abmc`; applied to every template.
     reg : float
-        Diagonal loading for the lag-seeding inverse, as in :func:`make_abmc`.
+        Diagonal loading of :math:`R`, as in :func:`make_abmc`.
     f : float
         Distortionless gain, as in :func:`make_abmc`.
-    max_iter : int
-        Maximum weight-update iterations, as in :func:`make_abmc`.
-    tol : float
-        Convergence tolerance on the weights, as in :func:`make_abmc`.
     max_lag : int | None
         Template-lag search window in samples, as in :func:`make_abmc`.
     return_weights : bool
@@ -908,11 +920,8 @@ def make_abmc_dictionary(
             cov=cov,
             noise_cov=noise_cov,
             P=P,
-            mu=mu,
             reg=reg,
             f=f,
-            max_iter=max_iter,
-            tol=tol,
             max_lag=max_lag,
             return_weights=return_weights,
         )

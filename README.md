@@ -36,7 +36,7 @@ without reading the papers.
   low-power, spike-like transients (epileptic IEDs and delayed responses to
   single-pulse electrical stimulation) that ordinary LCMV localises poorly. It
   pairs a sparse Bayesian learning (Champagne) covariance that strips
-  correlated-source structure with a template-constrained iterative beamformer
+  correlated-source structure with a template-constrained beamformer
   that locks the output onto the known spike morphology. After Shirani et al.
   (2024).
 
@@ -642,7 +642,7 @@ changes nothing. Note also that for a free-orientation forward the prior treats
 the x, y and z columns of a grid point as three independent scalar sources, so it
 is not covariant under a rotation of the source frame.
 
-**Stage 2 — template-constrained iterative beamformer** (`make_abmc`). Per grid
+**Stage 2 — template-constrained beamformer** (`make_abmc`). Per grid
 point and orientation, solve
 
 $$ \min_W \tfrac12 W^\mathsf{T} R W \quad\text{s.t.}\quad G^\mathsf{T}W=f \;\text{ and }\; \max_W (W^\mathsf{T}X\cdot u), $$
@@ -651,13 +651,28 @@ a distortionless minimum-variance beamformer with an added
 maximum-cross-correlation-to-template constraint, where $u$ is the **caller-supplied
 template of the target waveform** — an expert-annotated IED or DR in the paper, but
 any known source morphology in general, passed via the `template` argument. The
-Lagrangian is descended,
+paper descends the Lagrangian,
 
 $$ W(n{+}1) = W(n) - \mu\big(R W(n) - \beta_1 G - \beta_2 X u^\mathsf{T}\big), $$
 
 with $\beta_1$ eliminated via the gain constraint (which the update provably
 maintains at every step) and $\beta_2 = P\beta_1$; the template lag $j^\ast$ is
 fixed once per segment, seeded from an initial LCMV output.
+
+**This implementation solves that descent at its fixed point instead of stepping
+towards it.** Setting the update to zero gives $RW=(G+P\,Xu^\mathsf{T})\beta_1$, and
+the consistency of the $\beta_1$ expression then forces $G^\mathsf{T}W=f$, so
+
+$$ \boxed{\;W^\ast = f\,\frac{R^{-1}\big(G + P\,Xu^\mathsf{T}\big)}{G^\mathsf{T}R^{-1}\big(G + P\,Xu^\mathsf{T}\big)}\;} $$
+
+This is the *same* estimator the iteration converges to — the descent's own relative
+step evaluated at $W^\ast$ is $\sim 2\times10^{-12}$ — but it removes the tuning.
+That matters in practice: on a real gradiometer covariance the descent needed
+several thousand steps, and its stopping rule (on the size of the *step*) reported
+convergence while the weights were still ~40% away from $W^\ast$, moving the
+localised peak by about 9 cm. There is consequently no step size, iteration count or
+tolerance to set; `reg` regularises $R$ for this solve exactly as it does in
+`make_lcmv` and `make_mcmv`.
 
 **Read-out.** Following the paper, the source is localised by the **maximum
 cross-correlation between the beamformer output and the template**,
@@ -669,7 +684,7 @@ beamformer's minimisation objective, not the localiser; it is returned per grid 
 as a diagnostic only and nothing in the scan reads it.
 
 The ratio $P$ trades the two constraints — too small and the template term vanishes
-(→ plain iterative LCMV); too large and the weights blow up (the paper's
+(→ plain LCMV); too large and the weights blow up (the paper's
 non-convergence regime) — and ABMC reports the blow-up fraction. For $P$ to mean
 that, it has to be dimensionless: $g_n^\mathsf{T}g_n$ carries the units of the
 squared forward model while $g_n^\mathsf{T}c_n$, with $c_n = Xu_{j^\ast}^\mathsf{T}$,
@@ -746,8 +761,7 @@ for the matrix under test, plus its `sfreq`.
 |---|---|---|
 | `cov` | The beamformer covariance $R$ | `None` (default) estimates the SBL covariance from the data — the intended ABMC pipeline. Pass a precomputed `sbl_covariance` result, or any `mne.Covariance`, to override. |
 | `P` | Ratio $\beta_2/\beta_1$ weighting the template constraint | Default 0.03. The constraint column is rescaled to its leadfield column first, so `P` is dimensionless and its useful range does not depend on the units of the data: 0.01–0.1 gives the template a perceptible but subordinate weight, far below that reduces ABMC to an iterative LCMV (a warning fires), and large `P` enters the weight-blow-up / non-convergence regime — watch `result.blowup_fraction` (a warning fires above ~5%). |
-| `mu` | Gradient step size | `None` sets it to $1/\lambda_{\max}(R)$, which is stable; only lower it if the iteration is unstable at large `P`. |
-| `max_iter` (`make_abmc`) | Weight-update iterations | Default 200; the gain constraint holds exactly at every step, so this only governs how fully the output-variance term settles. The number of steps needed grows with the condition number of $R$; a warning fires if `tol` is not met, and raising `max_iter` is then the fix. |
+| `reg` | Diagonal loading of $R$ for the Stage-2 solve | Default 0.05, the same convention as `make_lcmv` and `make_mcmv`. Stage 2 is solved at the fixed point of the paper's Eqs. 17–19 rather than by descending to it, so there is no step size, iteration count or tolerance to tune — see below. |
 | `max_lag` | Template-lag search window (samples) | `None` searches all lags; restrict it when the true delay range is known, to avoid spurious matches. |
 | `max_iter` / `tol` (`sbl_covariance`) | SBL convergence | Iterate the Champagne updates until the Eq. 6 cost changes by less than `tol` (default 1e-5) or `max_iter` (default 100) is reached. |
 

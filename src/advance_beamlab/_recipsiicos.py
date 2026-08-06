@@ -74,7 +74,7 @@ References
 import warnings
 
 import numpy as np
-from mne import Covariance
+from mne import Covariance, pick_channels_cov
 from mne.beamformer import Beamformer
 from mne.beamformer._compute_beamformer import _check_src_normal, _compute_beamformer
 from mne.forward import is_fixed_orient
@@ -293,27 +293,41 @@ def _power_projector(g_pwr, rank):
     return u_k @ u_k.T, s
 
 
-def _whitening_pair(c_pwr, reg, rtol=1e-6):
-    """Symmetric whitener for the power subspace and its inverse (Eq. 15).
+def _whitening_pair(c_pwr, reg, rtol=None):
+    r"""Symmetric whitener for the power subspace and its inverse (Eq. 15).
 
-    ``C_pwr`` is rank-limited (its rank cannot exceed the number of sources), so
-    the inverse square root is taken only on its range: eigenvalues at or below
-    ``rtol`` times the largest are treated as the null space and dropped, which
-    prevents the whitener from amplifying directions that carry no source power.
-    The retained eigenvalues are stabilised with a small ridge
-    ``reg * mean(eigenvalue)``. Returns ``(W, W_inv)`` with
-    ``W = E Lambda^{-1/2} E^T`` and ``W_inv = E Lambda^{1/2} E^T`` over the range
-    of ``C_pwr``.
+    ``C_pwr`` is rank-limited -- its rank cannot exceed the number of independent
+    source topographies, and never exceeds the symmetric dimension
+    :math:`q(q+1)/2` -- so the inverse square root is taken only on its range.
+
+    The cut is at machine precision by default, and that matters. Because the
+    projector is :math:`P = \Pi - W^{-1}E_K E_K^{\mathsf T}W` with
+    :math:`\Pi = W^{-1}W = EE^{\mathsf T}` the projector onto the retained range,
+    everything this cut discards is lost from the covariance at *every* rank,
+    including :math:`K=1`, before a single correlation direction has been
+    removed. A loose threshold is therefore not a harmless safety margin: at
+    ``rtol=1e-6`` it dropped roughly 63% of a real whitened ``sample`` covariance
+    and moved the localised peak by 24 mm. Conditioning is the job of the ridge
+    ``reg * mean(eigenvalue)`` below, which bounds :math:`\|W\|` however small the
+    retained eigenvalues are; the cut's only job is to remove the exact numerical
+    null space.
+
+    Returns ``(W, W_inv, n_keep)`` with ``W = E Lambda^{-1/2} E^T`` and
+    ``W_inv = E Lambda^{1/2} E^T`` over the range of ``C_pwr``, and ``n_keep`` the
+    retained rank -- the rank at which the whitened projector annihilates the
+    covariance entirely.
     """
     eigvals, eigvecs = np.linalg.eigh(c_pwr)
     eigvals = np.clip(eigvals, 0.0, None)
+    if rtol is None:
+        rtol = eigvals.size * np.finfo(float).eps
     keep = eigvals > rtol * eigvals.max()
     e = eigvecs[:, keep]
     lam = eigvals[keep]
     lam = lam + reg * lam.mean()
     w = e @ np.diag(lam**-0.5) @ e.T
     w_inv = e @ np.diag(lam**0.5) @ e.T
-    return w, w_inv
+    return w, w_inv, int(keep.sum())
 
 
 def _whitened_projector(g_pwr, c_cor, rank, reg):
@@ -323,7 +337,7 @@ def _whitened_projector(g_pwr, c_cor, rank, reg):
     the correlation subspace in that whitened space, then unwhitens.
     """
     c_pwr = g_pwr @ g_pwr.T
-    w, w_inv = _whitening_pair(c_pwr, reg)
+    w, w_inv, n_keep = _whitening_pair(c_pwr, reg)
     # Correlation Gram in the whitened space, and its principal eigenvectors.
     c_cor_w = w @ c_cor @ w.T
     eigvals, eigvecs = np.linalg.eigh(c_cor_w)
@@ -332,7 +346,7 @@ def _whitened_projector(g_pwr, c_cor, rank, reg):
     e_k = eigvecs[:, eigvecs.shape[1] - rank :]
     msq = g_pwr.shape[0]
     projector = w_inv @ (np.eye(msq) - e_k @ e_k.T) @ w
-    return projector, eigvals[::-1]
+    return projector, eigvals[::-1], n_keep
 
 
 # --------------------------------------------------------------------------- #
@@ -383,7 +397,7 @@ def _whitened_rank_curve(g_pwr, c_pwr, c_cor, tr_pwr, tr_cor, reg):
     every term of which is a cumulative sum over the ordered eigenvectors, so
     both curves follow from a single eigendecomposition.
     """
-    w, w_inv = _whitening_pair(c_pwr, reg)
+    w, w_inv, _ = _whitening_pair(c_pwr, reg)
     c_cor_w = w @ c_cor @ w.T
     eigvals, eigvecs = np.linalg.eigh(c_cor_w)
     order = np.argsort(eigvals)[::-1]  # largest first (as removed by the projector)
@@ -503,20 +517,23 @@ def _build_projector(gain_work, fixed, method, rank, reg):
         # is contained in the q(q+1)/2-dimensional subspace of symmetric
         # matrices. Removing that many correlation directions removes all of it,
         # so the projector -- and hence the modified covariance -- is exactly
-        # zero. Warn rather than raise: the bound is on the *whitener* range and
-        # a rank-deficient forward reaches it sooner still.
-        n_sym = gain_work.shape[0] * (gain_work.shape[0] + 1) // 2
-        if int(rank) >= n_sym:
+        # zero. The bound that actually bites is the retained rank of C_pwr,
+        # which for a rank-deficient forward is reached well before q(q+1)/2, so
+        # the warning is raised against that rather than against the symmetric
+        # dimension. Warn rather than raise, so a caller sweeping ranks is not
+        # stopped part way.
+        c_cor = _correlation_gram(topos)
+        projector, _, n_keep = _whitened_projector(g_pwr, c_cor, rank, reg)
+        if int(rank) >= n_keep:
             warnings.warn(
-                f"rank={rank} is at or above q(q+1)/2={n_sym}, the dimension of "
-                "the symmetric subspace the power whitener spans, so the "
-                "whitened projector annihilates the covariance. Use a smaller "
-                "rank (see recipsiicos_rank_curve).",
+                f"rank={rank} is at or above {n_keep}, the rank of the power "
+                "Gram C_pwr (the number of independent source topographies, "
+                "capped at q(q+1)/2), so the whitened projector annihilates the "
+                "covariance and the modified covariance is exactly zero. Use a "
+                "smaller rank (see recipsiicos_rank_curve).",
                 RuntimeWarning,
                 stacklevel=2,
             )
-        c_cor = _correlation_gram(topos)
-        projector, _ = _whitened_projector(g_pwr, c_cor, rank, reg)
     return projector
 
 
@@ -924,6 +941,18 @@ def make_recipsiicos_lcmv(
 
     proj, _, _ = make_projector(info["projs"], list(common_ch))
     is_ssp = bool(info["projs"])
+
+    # Store the covariances the way make_lcmv does: restricted to the channels
+    # actually used, and with the ``estimator`` entry that mne.compute_covariance
+    # attaches removed. That entry is a scikit-learn object, which h5io cannot
+    # serialise, so leaving it in makes ``filters.save()`` raise part way through
+    # and leave a truncated file that ``read_beamformer`` then loads without
+    # complaint -- surfacing much later as a KeyError inside apply_lcmv.
+    data_cov = pick_channels_cov(data_cov, include=list(common_ch))
+    data_cov.pop("estimator", None)
+    if noise_cov is not None:
+        noise_cov = noise_cov.copy()
+        noise_cov.pop("estimator", None)
 
     filters = Beamformer(
         kind="LCMV",

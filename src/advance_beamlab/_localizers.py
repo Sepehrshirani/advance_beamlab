@@ -274,9 +274,15 @@ class MCMVScanResult(dict):
         \mathbf{w}_k)/(\mathbf{w}_k^{\mathsf T}\mathbf{N}\mathbf{w}_k)` of the
         source added at iteration ``k``, evaluated on **that source's row of the
         joint ``k``-source MCMV filter** -- not on a single-source (LCMV) filter
-        at the same location. Used to decide how many sources are real: iterate
-        until it drops to a baseline (which, per Moiseev et al. 2011, must be
-        determined experimentally and is generally not one).
+        at the same location. It is computed in the whitened space the scan works
+        in, where :math:`\mathbf{N}=\mathbf{I}`, so the denominator is the squared
+        Euclidean norm of the whitened filter; for a single sensor type that
+        equals the sensor-space ratio above, and for a mixed array it equals it
+        only up to the cross-type blocks of the whitened noise covariance (the
+        same caveat that applies to ``weight_norm='unit-noise-gain'`` here and in
+        :func:`mne.beamformer.make_lcmv`). Used to decide how many sources are
+        real: iterate until it drops to a baseline (which, per Moiseev et al.
+        2011, must be determined experimentally and is generally not one).
     filters : instance of MCMVBeamformer
         The jointly-optimal MCMV filters for the discovered source set.
     localizer : str
