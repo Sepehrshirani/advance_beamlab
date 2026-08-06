@@ -3,6 +3,8 @@
 # Authors: Sepehr Shirani and Muzhi Wang <sepehrshirani@gmail.com>
 # License: BSD-3-Clause
 
+import warnings
+
 import mne
 import numpy as np
 import pytest
@@ -16,6 +18,7 @@ from advance_beamlab import (
 )
 from advance_beamlab._recipsiicos import (
     _apply_projector,
+    _correlation_blocks,
     _correlation_gram,
     _optimal_rank,
     _power_columns,
@@ -51,6 +54,25 @@ def fwd_fixed(fwd_info):
     """The fixed-orientation version of the fixture forward."""
     fwd, _ = fwd_info
     return mne.convert_forward_solution(fwd, force_fixed=True)
+
+
+@pytest.fixture(scope="module")
+def fwd_rich():
+    """A 32-channel, 186-source EEG forward with a non-degenerate rank curve.
+
+    The 8-channel fixture above is deliberately tiny and its rank curve is
+    saturated after two or three directions, which is useless for exercising the
+    rank-selection criterion. This one is still cheap (well under a second) but
+    resolves the power subspace over enough directions for the 45-degree
+    crossing to be meaningful.
+    """
+    montage = mne.channels.make_standard_montage("standard_1020")
+    info = mne.create_info(montage.ch_names[:32], 200.0, "eeg")
+    info.set_montage("standard_1020")
+    sphere = mne.make_sphere_model("auto", "auto", info)
+    src = mne.setup_volume_source_space(sphere=sphere, pos=20.0)
+    fwd = mne.make_forward_solution(info, None, src, sphere, eeg=True, meg=False)
+    return mne.convert_forward_solution(fwd, force_fixed=True), info
 
 
 def _cov_from_sources(forward, idx, rho, noise=0.01):
@@ -479,14 +501,27 @@ def test_rank_curve_matches_bruteforce(fwd_fixed):
         assert_allclose(p_cor, bc, atol=1e-9)
 
 
-def test_optimal_rank_direction_aware():
+def test_optimal_rank_direction_aware(fwd_rich):
     """K* is the 45-degree crossing, found per curve direction, with a floor."""
-    # recipsiicos: increasing curves; K* = last rank before delta turns negative.
-    p_pwr = np.array([0.20, 0.30, 0.45, 0.60, 0.90, 0.97, 1.00])
-    p_cor = np.array([0.20, 0.55, 0.80, 0.90, 0.95, 0.98, 1.00])
-    # d_pwr = .10 .15 .15 .30 .07 .03 ; d_cor = .35 .25 .10 .05 .03 .02
-    # delta  = +.25 +.10 -.05 -.25 -.04 -.01 -> first negative at index 2 -> K*=3
-    assert _optimal_rank(p_pwr, p_cor, "recipsiicos") == 3
+    # recipsiicos: rising curves whose *identity* end is k = q^2, so the rank
+    # axis is traversed downward (Fig. 19 of the paper puts the ReciPSIICOS
+    # scale in descending order) and K* is one past the LAST negative
+    # difference. A measured curve is used because a hand-written one cannot be
+    # trusted to have the sign structure a real forward produces.
+    fwd, info = fwd_rich
+    _, p_pwr, p_cor = recipsiicos_rank_curve(fwd, info, method="recipsiicos")
+    kstar = _optimal_rank(p_pwr, p_cor, "recipsiicos")
+    delta = np.diff(p_cor) - np.diff(p_pwr)
+    # The difference is already negative at the very first step -- the leading
+    # power direction is also the one the correlation subspace overlaps most --
+    # so an ascending scan would stop at K* = 1 and keep p_pwr[0] ~ 0.5 of the
+    # source-power subspace. The descending scan must land far past that.
+    assert delta[0] < 0
+    assert p_pwr[0] < 0.8
+    assert kstar >= 10
+    assert p_pwr[kstar - 1] > 0.8
+    # The crossing is the last sign change: everything above it is non-negative.
+    assert np.all(delta[kstar - 1 :] >= 0)
 
     # whitened: decreasing curves; K* = last rank before delta turns positive.
     q_pwr = np.array([1.00, 0.80, 0.60, 0.45, 0.35, 0.30, 0.28])
@@ -542,11 +577,11 @@ def test_non_covariance_input_raises(fwd_fixed):
 
 
 def test_pick_ori_requires_free_orientation(fwd_fixed):
-    """pick_ori is rejected for a fixed-orientation forward."""
+    """pick_ori is rejected for a fixed-orientation forward, in MNE's words."""
     data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.5)
     info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
     info.set_montage("standard_1020")
-    with pytest.raises(ValueError, match="free-orientation"):
+    with pytest.raises(ValueError, match="forward operator with free orientation"):
         make_recipsiicos_lcmv(
             info,
             fwd_fixed,
@@ -554,6 +589,78 @@ def test_pick_ori_requires_free_orientation(fwd_fixed):
             rank=5,
             pick_ori="max-power",
             pct_var=1.0,
+        )
+
+
+def test_pick_ori_normal_requires_surface_oriented_forward(fwd_info):
+    """'normal' on a surf_ori=False forward raises instead of silently using +Z.
+
+    ``mne.read_forward_solution`` returns ``surf_ori=False`` by default, and the
+    filter computation then takes the third orientation column -- the
+    head-coordinate +Z axis, not a cortical normal. MNE's make_lcmv refuses this;
+    so must we, or the caller gets a plausible SourceEstimate for the wrong
+    dipole orientation.
+    """
+    fwd, info = fwd_info
+    assert not fwd["surf_ori"]
+    idx = [3, 3 * (fwd["nsource"] - 2)]
+    data_cov = _cov_from_sources(fwd, idx=idx, rho=0.5)
+    with pytest.raises(ValueError, match="oriented in surface coordinates"):
+        make_recipsiicos_lcmv(
+            info,
+            fwd,
+            data_cov,
+            rank=5,
+            pick_ori="normal",
+            pct_var=1.0,
+        )
+
+
+def test_pick_ori_normal_rejects_volume_source_space(fwd_info):
+    """'normal' on a volume source space raises MNE's RuntimeError."""
+    from copy import deepcopy
+
+    fwd, info = fwd_info
+    fwd_vol = deepcopy(fwd)
+    # Get past the surf_ori check so the source-space check is the one that
+    # fires, then present the source space as a volumetric grid.
+    fwd_vol["surf_ori"] = True
+    for s in fwd_vol["src"]:
+        s["type"] = "vol"
+    assert fwd_vol["src"].kind == "volume"
+    idx = [3, 3 * (fwd["nsource"] - 2)]
+    data_cov = _cov_from_sources(fwd, idx=idx, rho=0.5)
+    with pytest.raises(RuntimeError, match="surface or discrete SourceSpaces"):
+        make_recipsiicos_lcmv(
+            info,
+            fwd_vol,
+            data_cov,
+            rank=5,
+            pick_ori="normal",
+            pct_var=1.0,
+        )
+
+
+def test_unknown_pick_ori_and_weight_norm_rejected(fwd_info):
+    """Unrecognised pick_ori / weight_norm values are rejected up front.
+
+    Without validation an unknown ``pick_ori`` reaches the filter computation,
+    which falls through to the free-orientation branch while ``is_free_ori`` is
+    set from the requested value, so ``apply_lcmv`` builds a corrupted
+    SourceEstimate.
+    """
+    fwd, info = fwd_info
+    idx = [3, 3 * (fwd["nsource"] - 2)]
+    data_cov = _cov_from_sources(fwd, idx=idx, rho=0.5)
+    with pytest.raises(ValueError, match="Invalid value for the 'pick_ori' parameter"):
+        make_recipsiicos_lcmv(
+            info, fwd, data_cov, rank=5, pick_ori="normalish", pct_var=1.0
+        )
+    with pytest.raises(
+        ValueError, match="Invalid value for the 'weight_norm' parameter"
+    ):
+        make_recipsiicos_lcmv(
+            info, fwd, data_cov, rank=5, weight_norm="unit-gain", pct_var=1.0
         )
 
 
@@ -589,3 +696,240 @@ def test_no_common_channels_raises(fwd_fixed):
     info.set_montage("standard_1020")
     with pytest.raises(ValueError, match="common"):
         make_recipsiicos_cov(bad, fwd_fixed, info, rank=5)
+
+
+# --------------------------------------------------------------------------- #
+# Noise-covariance channel handling.
+# --------------------------------------------------------------------------- #
+def test_noise_cov_may_cover_a_channel_subset(fwd_fixed):
+    """A noise covariance over a subset of the channels restricts, not raises.
+
+    An empty-room (MEG-only) noise covariance combined with a MEG+EEG forward is
+    routine, and ``compute_whitener`` raises "Not all channels present in noise
+    covariance" if the extra channels are not dropped first. Modelled here with
+    an EEG covariance that covers six of the eight fixture channels.
+    """
+    all_ch = list(fwd_fixed["sol"]["row_names"])
+    subset = all_ch[:6]
+    data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.9)
+    noise = mne.Covariance(np.eye(len(subset)), subset, [], [], nfree=1)
+    info = mne.create_info(all_ch, 200.0, "eeg")
+    info.set_montage("standard_1020")
+
+    cov = make_recipsiicos_cov(
+        data_cov, fwd_fixed, info, rank=10, noise_cov=noise, pct_var=1.0
+    )
+    assert cov.ch_names == subset
+
+    filters = make_recipsiicos_lcmv(
+        info, fwd_fixed, data_cov, rank=10, noise_cov=noise, pct_var=1.0
+    )
+    assert filters["ch_names"] == subset
+    assert filters["whitener"].shape[1] == len(subset)
+
+    ranks, p_pwr, _ = recipsiicos_rank_curve(
+        fwd_fixed, info, noise_cov=noise, pct_var=1.0
+    )
+    # Six channels survive, so the working space is at most 6 x 6 in vec form.
+    assert ranks[-1] <= 36
+    assert p_pwr[-1] > 0.99
+
+
+def test_noise_cov_sharing_no_channels_raises(fwd_fixed):
+    """A noise covariance disjoint from the data raises rather than whitening."""
+    all_ch = list(fwd_fixed["sol"]["row_names"])
+    data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.5)
+    noise = mne.Covariance(np.eye(2), ["Z1", "Z2"], [], [], nfree=1)
+    info = mne.create_info(all_ch, 200.0, "eeg")
+    info.set_montage("standard_1020")
+    with pytest.raises(ValueError, match="shares no channels"):
+        make_recipsiicos_cov(
+            data_cov, fwd_fixed, info, rank=5, noise_cov=noise, pct_var=1.0
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Correlation-Gram blocking.
+# --------------------------------------------------------------------------- #
+def test_correlation_blocks_respect_memory_budget():
+    """The block size counts columns of length q^2 and honours the byte budget.
+
+    A free-orientation forward emits four columns per source *pair*, each q^2
+    long, so a block size expressed as a pair (or entry) count says nothing about
+    the memory a block occupies.
+    """
+    rng = np.random.default_rng(0)
+    q, n_loc = 40, 30
+    topos = rng.standard_normal((n_loc, q, 2))
+    budget = 1 << 20  # 1 MiB
+    blocks = list(_correlation_blocks(topos, max_block_bytes=budget))
+
+    # Rounded down to a whole number of pairs (four columns each).
+    max_cols = budget // (8 * q**2) // 4 * 4
+    assert max_cols > 4  # the budget is not so tight that it degenerates
+    assert all(block.shape[0] == q**2 for block in blocks)
+    assert all(block.nbytes <= budget for block in blocks)
+    assert max(block.shape[1] for block in blocks) == max_cols
+    # Four columns per unordered pair, none lost to the blocking.
+    assert sum(block.shape[1] for block in blocks) == 4 * n_loc * (n_loc - 1) // 2
+
+    # The blocking must not change the accumulated Gram.
+    full = np.column_stack(list(_correlation_blocks(topos, max_block_bytes=1 << 40)))
+    assert_allclose(_correlation_gram(topos), full @ full.T, rtol=1e-10)
+
+
+# --------------------------------------------------------------------------- #
+# Degenerate whitened ranks.
+# --------------------------------------------------------------------------- #
+@pytest.mark.filterwarnings("ignore:The spectral-flip step carried")
+def test_whitened_rank_annihilating_covariance_warns(fwd_fixed):
+    """A whitened rank at q(q+1)/2 empties the covariance, and says so.
+
+    The power whitener spans the symmetric subspace, of dimension q(q+1)/2, so
+    removing that many correlation directions removes all of its range and the
+    projector is exactly zero -- well below the q^2 bound that is the only other
+    guard.
+    """
+    data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.9)
+    info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
+    info.set_montage("standard_1020")
+    q = len(fwd_fixed["sol"]["row_names"])  # pct_var=1.0 keeps every direction
+    n_sym = q * (q + 1) // 2
+    with pytest.warns(RuntimeWarning, match=r"q\(q\+1\)/2"):
+        cov = make_recipsiicos_cov(
+            data_cov,
+            fwd_fixed,
+            info,
+            rank=n_sym,
+            method="whitened",
+            pct_var=1.0,
+        )
+    assert np.linalg.norm(cov.data) < 1e-9 * np.linalg.norm(data_cov.data)
+
+    # Well below the bound the projector passes the covariance through and the
+    # warning must not fire.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        warnings.filterwarnings("ignore", message="The spectral-flip step carried")
+        warnings.filterwarnings("ignore", message="No average EEG reference")
+        cov_ok = make_recipsiicos_cov(
+            data_cov,
+            fwd_fixed,
+            info,
+            rank=4,
+            method="whitened",
+            pct_var=1.0,
+        )
+    assert np.linalg.norm(cov_ok.data) > 1e-3 * np.linalg.norm(data_cov.data)
+
+
+# --------------------------------------------------------------------------- #
+# Real BEM forward (skipped when the ``sample`` dataset is not downloaded).
+# --------------------------------------------------------------------------- #
+try:
+    _SAMPLE = mne.datasets.sample.data_path(download=False) / "MEG" / "sample"
+    _HAVE_SAMPLE = (_SAMPLE / "sample_audvis-meg-eeg-oct-6-fwd.fif").is_file()
+except Exception:  # pragma: no cover - depends on local dataset state
+    _HAVE_SAMPLE = False
+
+requires_sample = pytest.mark.skipif(
+    not _HAVE_SAMPLE, reason="MNE sample dataset not downloaded"
+)
+
+
+def _sample_forward(info, step=12):
+    """Decimated ``sample`` BEM forward restricted to ``info``'s channels."""
+    from mne.forward.forward import _restrict_forward_to_src_sel
+
+    fwd = mne.read_forward_solution(_SAMPLE / "sample_audvis-meg-eeg-oct-6-fwd.fif")
+    fwd = mne.pick_channels_forward(fwd, info["ch_names"], ordered=False)
+    fwd = _restrict_forward_to_src_sel(fwd, np.arange(0, fwd["nsource"], step))
+    return mne.convert_forward_solution(fwd, surf_ori=True, force_fixed=True)
+
+
+@requires_sample
+def test_optimal_rank_on_real_forward_keeps_the_power_subspace():
+    """On a real BEM forward K* sits near the paper's published operating point.
+
+    Kuznetsova et al. (2021), Fig. 5B, put the ReciPSIICOS operating point at
+    roughly 95% retained power against 40-50% retained correlation. Scanning the
+    rank axis in the wrong direction instead stops at the first negative
+    difference, which on this forward is the very first one, and keeps around a
+    tenth of the source-power subspace.
+    """
+    info = mne.io.read_info(_SAMPLE / "sample_audvis-ave.fif")
+    info = mne.pick_info(info, mne.pick_types(info, meg="grad", exclude="bads"))
+    fwd = _sample_forward(info)
+    noise = mne.read_cov(_SAMPLE / "sample_audvis-cov.fif")
+
+    ranks, p_pwr, p_cor, kstar = recipsiicos_rank_curve(
+        fwd, info, noise_cov=noise, return_optimal=True
+    )
+    assert kstar > 50
+    assert kstar < ranks[-1] // 2
+    assert p_pwr[kstar - 1] > 0.9
+    assert p_cor[kstar - 1] < 0.6
+    # The correlation subspace is depleted far more than the power subspace.
+    assert p_cor[kstar - 1] < 0.6 * p_pwr[kstar - 1]
+    # The ascending scan would have stopped immediately, at a useless rank.
+    delta = np.diff(p_cor) - np.diff(p_pwr)
+    assert np.nonzero(delta < 0)[0][0] < 3
+    assert p_pwr[2] < 0.2
+
+
+@requires_sample
+def test_meg_only_noise_cov_with_meg_eeg_forward():
+    """An empty-room MEG covariance drives a MEG+EEG forward without raising.
+
+    This is the standard MEG workflow: ``compute_whitener`` rejects the EEG
+    channels the empty-room covariance does not cover, so they have to be
+    dropped beforehand.
+    """
+    info = mne.io.read_info(_SAMPLE / "sample_audvis-ave.fif")
+    info = mne.pick_info(
+        info, mne.pick_types(info, meg="grad", eeg=True, exclude="bads")
+    )
+    fwd = _sample_forward(info, step=60)
+    noise = mne.read_cov(_SAMPLE / "ernoise-cov.fif")
+    noise = mne.cov.pick_channels_cov(
+        noise, include=[ch for ch in noise.ch_names if ch in info["ch_names"]]
+    )
+    n_meg = len(noise.ch_names)
+    assert 0 < n_meg < len(info["ch_names"])  # EEG present in info, not in noise
+
+    rng = np.random.default_rng(0)
+    n_ch = len(info["ch_names"])
+    a = rng.standard_normal((n_ch, n_ch + 20))
+    data_cov = mne.Covariance(a @ a.T * 1e-24, info["ch_names"], [], [], nfree=1)
+
+    filters = make_recipsiicos_lcmv(info, fwd, data_cov, rank=40, noise_cov=noise)
+    assert filters["ch_names"] == noise.ch_names
+    assert filters["weights"].shape == (fwd["nsource"], filters["whitener"].shape[0])
+
+    _, p_pwr, _ = recipsiicos_rank_curve(fwd, info, noise_cov=noise)
+    assert p_pwr[-1] > 0.99
+
+
+@requires_sample
+def test_several_sensor_types_without_noise_cov_raises():
+    """Mixed sensor types without a noise covariance raise MNE's own error."""
+    info = mne.io.read_info(_SAMPLE / "sample_audvis-ave.fif")
+    info = mne.pick_info(
+        info, mne.pick_types(info, meg="grad", eeg=True, exclude="bads")
+    )
+    fwd = _sample_forward(info, step=60)
+    rng = np.random.default_rng(0)
+    n_ch = len(info["ch_names"])
+    a = rng.standard_normal((n_ch, n_ch + 20))
+    data_cov = mne.Covariance(a @ a.T * 1e-24, info["ch_names"], [], [], nfree=1)
+
+    msg = "several sensor types"
+    with pytest.raises(ValueError, match=msg):
+        make_recipsiicos_lcmv(info, fwd, data_cov, rank=40)
+    with pytest.raises(ValueError, match=msg):
+        make_recipsiicos_cov(data_cov, fwd, info, rank=40)
+    with pytest.raises(ValueError, match=msg):
+        recipsiicos_rank_curve(fwd, info)
+    # Identical to what make_lcmv does with the same inputs.
+    with pytest.raises(ValueError, match=msg):
+        mne.beamformer.make_lcmv(info, fwd, data_cov, reg=0.05)

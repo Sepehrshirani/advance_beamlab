@@ -719,12 +719,12 @@ def _ar1_fit(ref):
 
 
 def _ar1_surrogate(phis, sigmas, n_times, rng):
-    """Draw one ``(n_sources, n_times)`` set of independent AR(1) surrogates.
+    r"""Draw one ``(n_sources, n_times)`` set of independent AR(1) surrogates.
 
-    The recursion :math:`x_t = \\varphi x_{t-1} + \\sigma \\varepsilon_t` with
-    :math:`x_0 = \\sigma \\varepsilon_0` is the all-pole filter ``1 / (1 -
-    phi z^-1)`` at rest, so it is generated with :func:`scipy.signal.lfilter`
-    instead of a per-sample Python loop.
+    The recursion :math:`x_t = \varphi x_{t-1} + \sigma \varepsilon_t` with
+    :math:`x_0 = \sigma \varepsilon_0` is the all-pole filter
+    :math:`1 / (1 - \varphi z^{-1})` at rest, so it is generated with
+    :func:`scipy.signal.lfilter` instead of a per-sample Python loop.
     """
     noise = rng.standard_normal((len(phis), n_times))
     surr = np.empty((len(phis), n_times))

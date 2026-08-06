@@ -28,8 +28,10 @@ without reading the papers.
   free functional connectivity built on MCMV: each region pair is reconstructed
   with a 2-source MCMV (removing *direct* leakage between them), and every
   statistically significant pair is re-estimated with neighbouring regions added
-  to the beamformer (suppressing *indirect* leakage through them). Connectivity
-  metrics are delegated to `mne-connectivity`. After Nunes et al. (2020).
+  to the beamformer (suppressing *indirect* leakage through them). Coherence and
+  the phase measures are delegated to `mne-connectivity`; the amplitude-envelope
+  metric follows the paper's own definition, including the 0.5 Hz envelope
+  low-pass that `mne-connectivity` does not expose. After Nunes et al. (2020).
 - **Adaptive Bayesian beamformer with multiple constraints (ABMC)** — localises
   low-power, spike-like transients (epileptic IEDs and delayed responses to
   single-pulse electrical stimulation) that ordinary LCMV localises poorly. It
@@ -95,7 +97,8 @@ conn = pairwise_mcmv_connectivity(band_data, info, forward, data_cov, rois,
                                   method="envelope", noise_cov=noise_cov)
 
 # keep the significant edges, then re-estimate them with neighbour augmentation
-sig = ar1_surrogate_significance(conn, reference_time_courses, method="envelope")
+sig = ar1_surrogate_significance(conn, reference_time_courses, method="envelope",
+                                 sfreq=info["sfreq"])
 conn_apw = augmented_pairwise_mcmv_connectivity(
     band_data, info, forward, data_cov, rois, conn, sig,
     method="envelope", noise_cov=noise_cov)
@@ -356,15 +359,20 @@ search is greedy and iterative (Moiseev et al. 2011):
    joint constraint, so the cancellation that hid correlated activity is
    progressively removed and previously masked sources emerge.
 
-**Knowing when to stop.** After adding source $k$, monitor its single-source
-pseudo-Z $\bar z_k=(\mathbf{w_k}^{\mathsf T}\mathbf{R}\mathbf{w_k})/(\mathbf{w_k}^{\mathsf T}\mathbf{C_n}\mathbf{w_k})$.
+**Knowing when to stop.** After adding source $k$, monitor its pseudo-Z
+$\bar z_k=(\mathbf{w_k}^{\mathsf T}\mathbf{R}\mathbf{w_k})/(\mathbf{w_k}^{\mathsf T}\mathbf{C_n}\mathbf{w_k})$,
+where $\mathbf{w_k}$ is that source's **row of the joint $k$-source MCMV filter**
+— not a single-source (LCMV) filter at the same location, which would still
+suffer the cancellation the joint constraint has just removed.
 Genuine sources have large $\bar z_k$; once you start adding noise, $\bar z_k$
 drops to a baseline and fluctuates. The baseline is generally **not** $1$ and
 must be judged from the data — so `scan_mcmv` runs a requested `n_sources` and
-returns the whole `pseudo_z` sequence for you to read the elbow. Exposed as
-`scan_mcmv(...)`, which returns the discovered sources, their orientations, the
-pseudo-Z sequence, the per-iteration localizer maps, and a ready-to-apply
-`MCMVBeamformer`.
+returns the whole `pseudo_z` sequence for you to read the elbow. Note the greedy
+search does not order the sources by strength: each step maximises the *joint*
+localizer given the sources already fixed, so a later source can carry the larger
+$\bar z_k$. Exposed as `scan_mcmv(...)`, which returns the discovered sources,
+their orientations (in head coordinates), the pseudo-Z sequence, the
+per-iteration localizer maps, and a ready-to-apply `MCMVBeamformer`.
 
 ## 10. ReciPSIICOS: cleaning the covariance instead of constraining sources
 
@@ -387,23 +395,24 @@ nothing to feed on.
 
 **A working space that makes it device-agnostic and tractable.** The original
 study used one MEG array of a single sensor type and built the projector in raw
-sensor space. Two changes are needed for general use, and the paper itself calls
-for the first:
+sensor space. Two changes are needed for general use — the first is ours, the
+second follows the paper:
 
-- *Noise whitening.* Section 2.6 of the paper notes that whitening by the noise
-  covariance changes the forward operator and therefore requires rebuilding the
-  projector in the whitened space, that it skipped this only for the cost of its
-  500 Monte-Carlo repetitions, and that proper whitening *may improve*
-  localisation. Whitening (via `mne.cov.compute_whitener`, per sensor type) is
-  also what makes the method valid when magnetometers (T) and gradiometers (T/m)
-  are mixed. So the projector is built from and applied in the whitened space —
-  faithful to the paper, not a departure from it.
+- *Noise whitening.* Section 2.6 of the paper discusses whitening only to note
+  that it changes the forward operator and would therefore require rebuilding
+  the projector in the whitened space; the study did not apply it and worked in
+  raw sensor space. Whitening here (via `mne.cov.compute_whitener`, per sensor
+  type) is our own addition rather than a step the paper prescribes: it is what
+  makes the method valid when magnetometers (T) and gradiometers (T/m) are
+  mixed, since otherwise the covariance is dominated by the larger-unit type.
 - *Virtual sensors.* The whitened leadfield is reduced by a truncated SVD to the
-  $q$ directions carrying a chosen fraction of its variance (`pct_var`, default
-  0.99 — the paper's 42–80 sensors for a whole-head array). The
-  $M^2\times M^2$ correlation Gram would be $93\text{k}\times 93\text{k}$ for a
-  306-channel array; in the $q$-dimensional working space it is a few thousand
-  square.
+  $q$ directions carrying a chosen fraction of its variance (`pct_var`; the
+  paper keeps 90%, or 95% for its real data, while the default here is a more
+  conservative 0.99). On the 306-channel `sample` array that default gives
+  $q=29$ magnetometer, $q=43$ gradiometer and $q=76$ combined-MEG virtual
+  sensors. The $M^2\times M^2$ correlation Gram would be
+  $93\text{k}\times 93\text{k}$ for a 306-channel array; in the $q$-dimensional
+  working space it is a few thousand square.
 
 Write $\mathbf{B}=\mathbf{U_q}^{\mathsf T}\mathbf{W}$ for the composite operator
 (whiten by $\mathbf{W}$, then keep the $q$ principal directions $\mathbf{U_q}$ of
@@ -424,12 +433,15 @@ and the symmetric cross-product vectors as $G_c$.
   $C_p=G_pG_p^{\mathsf T}$,
   its range-restricted inverse square root
   $W_p=\mathbf{E}\mathbf{\Lambda}^{-1/2}\mathbf{E}^{\mathsf T}$
-  (drop the null space — the auto-products span the symmetric subspace of
-  dimension $q(q{+}1)/2$, so $C_p$ is *never* full rank and
-  must be range-restricted, not ridge-filled) — then, in that whitened space,
+  (the auto-products span at most the symmetric subspace of dimension
+  $q(q{+}1)/2$, so $C_p$ is *never* full rank: its null space is dropped rather
+  than ridge-filled, and only the retained eigenvalues are then stabilised by a
+  ridge of `reg` times their mean) — then, in that whitened space,
   project *away from* the top $K$ correlation directions and unwhiten. Because
   the power directions are flattened to unit scale first, this spares them far
-  better than the plain variant.
+  better than the plain variant. $W_p$ only spans that symmetric subspace, so a
+  rank $K\ge q(q{+}1)/2$ removes all of it and annihilates the covariance; the
+  code warns when a requested rank reaches that bound.
 
 **Applying it** (Eq. 11): reshape the projected vector back to a matrix and
 symmetrise,
@@ -464,8 +476,13 @@ is built once and reused across datasets sharing that forward.
 versus $K$ (Eqs. 20–21) — computed in closed form over all ranks from a single
 decomposition rather than one per rank — and with `return_optimal=True` also the
 rank $K^*$ at the 45° point where the correlation subspace stops emptying faster
-than the power subspace (Section 2.4). Note $K$ lives in the $q^2$-dimensional
-working covariance space. `make_recipsiicos_cov(...)` returns the cleaned
+than the power subspace (Section 2.4). The two methods traverse the rank axis in
+*opposite* directions — the identity is $K=q^2$ for `recipsiicos` and $K=0$ for
+`whitened`, which is why Fig. 19 of the paper puts the ReciPSIICOS scale in
+descending order — so both curves rise with $K$ for the former and fall with it
+for the latter, and $K^*$ is located accordingly. Note $K$ lives in the
+$q^2$-dimensional working covariance space. `make_recipsiicos_cov(...)` returns
+the cleaned
 `mne.Covariance` (for inspection); `make_recipsiicos_lcmv(...)` builds the
 beamformer end to end.
 
@@ -483,7 +500,11 @@ simulations to recordings:
   projector on a decimated source space — a few thousand vertices as in the
   paper, or a cortical label — then reuse it across datasets sharing that
   forward. The `recipsiicos` projector uses only the auto-products and stays
-  linear in $N$.
+  linear in $N$. Runtime scales with $N^2$; *memory* does not — the cross-product
+  columns are accumulated into the Gram in blocks whose size is chosen from a
+  64 MiB budget, so peak memory is set by the $q^2\times q^2$ Gram itself
+  (99 MiB at $q=60$, 1.5 GiB at $q=120$). Keep $q$ modest: it, not $N$, is what
+  can make the projector unaffordable.
 - *The rank curve needs a forward with rich leadfield structure.* On a
   single-shell sphere model the tangential leadfields are so low-rank that the
   power subspace collapses to a handful of directions and the curve degenerates
@@ -542,6 +563,19 @@ would double-correct and discard the genuine zero-lag coupling MCMV is designed
 to preserve; hence `orthogonalize=False` and a *signed* envelope correlation
 (`absolute=False`, matching the paper's Pearson-of-envelopes) are the defaults.
 
+**The envelope metric.** The paper's amplitude-envelope correlation is
+specified in two steps: "the envelopes of the signals were computed by taking
+the absolute values of the analytic Hilbert transform of the signals and then
+low-pass filtering to 0.5 Hz", and the correlations are taken on the
+*downsampled* envelopes. `mne_connectivity.envelope_correlation` takes the
+Hilbert transform internally and correlates the envelopes directly, so the
+0.5 Hz step cannot be applied from outside it; the envelope metric is therefore
+computed in this module (`envelope_lowpass=0.5`, `envelope_resample=None`),
+reducing exactly to `envelope_correlation` when `envelope_lowpass=None`.
+Coherence and the phase measures are still delegated to
+`mne_connectivity.spectral_connectivity_epochs`. The low-pass is not cosmetic:
+it is what makes the surrogate null below correctly sized (see next paragraph).
+
 **Significance.** Edges are tested against an AR(1) surrogate null
 (`ar1_surrogate_significance`): fit a first-order autoregressive model to each
 reconstructed course, generate independent Gaussian surrogates with the same
@@ -549,16 +583,17 @@ temporal smoothness, Fisher-transform their connectivity, and *standardise the
 real edges by the null mean and standard deviation* (giving z-scores that are
 zero-mean, unit-variance under the null, per Colclough et al. 2015) before
 converting to p-values and thresholding with a False Discovery Rate of 0.05. A
-first-order model captures the temporal smoothness of the reconstructions but
-not the slow envelope of a strongly narrow-band signal, for which the null is
-anticonservative — a property of the procedure, noted in the function's
-documentation. The connectivity metrics themselves are delegated to
-`mne-connectivity` (`envelope_correlation`; `spectral_connectivity_epochs` for
-coherence and phase measures), so nothing already implemented there is
-duplicated. One delegation boundary worth noting: the paper additionally
-low-pass filters each amplitude envelope to 0.5 Hz before correlating (a
-noise-reduction step); `envelope_correlation` correlates the envelopes directly,
-which does not affect the leakage suppression that is this module's contribution.
+first-order model captures the temporal smoothness of a reconstruction but not
+the slow amplitude fluctuation of a strongly narrow-band signal, so the null is
+anticonservative if the envelopes still carry their fast sub-band ripple: over
+eight independent 9–11 Hz sources (a complete null) the test rejects 7.5 % of
+edges at $\alpha=0.05$ without the 0.5 Hz envelope low-pass, and 0.4 % with it.
+Use the same envelope settings for the null as for the matrix being tested. The
+test is defined for `method='envelope'` only — the paper prescribes this
+source-level surrogate for the resting-state envelope correlations, and a
+single continuous surrogate segment carries no usable coherence or
+phase-locking estimate — and an edge whose null degenerates (zero or non-finite
+spread) is reported as *not* significant, with a warning, never as an effect.
 
 ---
 
@@ -584,7 +619,19 @@ $$ \alpha_n \leftarrow \alpha_n\sqrt{\tfrac{g_n^\mathsf{T}R^{-1}CR^{-1}g_n}{g_n^
 
 yields a *model* covariance $R$ that, because the sources are modelled as mutually
 uncorrelated ($\alpha$ diagonal), does not carry the cross-source correlation that
-makes LCMV cancel correlated sources.
+makes LCMV cancel correlated sources. The fit runs in a *noise-normalised* sensor
+space — every channel divided by its noise standard deviation, from `noise_cov`
+when given and otherwise from MNE's ad-hoc per-type model, with the scaling undone
+on the returned covariance. That is what makes the fit independent of the physical
+units of the data (the paper's equations are written for single-sensor-type
+intracranial EEG, where an $O(1)$ initialisation is harmless; against an SI-unit
+MEG leadfield the same initialisation puts $G\alpha G^\mathsf{T}$ and $\Lambda$
+eighteen orders of magnitude apart and $R$ is singular on the first iteration) and
+what makes a *diagonal* $\Lambda$ meaningful across magnetometers (T),
+gradiometers (T/m) and EEG (V). For a single sensor type it is a global scalar and
+changes nothing. Note also that for a free-orientation forward the prior treats
+the x, y and z columns of a grid point as three independent scalar sources, so it
+is not covariant under a rotation of the source frame.
 
 **Stage 2 — template-constrained iterative beamformer** (`make_abmc`). Per grid
 point and orientation, solve
@@ -607,12 +654,22 @@ fixed once per segment, seeded from an initial LCMV output.
 cross-correlation between the beamformer output and the template**,
 $|\mathrm{corr}(W^\mathsf{T}X,\,u_{j^\ast})|$, maximised over orientation — the grid
 location whose output best matches the desired morphology at the best lag (LCMV, by
-contrast, localises on output power). The output variance $\tfrac12 W^\mathsf{T}RW$
-is the beamformer's minimisation objective, not the localiser, and is kept per point
-only to pick the source orientation. The ratio $P$ trades the two constraints — too small
-and the template term vanishes (→ plain iterative LCMV); too large and the weights
-blow up (the paper's non-convergence regime) — so ABMC uses a small $P$ and reports
-the blow-up fraction.
+contrast, localises on output power). The same correlation also picks the
+orientation at each grid point. The output variance $\tfrac12 W^\mathsf{T}RW$ is the
+beamformer's minimisation objective, not the localiser; it is returned per grid point
+as a diagnostic only and nothing in the scan reads it.
+
+The ratio $P$ trades the two constraints — too small and the template term vanishes
+(→ plain iterative LCMV); too large and the weights blow up (the paper's
+non-convergence regime) — and ABMC reports the blow-up fraction. For $P$ to mean
+that, it has to be dimensionless: $g_n^\mathsf{T}g_n$ carries the units of the
+squared forward model while $g_n^\mathsf{T}c_n$, with $c_n = Xu_{j^\ast}^\mathsf{T}$,
+carries data × template units, so each $c_n$ is first rescaled to the norm of its
+leadfield column. Without that rescaling $P\,g^\mathsf{T}c/g^\mathsf{T}g$ is
+$\sim10^{-19}$ on SI-unit MEG at any sane $P$ and the paper's second constraint is
+inert; with it, $P\sim0.01$–$0.1$ gives the template a perceptible but subordinate
+weight regardless of the units. A warning fires if the realised coupling is so small
+that the constraint does nothing.
 
 **Multiple templates.** The paper matches several expert-annotated templates
 per case; `make_abmc_dictionary` runs the ABMC scan for a whole dictionary of
@@ -658,15 +715,19 @@ table above. The connectivity-specific knobs:
 
 | Parameter | What it controls | Effect of changing it |
 |---|---|---|
-| `method` | Connectivity metric | `'envelope'` (signed amplitude-envelope correlation) for resting-state coupling; `'coh'`, `'plv'`, `'imcoh'`, … for task phase/spectral measures. The spectral metrics require `sfreq`, `fmin`, `fmax`. |
+| `method` | Connectivity metric | `'envelope'` (signed amplitude-envelope correlation) for resting-state coupling; `'coh'`, `'plv'`, `'imcoh'`, … for task phase/spectral measures. The spectral metrics require `sfreq`, `fmin`, `fmax`. `'cohy'` is refused: coherency is complex and the returned matrix is real — use `'coh'` (magnitude) or `'imcoh'` (imaginary part). |
 | `radius` (APW) | Neighbour search radius for augmentation | Default 0.04 m (4 cm), from the paper's ~2 cm resolution rule. Larger admits more candidate conductors (higher order → better indirect-leakage suppression but lower SNR); smaller admits fewer. |
 | `max_neighbours` (APW) | Neighbours added per source of the pair | Default 2, capping beamformer order at 2 + 2·`max_neighbours` = 6. Raising it suppresses more indirect leakage but erodes SNR (an $n$-source filter spends $n$ degrees of freedom — see §11), so keep the total order ≲ 8. |
 | `orthogonalize` | Leakage-orthogonalisation of the envelopes | Default `False` (plain correlation). MCMV already removes leakage; enabling this is the competing symmetric-orthogonalisation baseline and discards genuine zero-lag coupling. |
-| `absolute` | Sign of the envelope correlation | Default `False` (signed Pearson of envelopes, as in the paper); `True` returns the magnitude. |
+| `absolute` | Sign of the envelope correlation | Default `False` (signed Pearson of envelopes, as in the paper); `True` returns the magnitude. Honoured for both `orthogonalize` settings, unlike `mne_connectivity.envelope_correlation`, which ignores it unless `orthogonalize='pairwise'`. |
+| `envelope_lowpass` | Envelope low-pass before correlating (§11) | Default `0.5` Hz, per the paper. `None` correlates the unsmoothed envelopes (exactly `envelope_correlation`) and leaves the AR(1) null anticonservative. Needs `sfreq`, which defaults to `info['sfreq']`. |
+| `envelope_resample` | Envelope downsampling before correlating | Default `None`. A target rate (Hz) reproduces the paper's "downsampled envelope correlations"; it changes the cost, not the expected value. |
 | `fmin`, `fmax`, `mt_bandwidth` | Band and multitaper smoothing (spectral methods) | Set the band for `coh`/`plv`/…; the paper uses 2 Hz multitaper smoothing for its task analyses. For resting envelope work, band-pass the data and covariance to the analysis band instead (§11). |
 
 For `ar1_surrogate_significance`, `n_surrogates` (default 200) trades null-estimate
-precision against runtime, and `alpha` (default 0.05) is the FDR level.
+precision against runtime, and `alpha` (default 0.05) is the FDR level; pass the
+same `orthogonalize`, `absolute`, `envelope_lowpass` and `envelope_resample` used
+for the matrix under test, plus its `sfreq`.
 
 ---
 
@@ -675,9 +736,9 @@ precision against runtime, and `alpha` (default 0.05) is the FDR level.
 | Parameter | What it controls | Effect of changing it |
 |---|---|---|
 | `cov` | The beamformer covariance $R$ | `None` (default) estimates the SBL covariance from the data — the intended ABMC pipeline. Pass a precomputed `sbl_covariance` result, or any `mne.Covariance`, to override. |
-| `P` | Ratio $\beta_2/\beta_1$ weighting the template constraint | Default 0.03. Larger emphasises the template but risks the weight-blow-up / non-convergence regime; keep it small and watch `result.blowup_fraction` (a warning fires above ~5%). |
+| `P` | Ratio $\beta_2/\beta_1$ weighting the template constraint | Default 0.03. The constraint column is rescaled to its leadfield column first, so `P` is dimensionless and its useful range does not depend on the units of the data: 0.01–0.1 gives the template a perceptible but subordinate weight, far below that reduces ABMC to an iterative LCMV (a warning fires), and large `P` enters the weight-blow-up / non-convergence regime — watch `result.blowup_fraction` (a warning fires above ~5%). |
 | `mu` | Gradient step size | `None` sets it to $1/\lambda_{\max}(R)$, which is stable; only lower it if the iteration is unstable at large `P`. |
-| `max_iter` (`make_abmc`) | Weight-update iterations | Default 60; the constraint holds at every step, so this only governs how fully the power term settles. |
+| `max_iter` (`make_abmc`) | Weight-update iterations | Default 200; the gain constraint holds exactly at every step, so this only governs how fully the output-variance term settles. The number of steps needed grows with the condition number of $R$; a warning fires if `tol` is not met, and raising `max_iter` is then the fix. |
 | `max_lag` | Template-lag search window (samples) | `None` searches all lags; restrict it when the true delay range is known, to avoid spurious matches. |
 | `max_iter` / `tol` (`sbl_covariance`) | SBL convergence | Iterate the Champagne updates until the Eq. 6 cost changes by less than `tol` (default 1e-5) or `max_iter` (default 100) is reached. |
 
@@ -713,11 +774,21 @@ precision against runtime, and `alpha` (default 0.05) is the FDR level.
   beamformer for solving MEG inverse problem in the environment with correlated
   sources. *NeuroImage*, 228, 117677.
   [doi:10.1016/j.neuroimage.2020.117677](https://doi.org/10.1016/j.neuroimage.2020.117677)
+- Shirani, S., Abdi-Sargezeh, B., Valentin, A., Alarcon, G., Bird, J., & Sanei, S.
+  (2024). Do interictal epileptiform discharges and brain responses to electrical
+  stimulation come from the same location? An advanced source localization
+  solution. *IEEE Trans. Biomed. Eng.*, 71(9), 2771–2780.
+  [doi:10.1109/TBME.2024.3392603](https://doi.org/10.1109/TBME.2024.3392603)
 - Van Veen, B. D., van Drongelen, W., Yuchtman, M., & Suzuki, A. (1997).
   Localization of brain electrical activity via linearly constrained minimum
   variance spatial filtering. *IEEE Trans. Biomed. Eng.*, 44(9), 867–880.
+  [doi:10.1109/10.623056](https://doi.org/10.1109/10.623056)
+- Frost, O. L. (1972). An algorithm for linearly constrained adaptive array
+  processing. *Proceedings of the IEEE*, 60(8), 926–935.
+  [doi:10.1109/PROC.1972.8817](https://doi.org/10.1109/PROC.1972.8817)
 - Sekihara, K., & Nagarajan, S. S. (2008). *Adaptive Spatial Filters for
   Electromagnetic Brain Imaging*. Springer.
+  [doi:10.1007/978-3-540-79370-0](https://doi.org/10.1007/978-3-540-79370-0)
 
 # Maintainers and contributors
 

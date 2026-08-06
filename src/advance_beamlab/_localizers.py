@@ -362,11 +362,25 @@ def scan_mcmv(
         The discovered sources, their orientations and pseudo-Z, the localizer
         maps, and the jointly-optimal :class:`MCMVBeamformer`.
 
+    Raises
+    ------
+    ValueError
+        If ``reg`` is outside ``[0, 1]``, ``n_sources`` is below one, exceeds the
+        number of grid locations, or exceeds the rank of the (whitened) data
+        covariance.
+    RuntimeError
+        If no grid location could be evaluated at some iteration.
+
     Notes
     -----
     Already-found grid locations are excluded from subsequent scans, and
-    locations whose (numerically) collinear constraint makes the localizer
-    singular are skipped rather than raising.
+    locations that cannot be evaluated -- a (numerically) collinear constraint
+    making the localizer singular, or a non-finite leadfield -- are skipped
+    rather than raising; they appear as NaN in ``maps``.
+
+    The sources are returned in the order the greedy search found them, which is
+    not necessarily the order of decreasing strength (see
+    :class:`MCMVScanResult`).
 
     References
     ----------

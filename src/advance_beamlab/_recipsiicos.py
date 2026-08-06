@@ -18,9 +18,8 @@ standard LCMV beamformer built on it no longer suffers signal cancellation.
 
 Working space and whitening
 ---------------------------
-Two device-agnostic steps are taken *around* the projector, both of which are
-required for real MEG data and neither of which the original single-array,
-single-sensor-type study needed:
+Two steps are taken *around* the projector, both of which are needed to make the
+method device-agnostic. The first is ours; the second follows the paper:
 
 * **Noise whitening.** The projector is built from and applied in the space
   whitened by the noise covariance (via :func:`mne.cov.compute_whitener`, the
@@ -234,13 +233,16 @@ def _correlation_blocks(topos, max_block_bytes=_CORR_BLOCK_BYTES):
         Memory budget for one block. A block is a dense ``(q^2, n_cols)`` array,
         so ``n_cols`` is derived from ``q`` rather than fixed: a free-orientation
         forward emits four columns of length ``q^2`` per source *pair*, and at
-        ``q = 60`` a thousand columns already cost 29 MB. The block is
-        materialised twice at the yield point (once as the list of columns, once
-        as the stacked array), so the transient cost is about twice this budget.
-        The caller's running Gram is a separate, unavoidable ``q^2 x q^2`` array.
+        ``q = 60`` a thousand columns already cost 29 MB. The count is rounded
+        down to a whole number of pairs so that a block never overshoots the
+        budget. The block is materialised twice at the yield point (once as the
+        list of columns, once as the stacked array), so the transient cost is
+        about twice this budget. The caller's running Gram is a separate,
+        unavoidable ``q^2 x q^2`` array.
     """
     n_loc, q, n_ori = topos.shape
-    block_cols = max(1, int(max_block_bytes // (8 * q**2)))
+    per_pair = 1 if n_ori == 1 else 4
+    block_cols = max(1, int(max_block_bytes // (8 * q**2)) // per_pair) * per_pair
     buffer = []
     for i in range(n_loc):
         for j in range(i + 1, n_loc):
@@ -826,6 +828,12 @@ def make_recipsiicos_lcmv(
     real, high-resolution forwards. The ``recipsiicos`` projector uses only the
     auto-products and stays linear in :math:`N`.
 
+    Memory, unlike runtime, is governed by ``q`` rather than :math:`N`: the
+    cross-product columns are accumulated in bounded blocks, so the peak is the
+    :math:`q^2 \times q^2` Gram (99 MiB at ``q = 60``, 1.5 GiB at ``q = 120``)
+    plus one same-sized accumulator. Lower ``pct_var`` or set ``n_virtual`` if
+    that is too much.
+
     References
     ----------
     .. footbibliography::
@@ -1067,8 +1075,9 @@ def recipsiicos_rank_curve(
     nothing to separate); a realistic BEM forward gives the smooth, separable
     curve the 45-degree criterion expects, and on a degenerate curve ``K*``
     falls back to a near-identity rank. Both curves build a correlation Gram
-    over every source pair (:math:`O(N^2)`), so decimate the source space for
-    real forwards.
+    over every source pair (:math:`O(N^2)` in runtime), so decimate the source
+    space for real forwards; peak memory is instead the
+    :math:`q^2 \times q^2` Gram, so keep ``q`` modest as well.
 
     References
     ----------

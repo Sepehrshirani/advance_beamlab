@@ -21,6 +21,9 @@ Currently implemented:
   covariance :func:`~advance_beamlab.sbl_covariance`), after Shirani et al. (2024).
 """
 
+# Authors: Sepehr Shirani and Muzhi Wang <sepehrshirani@gmail.com>
+# License: BSD-3-Clause
+
 from ._abmc import (
     ABMCResult,
     make_abmc,

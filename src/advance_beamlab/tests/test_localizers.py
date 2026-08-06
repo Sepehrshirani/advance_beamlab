@@ -3,13 +3,22 @@
 # Authors: Sepehr Shirani and Muzhi Wang <sepehrshirani@gmail.com>
 # License: BSD-3-Clause
 
+from copy import deepcopy
+
 import mne
 import numpy as np
 import pytest
+from mne._fiff.proj import make_eeg_average_ref_proj
+from mne.utils import catch_logging
 from numpy.testing import assert_allclose
 
 from advance_beamlab import MCMVBeamformer, apply_mcmv, scan_mcmv
-from advance_beamlab._localizers import localizer_value, optimal_orientation
+from advance_beamlab._localizers import (
+    _metric_matrices,
+    localizer_value,
+    optimal_orientation,
+)
+from advance_beamlab._mcmv import _cov_as_matrix
 
 mne.set_log_level("ERROR")
 
@@ -187,6 +196,11 @@ def sphere_fwd():
     montage = mne.channels.make_standard_montage("standard_1020")
     info = mne.create_info(montage.ch_names[:32], 200.0, "eeg")
     info.set_montage("standard_1020")
+    # The EEG forward is computed against an average reference, so the recording
+    # must carry the average-reference projector -- MNE's inverse machinery
+    # (``_check_reference``) refuses EEG data without it.
+    with info._unlock():
+        info["projs"] = [make_eeg_average_ref_proj(info, verbose=False)]
     sphere = mne.make_sphere_model("auto", "auto", info)
     src = mne.setup_volume_source_space(sphere=sphere, pos=30.0)
     fwd = mne.make_forward_solution(info, None, src, sphere, eeg=True, meg=False)
@@ -322,14 +336,272 @@ def test_scan_noise_cov_disjoint_raises(sphere_fwd):
         scan_mcmv(info, fwd, cov, n_sources=1, noise_cov=ncov)
 
 
-def test_scan_mer_with_full_evoked_cov(sphere_fwd):
-    """MER scan with a dense (2-D) evoked covariance."""
+def _evoked_cov(fwd, info, locs, oris, snr=16.0, n_ave=50):
+    """Covariance of the epoch-averaged field of the implanted sources.
+
+    ``evoked_cov`` is the covariance of the *averaged* field, so it must be
+    built from the same sources as the data covariance -- the evoked topography
+    plus sensor noise attenuated by the number of averaged epochs. A covariance
+    unrelated to the implanted sources describes a different evoked response,
+    and the event-related localizers correctly peak wherever *that* response is
+    strongest instead.
+    """
+    G = fwd["sol"]["data"]
+    H = np.column_stack(
+        [
+            G[:, 3 * loc : 3 * loc + 3] @ (np.asarray(u, float) / np.linalg.norm(u))
+            for loc, u in zip(locs, oris, strict=True)
+        ]
+    )
+    n_ch = G.shape[0]
+    sig = H @ H.T
+    Rbar = snr * n_ch / np.trace(sig) * sig + np.eye(n_ch) / n_ave
+    return mne.Covariance(Rbar, info["ch_names"], [], list(info["projs"]), nfree=1)
+
+
+@pytest.mark.parametrize("localizer", ["mer", "rmer"])
+def test_scan_mer_with_full_evoked_cov(sphere_fwd, localizer):
+    """The event-related localizers recover the source of the evoked field.
+
+    Uses a dense (2-D) evoked covariance, exercising that branch as well.
+    """
     fwd, info = sphere_fwd
     loc, ori = 28, np.array([1.0, 0.0, 0.0])
     cov = _implanted_cov(fwd, info, [loc], [ori], snr=16.0)
-    rng = np.random.default_rng(9)
-    A = rng.standard_normal((len(info["ch_names"]), 3))
-    Rbar = A @ A.T + np.eye(len(info["ch_names"]))  # dense evoked covariance
-    evoked_cov = mne.Covariance(Rbar, info["ch_names"], [], [], nfree=1)
-    res = scan_mcmv(info, fwd, cov, localizer="mer", n_sources=1, evoked_cov=evoked_cov)
-    assert len(res["sources"]) == 1
+    evoked_cov = _evoked_cov(fwd, info, [loc], [ori])
+    assert evoked_cov.data.ndim == 2  # the dense-covariance path
+
+    res = scan_mcmv(
+        info, fwd, cov, localizer=localizer, n_sources=1, evoked_cov=evoked_cov
+    )
+    assert res["sources"] == [loc]
+    cos = np.abs(res["orientations"][0] @ (ori / np.linalg.norm(ori)))
+    assert cos > 0.99
+
+
+# --------------------------------------------------------------------------- #
+# 8. Cached metric matrices: identical results, one inversion per scan.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("name", ["mai", "mpz", "mer", "rmer"])
+def test_cached_metrics_match_recomputed(name):
+    """Passing pre-computed ``metrics`` gives bit-comparable results."""
+    H, R, N, Rbar, rng = _setup(n_ch=15, n_src=2, seed=8, evoked=True)
+    metrics = _metric_matrices(R, N, Rbar)
+
+    v0 = localizer_value(name, H, R, N, evoked_cov=Rbar)
+    v1 = localizer_value(name, H, R, N, evoked_cov=Rbar, metrics=metrics)
+    assert_allclose(v1, v0, rtol=1e-12, atol=0)
+
+    H_ref, H_loc = H[:, :1], rng.standard_normal((15, 3))
+    u0 = optimal_orientation(name, H_ref, H_loc, R, N, evoked_cov=Rbar)
+    u1 = optimal_orientation(name, H_ref, H_loc, R, N, evoked_cov=Rbar, metrics=metrics)
+    assert_allclose(u1, u0, rtol=1e-12, atol=0)
+
+
+def test_cached_metrics_are_used_verbatim():
+    """``metrics`` short-circuits the inversions rather than being merged in."""
+    H, R, N, _, _ = _setup(n_ch=10, n_src=1, seed=9)
+    # A deliberately wrong cache: if it were ignored, the value would not change.
+    metrics = _metric_matrices(2.0 * R, N)
+    v_plain = localizer_value("mai", H, R, N)
+    v_cached = localizer_value("mai", H, R, N, metrics=metrics)
+    assert not np.isclose(v_plain, v_cached)
+    assert_allclose(v_cached, localizer_value("mai", H, 2.0 * R, N), rtol=1e-12)
+
+
+# --------------------------------------------------------------------------- #
+# 9. Rank handling: the scan must use the same regularised, rank-truncated
+#    inverse as the filters it returns.
+# --------------------------------------------------------------------------- #
+def _rank_deficient_cov(fwd, info, loc, ori, n_null=6, snr=16.0, seed=0):
+    """Data covariance whose rank deficiency is invisible to the whitener.
+
+    Mimics ICA/SSP-cleaned data whose projectors never reached ``info['projs']``:
+    ``n_null`` spatial directions -- chosen orthogonal to the source topography,
+    so the source itself survives intact -- are removed from the covariance while
+    the noise covariance stays full rank.
+    """
+    G = fwd["sol"]["data"]
+    n_ch = G.shape[0]
+    h = G[:, 3 * loc : 3 * loc + 3] @ (np.asarray(ori, float) / np.linalg.norm(ori))
+    sig = np.outer(h, h)
+    R = np.eye(n_ch) + snr * n_ch / np.trace(sig) * sig
+    V = np.random.default_rng(seed).standard_normal((n_ch, n_null))
+    q = h / np.linalg.norm(h)
+    V -= np.outer(q, q @ V)  # keep the source out of the removed subspace
+    V = np.linalg.qr(V)[0]
+    P = np.eye(n_ch) - V @ V.T
+    projs = list(info["projs"])
+    data_cov = mne.Covariance(P @ R @ P, info["ch_names"], [], projs, nfree=1)
+    noise_cov = mne.Covariance(np.eye(n_ch), info["ch_names"], [], projs, nfree=1)
+    return data_cov, noise_cov
+
+
+def test_scan_inverse_agrees_with_returned_filters(sphere_fwd):
+    """Scan pseudo-Z equals the pseudo-Z of the filter row the scan returns.
+
+    The two are equal only if the scan inverts the whitened data covariance the
+    way :func:`make_mcmv` does -- regularised *and* rank-truncated. With a plain
+    ``inv(R_w + loading * I)`` the near-null directions survive and the two
+    disagree on a rank-deficient covariance.
+    """
+    fwd, info = sphere_fwd
+    loc, ori = 26, np.array([1.0, -1.0, 0.5])
+    data_cov, noise_cov = _rank_deficient_cov(fwd, info, loc, ori)
+
+    with pytest.warns(RuntimeWarning, match="rank-deficient"):
+        res = scan_mcmv(
+            info, fwd, data_cov, localizer="mai", n_sources=1, noise_cov=noise_cov
+        )
+    assert res["sources"] == [loc]
+
+    ch = res["filters"]["ch_names"]
+    R = _cov_as_matrix(data_cov, ch)
+    N = _cov_as_matrix(noise_cov, ch)
+    w = res["filters"]["weights"][-1]
+    assert_allclose(res["pseudo_z"][-1], (w @ R @ w) / (w @ N @ w), rtol=1e-9)
+
+
+def test_scan_rejects_more_sources_than_data_rank(sphere_fwd):
+    """``n_sources`` above the data-covariance rank is refused up front."""
+    fwd, info = sphere_fwd
+    loc, ori = 26, np.array([1.0, -1.0, 0.5])
+    data_cov, noise_cov = _rank_deficient_cov(fwd, info, loc, ori, n_null=24)
+    with pytest.raises(ValueError, match=r"n_sources=20 exceeds the data-covariance"):
+        scan_mcmv(info, fwd, data_cov, n_sources=20, noise_cov=noise_cov)
+
+
+def test_scan_rank_conventions(sphere_fwd):
+    """``rank`` is translated for each consumer, and follows MNE's convention.
+
+    ``'info'`` is valid for the whitener but not for the covariance inverse, so
+    it only works if the two conventions are split rather than passed through.
+    """
+    fwd, info = sphere_fwd
+    loc = 12
+    cov = _implanted_cov(fwd, info, [loc], [[1, 0, 0]], snr=16.0)
+    assert scan_mcmv(info, fwd, cov, n_sources=1, rank="info")["sources"] == [loc]
+    with pytest.raises(TypeError, match="rank must be an instance of"):
+        scan_mcmv(info, fwd, cov, n_sources=1, rank=5)
+
+
+def test_scan_validates_reg_before_scanning(sphere_fwd, monkeypatch):
+    """``reg`` is checked before the grid scan, not after it."""
+    fwd, info = sphere_fwd
+    cov = _implanted_cov(fwd, info, [12], [[1, 0, 0]])
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("the grid scan must not start with an invalid reg")
+
+    monkeypatch.setattr("advance_beamlab._localizers.optimal_orientation", _boom)
+    with pytest.raises(ValueError, match=r"reg must be in \[0, 1\]"):
+        scan_mcmv(info, fwd, cov, n_sources=1, reg=1.5)
+
+
+# --------------------------------------------------------------------------- #
+# 10. Degenerate grid locations are skipped, never selected.
+# --------------------------------------------------------------------------- #
+def test_scan_skips_location_with_nonfinite_leadfield(sphere_fwd):
+    """A location whose leadfield block is non-finite is skipped, not fatal.
+
+    ``scipy.linalg.eigh`` reports this as a plain ``ValueError`` rather than a
+    ``LinAlgError``, so it is only survivable if both are caught.
+    """
+    fwd, info = sphere_fwd
+    fwd = deepcopy(fwd)
+    loc, ori, bad = 26, np.array([1.0, -1.0, 0.5]), 5
+    cov = _implanted_cov(fwd, info, [loc], [ori], snr=16.0)
+    fwd["sol"]["data"][:, 3 * bad : 3 * bad + 3] = np.nan
+
+    res = scan_mcmv(info, fwd, cov, localizer="mai", n_sources=1)
+    assert res["sources"] == [loc]
+    assert np.isnan(res["maps"][0][bad])
+    assert np.isfinite(res["maps"][0][loc])
+
+
+def test_scan_ignores_nan_localizer_values(sphere_fwd):
+    """A location evaluating to NaN never wins the argmax.
+
+    ``numpy.linalg.solve`` propagates NaN silently instead of raising, so the
+    fixed-orientation path can produce a NaN localizer value; ``np.argmax`` would
+    return that location.
+    """
+    fwd, info = sphere_fwd
+    fwd_fix = mne.convert_forward_solution(fwd, force_fixed=True, surf_ori=True)
+    fwd_fix = deepcopy(fwd_fix)
+    G = fwd_fix["sol"]["data"]
+    loc, bad = 18, 40
+    h = G[:, loc]
+    n_ch = G.shape[0]
+    R = np.eye(n_ch) + 12.0 * np.outer(h, h) / (h @ h)
+    cov = mne.Covariance(R, info["ch_names"], [], list(info["projs"]), nfree=1)
+    fwd_fix["sol"]["data"][:, bad] = np.nan
+
+    res = scan_mcmv(info, fwd_fix, cov, localizer="mai", n_sources=1)
+    assert res["sources"] == [loc]
+    assert np.isnan(res["maps"][0][bad])
+
+
+# --------------------------------------------------------------------------- #
+# 11. ``verbose`` is honoured (the decorator is present).
+# --------------------------------------------------------------------------- #
+def test_scan_verbose_controls_logging(sphere_fwd):
+    """verbose='debug' emits the per-iteration trace; the default does not."""
+    fwd, info = sphere_fwd
+    cov = _implanted_cov(fwd, info, [12], [[1, 0, 0]])
+
+    with catch_logging() as log:
+        scan_mcmv(info, fwd, cov, localizer="mai", n_sources=1, verbose="debug")
+    assert "Iteration 1/1" in log.getvalue()
+
+    with catch_logging() as log:
+        scan_mcmv(info, fwd, cov, localizer="mai", n_sources=1, verbose="error")
+    assert "Iteration 1/1" not in log.getvalue()
+
+
+# --------------------------------------------------------------------------- #
+# 12. Orientations come back in head coordinates for either representation.
+# --------------------------------------------------------------------------- #
+def _rotate_to_local_frame(fwd, seed=0):
+    """Re-express a free-orientation forward in a random per-source local frame.
+
+    Returns a physically identical forward with ``surf_ori=True``: each source's
+    three gain columns are expressed in a local frame whose axes, in head
+    coordinates, are the rows of that source's ``source_nn`` block. This is the
+    representation :func:`mne.convert_forward_solution` produces for a surface
+    source space.
+    """
+    rng = np.random.default_rng(seed)
+    fwd = deepcopy(fwd)
+    G = fwd["sol"]["data"]
+    nn = np.asarray(fwd["source_nn"], dtype=np.float64).copy()
+    for s in range(fwd["nsource"]):
+        Q = np.linalg.qr(rng.standard_normal((3, 3)))[0]  # rows = local axes
+        G[:, 3 * s : 3 * s + 3] = G[:, 3 * s : 3 * s + 3] @ Q.T
+        nn[3 * s : 3 * s + 3] = Q
+    fwd["source_nn"] = nn
+    fwd["surf_ori"] = True
+    return fwd
+
+
+def test_scan_returns_head_coordinate_orientations(sphere_fwd):
+    """The same physical forward gives the same orientation in either frame."""
+    fwd, info = sphere_fwd
+    loc, ori = 26, np.array([1.0, -1.0, 0.5])
+    cov = _implanted_cov(fwd, info, [loc], [ori], snr=16.0)
+    fwd_rot = _rotate_to_local_frame(fwd)
+
+    res = scan_mcmv(info, fwd, cov, localizer="mai", n_sources=1)
+    res_rot = scan_mcmv(info, fwd_rot, cov, localizer="mai", n_sources=1)
+
+    assert res_rot["sources"] == res["sources"] == [loc]
+    # Head-coordinate orientations agree up to the eigenvector sign.
+    assert_allclose(
+        np.abs(res_rot["orientations"][0] @ res["orientations"][0]), 1.0, atol=1e-6
+    )
+    # ... and therefore so do the filters built from them.
+    assert_allclose(
+        np.abs(res_rot["filters"]["weights"]),
+        np.abs(res["filters"]["weights"]),
+        rtol=1e-6,
+    )

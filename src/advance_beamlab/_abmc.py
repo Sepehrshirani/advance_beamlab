@@ -141,7 +141,9 @@ def _noise_scaling(info, ch_names, noise_cov):
 
 
 def _model_precision(leadfield, alpha, lam):
-    r"""Return :math:`R^{-1}` and :math:`\log|R|` for :math:`R=G\alpha G^\mathsf{T}+\Lambda`.
+    r"""Return the inverse and the log-determinant of :math:`R`.
+
+    Here :math:`R = G\alpha G^\mathsf{T} + \Lambda`.
 
     Both come from a single Cholesky factorisation. Taking the log-determinant
     from the factor is exact and warning-free, whereas evaluating
@@ -302,6 +304,13 @@ def sbl_covariance(
     # Floor keeping R strictly positive definite (and so Cholesky-factorable)
     # even if a channel's learned noise variance collapses.
     lam_floor = _EPS * trace_c / n_channels
+    # Scaling data by ``s`` shifts log|R| by a constant M log(s^2), so a
+    # *relative* stopping rule on the bare Eq. 6 cost would stop after a
+    # different number of iterations for the same data in different units.
+    # Referring the cost to an isotropic covariance of the same total power
+    # removes that constant and leaves the comparison unit free; it is an
+    # additive constant, so the minimiser is untouched.
+    cost_offset = n_channels * np.log(trace_c / n_channels)
 
     prev_cost = np.inf
     converged = False
@@ -309,7 +318,7 @@ def sbl_covariance(
         precision, logdet = _model_precision(g, alpha, lam)
 
         # Type-II ML cost F = tr(C R^-1) + log|R| (Eq. 6).
-        cost = float(np.einsum("ij,ji->", c, precision) + logdet)
+        cost = float(np.einsum("ij,ji->", c, precision) + logdet - cost_offset)
         if (
             np.isfinite(cost)
             and np.isfinite(prev_cost)
@@ -686,7 +695,7 @@ def make_abmc(
     coupling = float(np.max(np.abs(P * gc / np.clip(gg, _TINY, None))))
     if coupling < 1e-6:
         warnings.warn(
-            f"the template constraint is numerically inert (P g^T c / g^T g is "
+            "the template constraint is numerically inert (P g^T c / g^T g is "
             f"at most {coupling:.2e}); ABMC reduces to an iterative LCMV "
             "beamformer. Raise P, or check that the template is not orthogonal "
             "to the data.",
