@@ -31,10 +31,20 @@ REG = 0.05
 # --------------------------------------------------------------------------- #
 @pytest.fixture(scope="module")
 def fwd_info():
-    """A small free-orientation EEG forward on a sphere + its Info."""
+    """A small free-orientation EEG forward on a sphere + its Info.
+
+    The Info carries an average EEG reference projector, which MNE requires for
+    inverse modelling (the forward is computed against one) and which
+    :func:`make_mcmv` enforces just as :func:`mne.beamformer.make_lcmv` does.
+    """
     montage = mne.channels.make_standard_montage("standard_1020")
     info = mne.create_info(montage.ch_names[:32], 200.0, "eeg")
     info.set_montage("standard_1020")
+    info = (
+        mne.io.RawArray(np.zeros((len(info["ch_names"]), 2)), info, verbose=False)
+        .set_eeg_reference("average", projection=True, verbose=False)
+        .info
+    )
     sphere = mne.make_sphere_model("auto", "auto", info)
     src = mne.setup_volume_source_space(sphere=sphere, pos=30.0)
     fwd = mne.make_forward_solution(info, None, src, sphere, eeg=True, meg=False)
@@ -103,7 +113,6 @@ def test_core_matches_mne_vector_lcmv(fwd_info):
     """
     fwd, info = fwd_info
     data_cov = _random_cov(info)
-    R = np.asarray(data_cov.data)
     filt = make_lcmv(
         info,
         fwd,
@@ -115,8 +124,16 @@ def test_core_matches_mne_vector_lcmv(fwd_info):
     )
     W_lcmv = filt["weights"]  # (n_src * 3, n_ch)
 
-    G = fwd["sol"]["data"]
-    Rinv, _, _ = _reg_pinv(R, reg=REG, rank="full")
+    # ``make_lcmv`` applies ``info['projs']`` -- here the average EEG reference --
+    # to both the leadfield and the covariance before solving. Apply the same
+    # projection so the manual comparison is like for like, and let ``_reg_pinv``
+    # estimate the rank, since projecting makes the covariance rank-deficient.
+    from mne._fiff.proj import make_projector
+
+    proj, _, _ = make_projector(info["projs"], info["ch_names"])
+    G = proj @ fwd["sol"]["data"]
+    R = proj @ np.asarray(data_cov.data) @ proj.T
+    Rinv, _, _ = _reg_pinv(R, reg=REG, rank=None)
     for loc in (0, 5, 11):
         L = G[:, 3 * loc : 3 * loc + 3]
         W_mcmv = _compute_mcmv_weights(L, Rinv)  # (3, n_ch)

@@ -595,6 +595,7 @@ def make_mcmv(
     # an ad-hoc model defined on all of ``info`` and needs no intersection).
     common_ch, R = _intersect_noise_cov(common_ch, R, noise_cov)
     _check_noise_cov_required(info, common_ch, noise_cov)
+    _check_eeg_reference(info, common_ch)
 
     n = sources.size
     if n > len(common_ch):
