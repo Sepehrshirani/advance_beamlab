@@ -19,8 +19,12 @@ download):
 - ``C`` is genuinely coupled to ``B`` (they share a slow amplitude envelope),
   while ``A`` carries an independent envelope.
 
-So the *true* ``A``--``B`` coupling is essentially zero. Yet three things can
-create a spurious ``A``--``B`` edge:
+``A`` and ``B`` therefore share no common drive. Their *realised* envelope
+correlation over a finite recording is not exactly zero -- an envelope is slowly
+varying, so a recording holds only a limited number of independent envelope
+samples and their sample correlation scatters about zero -- but that realised
+value is known exactly here, and it is the target a good estimator should
+reproduce. Yet two things can push an estimate away from it:
 
 1. **Direct leakage / cancellation** -- a single-source LCMV reconstructs each
    region with an independent filter, so :math:`\hat s_A` is a mixture of every
@@ -247,31 +251,45 @@ print(f"{'APW-MCMV':14s}{conn_apw[0, 1]:16.3f}{conn_apw[1, 2]:16.3f}")
 print(f"\nleakage alpha_C:  PW-MCMV = {alpha_c_pw:.3f}   APW-MCMV = {alpha_c_apw:.1e}")
 
 # %%
-# **The spurious edge and the genuine edge.** The left panel is the false A-B
-# connection: LCMV reports a large spurious value, PW-MCMV shrinks it (direct
-# leakage removed) but leaves a residual bias, and APW-MCMV recovers the true
-# near-zero value (indirect leakage removed). The right panel confirms the
-# genuine C-B coupling is preserved throughout.
+# **How far each estimate is from the truth.** What matters is the *error*, not
+# the raw value, so that is what is plotted: :math:`|\hat r - r_{\mathrm{true}}|`
+# for each edge.
+#
+# Note the ground-truth A-B correlation is not exactly zero. ``A`` and ``B`` are
+# driven by independent envelopes, but an envelope is by construction slowly
+# varying, so a finite recording contains only a limited number of independent
+# envelope samples and their sample correlation lands a little away from zero by
+# chance. That realised value, not zero, is the target every method should hit --
+# and it is printed above.
+#
+# LCMV is far off on the A-B edge and gets the sign wrong. PW-MCMV removes the
+# direct leakage and closes most of the gap. APW-MCMV, which additionally nulls
+# the conductor ``C``, recovers the realised value essentially exactly. The right
+# panel confirms none of this costs anything on the genuine C-B coupling.
 
 methods = ["LCMV", "PW-MCMV", "APW-MCMV"]
 ab_values = [lcmv_ab, conn_pw[0, 1], conn_apw[0, 1]]
 cb_values = [lcmv_cb, conn_pw[1, 2], conn_apw[1, 2]]
-colors = ["#c44e52", "#dd8452", "#55a868"]
+ab_err = [abs(v - true_ab) for v in ab_values]
+cb_err = [abs(v - true_cb) for v in cb_values]
+# C0 = established baseline, C1 = intermediate, C3 = the method being introduced,
+# following the gallery-wide convention (Wong colourblind-safe cycle).
+colors = ["C0", "C1", "C3"]
 
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4.2))
-ax1.bar(methods, ab_values, color=colors)
-ax1.axhline(true_ab, ls="--", color="k", lw=1, label=f"ground truth ({true_ab:.2f})")
-ax1.set_title("A-B edge (true value ~ 0)")
-ax1.set_ylabel("envelope correlation")
-ax1.legend(loc="upper right", fontsize=9)
-ax1.axhline(0, color="k", lw=0.6)
-
-ax2.bar(methods, cb_values, color=colors)
-ax2.axhline(true_cb, ls="--", color="k", lw=1, label=f"ground truth ({true_cb:.2f})")
-ax2.set_title("C-B edge (genuine coupling)")
-ax2.set_ylim(0, 1.05)
-ax2.legend(loc="lower right", fontsize=9)
-fig.suptitle("PW-/APW-MCMV remove the spurious A-B edge, keep the genuine C-B edge")
+for ax, err, val, name in (
+    (ax1, ab_err, ab_values, "A-B edge (spurious)"),
+    (ax2, cb_err, cb_values, "C-B edge (genuine)"),
+):
+    bars = ax.bar(methods, err, color=colors, zorder=3)
+    ax.bar_label(bars, labels=[f"{v:+.3f}" for v in val], padding=3, fontsize=9)
+    ax.set_title(name, loc="left")
+    ax.set_ylim(0, max(max(ab_err), max(cb_err)) * 1.35)
+    ax.grid(axis="x", visible=False)
+ax1.set_ylabel(r"$|\hat r - r_{\mathrm{true}}|$")
+fig.suptitle(
+    "Error against the realised ground truth (bar labels are the estimates themselves)"
+)
 fig.tight_layout()
 
 # %%
@@ -284,7 +302,7 @@ fig2, ax = plt.subplots(figsize=(5, 4.2))
 ax.bar(
     ["PW-MCMV\n(leaks C)", "APW-MCMV\n(nulls C)"],
     [alpha_c_pw, max(alpha_c_apw, 1e-18)],
-    color=["#dd8452", "#55a868"],
+    color=["C1", "C3"],
 )
 ax.set_yscale("log")
 ax.set_ylabel(r"$|\alpha_C| = |\mathbf{w}_A^{\mathsf{T}} \mathbf{g}_C|$")

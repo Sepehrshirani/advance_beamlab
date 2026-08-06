@@ -21,9 +21,11 @@ the data -- so MCMV recovers the full amplitude at any correlation.
 
 Two points are worth stating because they are easy to get wrong. First, this
 cancellation does **not** require the sources to be spatially close: it is driven
-by temporal correlation, not leadfield overlap, and two well-separated
-(near-orthogonal) sources are cancelled just as strongly as neighbouring ones.
-Second, it is an *idealised, high-SNR* effect. Sensor noise and covariance
+by temporal correlation, not by leadfield overlap. The pair used below sits 8 cm
+apart, and the example prints their normalised leadfield inner product so you can
+see for yourself that cancellation is severe at a separation where the two
+topographies are still far from identical. Second, it is an *idealised, high-SNR*
+effect. Sensor noise and covariance
 regularisation both push the recovered amplitude back up towards its true value,
 which is exactly why the effect is dramatic in a clean simulation but mild on a
 regularised real-data recording of moderately correlated sources.
@@ -87,6 +89,11 @@ overlap = abs((g0 @ g1) / (np.linalg.norm(g0) * np.linalg.norm(g1)))
 print(
     f"source separation: {dist_cm[partner]:.1f} cm   |leadfield overlap|: {overlap:.2f}"
 )
+# The overlap is the cosine between the two topographies: 0 would be completely
+# distinguishable sensor patterns, 1 indistinguishable. The value printed above is
+# well short of 1, so the cancellation demonstrated below is not a consequence of
+# the two sources being hard to tell apart spatially -- it is driven entirely by
+# the correlation of their time courses, which is what the sweep varies.
 
 # %%
 # A helper that simulates one epoched dataset for a target correlation and

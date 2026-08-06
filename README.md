@@ -259,10 +259,19 @@ so all sensor types are commensurable.
 
 Two consequences worth internalising:
 
-- **Single sensor type** (e.g. a CTF gradiometer array): the whitener is
-  effectively a global scale that cancels out of the unit-gain filter, so
-  single-type results are unchanged. Whitening is harmless there and essential
-  everywhere else.
+- **Single sensor type** (e.g. a CTF gradiometer array): with no `noise_cov` the
+  ad-hoc model is a *scalar* multiple of the identity, so the whitener is a
+  global scale that cancels out of the unit-gain filter and the result is
+  unchanged. A **measured** single-type `noise_cov` is not a global scale, and
+  because the `reg` diagonal loading is applied in the whitened space it is not
+  equivariant under whitening: at `reg=0` the unit-gain filter is exactly
+  invariant to the choice of noise covariance (verified to 1e-13), but at the
+  default `reg=0.05` the weights change materially — about 30% on the MNE
+  `sample` gradiometer array. Whitening never mixes incommensurable units, but it
+  is not a no-op for a single sensor type once `reg > 0`.
+  Note also that MNE counts magnetometers and gradiometers as *two* types, so a
+  combined MEG array requires a `noise_cov`; `make_mcmv` raises exactly as
+  `make_lcmv` does if one is not supplied.
 - **Per-type rank matters.** A single global eigenvalue threshold would discard
   the smaller-unit type as if it were the null space; the rank must be resolved
   *per sensor type*. The package uses `mne.cov.compute_whitener`, the same

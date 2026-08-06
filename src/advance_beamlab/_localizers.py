@@ -137,7 +137,7 @@ def localizer_value(name, H, R, N, *, evoked_cov=None, metrics=None):
         The covariance of the epoch-averaged field :math:`\bar{\mathbf{R}}`,
         required for the event-related localizers ``'mer'`` and ``'rmer'``.
     metrics : dict | None
-        Pre-computed metric matrices from :func:`_metric_matrices` for these
+        Pre-computed Table-2 metric matrices for these
         covariances. When given, ``R``, ``N`` and ``evoked_cov`` are not used to
         rebuild them; this is how a grid scan avoids re-inverting ``R`` at every
         location. Leave as ``None`` to compute them from the covariances.
@@ -202,7 +202,7 @@ def optimal_orientation(name, H_ref, H_loc, R, N, *, evoked_cov=None, metrics=No
     evoked_cov : ndarray | None
         The averaged-field covariance, required for ``'mer'`` and ``'rmer'``.
     metrics : dict | None
-        Pre-computed metric matrices from :func:`_metric_matrices`, as in
+        Pre-computed Table-2 metric matrices, as in
         :func:`localizer_value`; supply them to avoid re-inverting ``R`` at every
         location of a grid scan.
 

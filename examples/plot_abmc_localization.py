@@ -1,59 +1,58 @@
-"""
+r"""
+.. _ex-abmc-localization:
+
+===================================
 ABMC: localising spike-like sources
 ===================================
 
 The adaptive Bayesian beamformer with multiple constraints (ABMC) targets
 low-power, spike-like sources -- epileptic interictal discharges and delayed
-responses to stimulation -- that a power-based LCMV beamformer localises poorly.
+responses to stimulation -- that a power-based beamformer localises poorly.
+
+The reason is that the two methods optimise different things. An LCMV beamformer
+scans for **output power**, so at low SNR its map is driven by whatever carries
+the most variance. ABMC instead scans for **agreement with a known waveform**:
+its localiser is :math:`|\mathrm{corr}(\mathbf{w}^{\mathsf T}\mathbf{X}, u)|`,
+the correlation between the beamformer output and a supplied template, at the
+best lag. When the target is a transient of known morphology buried in noise,
+that is a far more selective statistic than power.
 
 This example shows four things on a spherical EEG model:
 
-1. **Localisation maps** at a single source -- ABMC's template-match map versus the
-   LCMV power map across the whole grid.
+1. **Localisation maps** at a single source -- ABMC's template-match map versus a
+   noise-normalised LCMV power map across the whole grid.
 2. **Accuracy across the volume** -- the same spike placed at eight locations, with
    the ABMC and LCMV localisation error at each.
 3. **Reconstructed source** -- the recovered time course from both filters.
 4. **A dictionary of templates** -- :func:`~advance_beamlab.make_abmc_dictionary`
    localising several desired waveforms in one call.
+
+The LCMV comparator throughout is :func:`mne.beamformer.make_lcmv` with
+``weight_norm='unit-noise-gain'``. That normalisation matters: the *unnormalised*
+unit-gain output power :math:`1/(\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{g})`
+scales as :math:`\|\mathbf{g}\|^{-2}` and is therefore strongly depth-biased, so on
+a spherical model it always peaks at the most superficial grid point regardless of
+the data. Comparing against that would flatter ABMC for the wrong reason.
 """
 
 # Authors: Sepehr Shirani and Muzhi Wang <sepehrshirani@gmail.com>
 # License: BSD-3-Clause
 
+# %%
+
 import matplotlib.pyplot as plt
 import mne
 import numpy as np
+from mne.beamformer import apply_lcmv_cov, make_lcmv
 
 from advance_beamlab import make_abmc, make_abmc_dictionary
 
 mne.set_log_level("ERROR")
 
-# Journal-style figure defaults (high-DPI, clean spines, distinctive palette).
-plt.rcParams.update(
-    {
-        "figure.dpi": 140,
-        "savefig.dpi": 220,
-        "savefig.bbox": "tight",
-        "font.size": 11,
-        "axes.titlesize": 12,
-        "axes.titleweight": "bold",
-        "axes.labelsize": 11,
-        "axes.linewidth": 0.9,
-        "axes.spines.top": False,
-        "axes.spines.right": False,
-        "axes.axisbelow": True,
-        "axes.grid": True,
-        "grid.color": "#9e9e9e",
-        "grid.alpha": 0.28,
-        "grid.linewidth": 0.6,
-        "legend.frameon": False,
-        "legend.fontsize": 9.5,
-        "xtick.direction": "out",
-        "ytick.direction": "out",
-        "lines.linewidth": 2.0,
-    }
-)
-C_ABMC, C_LCMV, C_TRUE = "#0072B2", "#D55E00", "#111111"  # Wong colourblind-safe
+# The gallery applies the project-wide journal style (see doc/conf.py), whose
+# colour cycle is the Wong colourblind-safe palette. Across the gallery C0 is the
+# established/baseline method and C3 the method being introduced.
+C_ABMC, C_LCMV, C_TRUE = "C3", "C0", "#111111"
 
 
 def spike(n, t0, width=8.0):
@@ -63,20 +62,45 @@ def spike(n, t0, width=8.0):
     return x / np.abs(x).max()
 
 
-def lcmv_power_map(data, info, leadfield, reg=0.05):
-    """A power-based LCMV localiser map (one value per grid point)."""
-    cov = data @ data.T / data.shape[1]
-    n_ch = cov.shape[0]
-    inv = np.linalg.inv(cov + reg * np.trace(cov) / n_ch * np.eye(n_ch))
-    return 1.0 / np.einsum("mk,mn,nk->k", leadfield, inv, leadfield)
+def lcmv_power_map(data, info, fwd, reg=0.05):
+    """A noise-normalised LCMV power map, one value per grid point.
+
+    Uses MNE's own beamformer with ``weight_norm='unit-noise-gain'``, which
+    removes the depth bias of the raw unit-gain output power and is what an
+    expert would use as the power-based comparator here.
+    """
+    evoked = mne.EvokedArray(data, info, tmin=0.0, verbose=False)
+    cov = mne.compute_covariance(
+        mne.EpochsArray(data[np.newaxis], info, verbose=False),
+        method="empirical",
+        verbose=False,
+    )
+    filters = make_lcmv(
+        info,
+        fwd,
+        cov,
+        reg=reg,
+        noise_cov=None,
+        pick_ori=None,
+        weight_norm="unit-noise-gain",
+        verbose=False,
+    )
+    del evoked
+    return apply_lcmv_cov(cov, filters, verbose=False).data[:, 0]
 
 
 # %%
-# A spherical EEG forward model (fixed orientation -> scalar leadfield).
+# A spherical EEG forward model (fixed orientation -> scalar leadfield). An
+# average reference projector is mandatory for inverse modelling in MNE.
 montage = mne.channels.make_standard_montage("standard_1020")
 ch = list(dict.fromkeys(montage.ch_names))
 info = mne.create_info(ch, 250.0, "eeg")
 info.set_montage(montage)
+info = (
+    mne.io.RawArray(np.zeros((len(ch), 2)), info, verbose=False)
+    .set_eeg_reference("average", projection=True, verbose=False)
+    .info
+)
 sphere = mne.make_sphere_model("auto", "auto", info)
 src = mne.setup_volume_source_space(sphere=sphere, pos=20.0)
 fwd = mne.convert_forward_solution(
@@ -91,8 +115,10 @@ n_times = 400
 
 # %%
 # Place the same biphasic spike at eight grid locations spread across the volume,
-# and localise each with ABMC (template match) and a power-based LCMV map. The
-# template is the same morphology, shifted, so the lag must also be recovered. We
+# and localise each with ABMC (template match) and with the noise-normalised LCMV
+# power map. The sensor noise is 1.3x the peak signal, so this is the low-SNR
+# regime the method targets. The template is the same morphology *shifted in
+# time* relative to the injected spike, so the lag has to be recovered too. We
 # keep the maps from the source where LCMV struggles most, to visualise below.
 depth = np.linalg.norm(rr - rr.mean(0), axis=1)
 shell = np.where(depth > np.percentile(depth, 55))[0]
@@ -107,7 +133,7 @@ for i_src in locations:
     res = make_abmc(info, fwd, data, template)
     a_map, a_pk = res.template_match, int(np.argmax(res.template_match))
     a_err = np.linalg.norm(rr[a_pk] - rr[i_src]) * 100
-    l_map = lcmv_power_map(data, info, leadfield)
+    l_map = lcmv_power_map(data, info, fwd)
     l_pk = int(np.argmax(l_map))
     l_err = np.linalg.norm(rr[l_pk] - rr[i_src]) * 100
     abmc_err.append(a_err)
@@ -126,14 +152,24 @@ for i_src in locations:
 print(f"mean error  ABMC {np.mean(abmc_err):.1f} cm   LCMV {np.mean(lcmv_err):.1f} cm")
 
 # %%
-# **Localisation maps** at the hardest source. ABMC's template-match map peaks
-# sharply at the true location; the LCMV power map, driven by noise, peaks away.
+# **Localisation maps**, shown at the single source where the power map does
+# worst -- deliberately the least flattering case for both methods, not a typical
+# one. Two things are visible. The ABMC map has far more *contrast*: its median
+# value sits well below its peak, because a grid point only scores highly if its
+# reconstructed time course genuinely resembles the template. The LCMV map is
+# nearly flat, sitting in a narrow high band across the whole grid -- at this SNR
+# many locations reconstruct a similar amount of variance, so power alone barely
+# discriminates between them. Even here, where ABMC does not land exactly on the
+# true source, its peak is several centimetres closer than the power map's.
+#
+# Note the x-axis is the grid index of a 3-D volume, so neighbouring indices are
+# not neighbouring locations; the sawtooth is that ordering, not noise.
 i_src = worst["i_src"]
 gi = np.arange(leadfield.shape[1])
 fig, axes = plt.subplots(2, 1, figsize=(9, 5.2), sharex=True)
 panels = [
     ("ABMC template-match map", worst["a_map"], worst["a_pk"], C_ABMC),
-    ("LCMV output-power map", worst["l_map"], worst["l_pk"], C_LCMV),
+    ("LCMV power map (unit-noise-gain)", worst["l_map"], worst["l_pk"], C_LCMV),
 ]
 for ax, (name, m, pk, col) in zip(axes, panels, strict=True):
     mm = m / m.max()
@@ -151,8 +187,11 @@ for ax, (name, m, pk, col) in zip(axes, panels, strict=True):
         mew=1.1,
         label=f"peak ({err:.1f} cm off)",
     )
-    ax.set(ylabel="normalised", ylim=(0, 1.08))
-    ax.set_title(name, loc="left")
+    # Headroom above 1.0 so the legend never sits on top of the curve.
+    ax.set(ylabel="normalised", ylim=(0, 1.42))
+    # Median/peak is the contrast of the map: low means a well-isolated peak,
+    # close to one means a flat map that barely discriminates.
+    ax.set_title(f"{name}  --  median/peak = {np.median(mm):.2f}", loc="left")
     ax.legend(loc="upper right", ncol=2)
     ax.margins(x=0.01)
     ax.grid(axis="x", visible=False)
@@ -160,8 +199,9 @@ axes[-1].set_xlabel("source grid index")
 fig.tight_layout()
 
 # %%
-# **Accuracy across the volume.** ABMC stays close everywhere; LCMV degrades badly
-# at the harder (often deeper) sources. Dashed lines mark the means.
+# **Accuracy across the volume.** ABMC stays close to the truth everywhere, while
+# the power-based map degrades at the harder sources. A bar of zero height means
+# that method hit the true grid point exactly. Dashed lines mark the means.
 xp = np.arange(len(locations))
 fig, ax = plt.subplots(figsize=(9, 4.2))
 ax.axhline(np.mean(abmc_err), color=C_ABMC, ls="--", lw=1.1, alpha=0.7)
@@ -223,7 +263,8 @@ ax.plot(
 )
 ax.set(xlabel="time (ms)", ylabel="source amplitude (a.u.)")
 ax.set_title("Reconstructed source at the true location", loc="left")
-ax.legend(loc="upper right", ncol=3)
+# Legend above the axes so it cannot cover the traces.
+ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.14), ncol=3)
 fig.tight_layout()
 
 # %%

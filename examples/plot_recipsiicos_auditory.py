@@ -11,9 +11,19 @@ synchronous sources let it place a null that cancels them. ReciPSIICOS repairs
 the *data covariance* -- projecting out the cross-product (coupling) subspace --
 so that an ordinary LCMV no longer cancels them.
 
-This example contrasts a standard LCMV with ReciPSIICOS on the auditory
-response of the MNE sample dataset, whose left- and right-hemisphere auditory
-sources are strongly correlated.
+This example runs ReciPSIICOS end to end on real, mixed-sensor MEG -- the
+auditory response of the MNE sample dataset, whose left- and right-hemisphere
+sources are correlated across the N100 (r = +0.55) -- and contrasts it with a
+standard LCMV.
+
+A caveat stated up front, because the example reports it honestly below: on this
+recording a plain LCMV already recovers both hemispheres, so ReciPSIICOS does
+*not* beat it on hemispheric balance here. Signal cancellation is a high-SNR,
+high-correlation effect that regularisation suppresses. What this example does
+show is the whole real-data pipeline working: the rank curve and its 45-degree
+criterion, the projector, the noise whitening across magnetometers and
+gradiometers, and the virtual-sensor reduction. For the regime where the
+cancellation is dramatic, see :ref:`ex-mcmv-simulation`.
 
 Two practical points, both important on real data. The projector is built from
 the forward and must span where the data covariance's energy lives, so we use a
@@ -57,7 +67,11 @@ epochs = mne.Epochs(
     preload=True,
 )
 
-data_cov = mne.compute_covariance(epochs, tmin=0.05, tmax=0.2, method="shrunk")
+# The active window is the N100 (80-130 ms), where the bilateral auditory
+# response is genuinely correlated across hemispheres (r = +0.55 as recovered by
+# a joint MCMV filter). Over the wider 50-200 ms window the correlation washes
+# out to about zero, and no correlated-source method has anything to work on.
+data_cov = mne.compute_covariance(epochs, tmin=0.08, tmax=0.13, method="shrunk")
 noise_cov = mne.compute_covariance(epochs, tmin=None, tmax=0.0, method="shrunk")
 
 # %%
@@ -68,7 +82,7 @@ noise_cov = mne.compute_covariance(epochs, tmin=None, tmax=0.0, method="shrunk")
 fwd = mne.read_forward_solution(meg / "sample_audvis-meg-eeg-oct-6-fwd.fif")
 fwd = mne.pick_types_forward(fwd, meg=True, eeg=False)
 labels = [
-    Label(fwd["src"][h]["vertno"][::16], hemi=hemi, subject="sample")
+    Label(fwd["src"][h]["vertno"][::24], hemi=hemi, subject="sample")
     for h, hemi in enumerate(("lh", "rh"))
 ]
 fwd = restrict_forward_to_label(fwd, labels)
@@ -131,9 +145,24 @@ stc_lcmv = apply_lcmv_cov(data_cov, lcmv)
 stc_recip = apply_lcmv_cov(data_cov, recip)
 
 # %%
-# Compare the hemispheric balance. A plain LCMV tends to suppress one side of a
-# correlated pair; ReciPSIICOS retains both, so the ratio of the weaker to the
-# stronger hemisphere peak is closer to one.
+# Compare the hemispheric balance -- the ratio of the weaker to the stronger
+# hemisphere peak. The textbook expectation is that a plain LCMV suppresses one
+# side of a correlated pair while ReciPSIICOS retains both.
+#
+# **That is not what happens on this recording, and it is worth being explicit
+# about it.** On the ``sample`` auditory data, at this SNR and with the usual
+# ``reg=0.05``, a plain LCMV already recovers both hemispheres almost equally, so
+# there is essentially no imbalance left for ReciPSIICOS to repair -- and the
+# projection, which necessarily discards part of the covariance, comes at a small
+# cost on this particular metric. Signal cancellation is an idealised, high-SNR,
+# high-correlation effect: regularisation and sensor noise both push the
+# recovered amplitudes back up. :ref:`ex-mcmv-simulation` shows the regime where
+# the effect is dramatic, with the correlation dialled directly.
+#
+# The honest summary is that this dataset demonstrates that ReciPSIICOS *runs
+# correctly end to end on real, mixed-sensor MEG* -- the rank curve, the
+# projector, the whitening and the virtual-sensor reduction -- rather than that
+# it beats LCMV here.
 
 
 def hemi_peaks(stc):
@@ -166,10 +195,12 @@ except Exception as exc:  # 3-D rendering is optional
     print(f"3-D brain plot skipped (no working 3-D backend): {exc}")
 
 # %%
-# Finally, the reconstructed time courses at the two hemispheric peaks. This is
-# the same LCMV-versus-repaired-covariance comparison as the power map, now as a
-# waveform: where a plain LCMV attenuates one side of the correlated pair, the
-# ReciPSIICOS filter recovers a fuller time course on both.
+# Finally, the reconstructed time courses at the two hemispheric peaks -- the
+# same comparison as the power map, now as a waveform. The ratio in each panel
+# title is the ReciPSIICOS peak over the LCMV peak. Consistent with the balance
+# figures above, the two filters largely agree on this dataset; the point of the
+# panel is that the repaired covariance yields a sane, well-formed time course on
+# real data, not that it recovers a larger one here.
 
 evoked = epochs.average()
 tc_lcmv = apply_lcmv(evoked, lcmv)
@@ -188,8 +219,11 @@ for ax, idx, hemi in zip(axes, peaks, ("Left", "Right"), strict=True):
     r_peak = np.abs(tc_recip.data[idx, post]).max()
     l_peak = np.abs(tc_lcmv.data[idx, post]).max()
     ratio = r_peak / l_peak
-    ax.plot(times, tc_lcmv.data[idx], color="C0", label="LCMV")
-    ax.plot(times, tc_recip.data[idx], color="C3", label="ReciPSIICOS")
+    # ``pick_ori='max-power'`` makes MNE solve a non-Hermitian eigenproblem, so
+    # the weights (and hence these time courses) come back complex with a
+    # negligible imaginary part; take the real part explicitly to plot.
+    ax.plot(times, tc_lcmv.data[idx].real, color="C0", label="LCMV")
+    ax.plot(times, tc_recip.data[idx].real, color="C3", label="ReciPSIICOS")
     ax.axvline(0, color="k", lw=0.5)
     ax.set(
         title=f"{hemi} auditory peak  (ReciPSIICOS/LCMV = {ratio:.2f})",

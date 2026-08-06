@@ -379,7 +379,7 @@ class ABMCResult:
         The localization map -- the per-grid-point template match (see
         ``template_match``), as a single-time source estimate for plotting. Its
         class follows the source-space type of the forward, so it can be passed
-        to :meth:`~mne.SourceEstimate.plot`, :meth:`~mne.SourceEstimate.morph`
+        to :meth:`~mne.SourceEstimate.plot`, source morphing
         and :func:`mne.extract_label_time_course` unchanged.
     template_match : ndarray, shape (n_sources,)
         Primary localizer: :math:`|\mathrm{corr}(W^\mathsf{T}X, u_{j^*})|`, the

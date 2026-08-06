@@ -562,7 +562,7 @@ def augmented_pairwise_mcmv_connectivity(
     2. For every significant pair, add up to ``max_neighbours`` neighbours of
        *each* source within ``radius`` that carry significant connections,
        chosen by their number of significant connections (see
-       :func:`_select_neighbours`). This yields a beamformer of order 2 to
+       the neighbour-selection rule below). This yields a beamformer of order 2 to
        ``2 + 2 * max_neighbours`` (2 to 6 with the defaults).
     3. Rebuild the MCMV on the augmented source set, reconstruct the two time
        courses of the pair, and recompute their connectivity.
