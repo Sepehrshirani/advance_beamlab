@@ -49,6 +49,14 @@ def sphere_setup():
     info = mne.create_info(ch_names, sfreq=200.0, ch_types="eeg")
     info.set_montage(montage)
     info["bads"] = []
+    # An average EEG reference projector is mandatory for inverse modelling --
+    # the forward is computed against one -- and MNE's own beamformers refuse
+    # data without it.
+    info = (
+        mne.io.RawArray(np.zeros((len(ch_names), 2)), info, verbose=False)
+        .set_eeg_reference("average", projection=True, verbose=False)
+        .info
+    )
 
     sphere = mne.make_sphere_model("auto", "auto", info, verbose=False)
     src = mne.setup_volume_source_space(sphere=sphere, pos=25.0, verbose=False)
@@ -90,14 +98,19 @@ def _simulate(info, fwd, sources, rho, *, n_epochs=40, n_times=120, seed=0):
     # Scale the source amplitude so the sensor field lands at _EEG_SCALE.
     amp = _EEG_SCALE / np.abs(lead).max()
 
+    # The response is phase-locked across epochs, so ``epochs.average()`` is a
+    # clean evoked field whose amplitude can be compared with the injected one.
+    # Only the sensor noise varies from epoch to epoch.
+    s = np.zeros((2, n_times))
+    s[0, active] = np.cos(2 * np.pi * 10 * times[active])
+    s[1, active] = np.cos(2 * np.pi * 10 * times[active] + phi)
+    signal = amp * (lead @ s)
+
     data = np.empty((n_epochs, n_channels, n_times))
     for e in range(n_epochs):
-        phase = rng.uniform(0, 2 * np.pi)
-        s = np.zeros((2, n_times))
-        s[0, active] = np.cos(2 * np.pi * 10 * times[active] + phase)
-        s[1, active] = np.cos(2 * np.pi * 10 * times[active] + phase + phi)
-        noise = 0.05 * _EEG_SCALE * rng.standard_normal((n_channels, n_times))
-        data[e] = amp * (lead @ s) + noise
+        data[e] = signal + 0.05 * _EEG_SCALE * rng.standard_normal(
+            (n_channels, n_times)
+        )
 
     epochs = mne.EpochsArray(
         data, info.copy(), tmin=times[0], baseline=None, verbose=False

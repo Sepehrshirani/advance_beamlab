@@ -442,6 +442,9 @@ def scan_mcmv(
     # built once for the whole scan instead of at every grid point. In the
     # whitened space N is the identity, which removes both dense inversions:
     # G = N^-1 = I and T = R^-1 N R^-1 = R^-1 R^-1.
+    # ``R_w``, ``N_w`` and ``Rbar_w`` are still handed to the localizers below so
+    # that their argument checks see a consistent call, but with ``metrics``
+    # supplied they are not used to rebuild anything.
     N_w = np.eye(n_white)  # whitened noise covariance
     metrics = {"S": Rinv_w, "G": N_w, "T": Rinv_w @ Rinv_w}
     if Rbar_w is not None:
@@ -463,7 +466,13 @@ def scan_mcmv(
                 H_loc = G_w[:, 3 * i : 3 * i + 3]
                 try:
                     u = optimal_orientation(
-                        localizer, H_ref, H_loc, R_w, N_w, metrics=metrics
+                        localizer,
+                        H_ref,
+                        H_loc,
+                        R_w,
+                        N_w,
+                        evoked_cov=Rbar_w,
+                        metrics=metrics,
                     )
                 except _SINGULAR_ERRORS:
                     n_skipped += 1
@@ -471,7 +480,9 @@ def scan_mcmv(
                 h = H_loc @ u
             H_full = np.column_stack([H_ref, h])
             try:
-                vals[i] = localizer_value(localizer, H_full, R_w, N_w, metrics=metrics)
+                vals[i] = localizer_value(
+                    localizer, H_full, R_w, N_w, evoked_cov=Rbar_w, metrics=metrics
+                )
             except _SINGULAR_ERRORS:
                 n_skipped += 1
                 continue
@@ -518,7 +529,10 @@ def scan_mcmv(
         if forward.get("surf_ori", False):
             nn = np.asarray(forward["source_nn"], dtype=np.float64)
             ori_out = np.array(
-                [nn[3 * s : 3 * s + 3].T @ u for s, u in zip(sources, ori_out, strict=True)]
+                [
+                    nn[3 * s : 3 * s + 3].T @ u
+                    for s, u in zip(sources, ori_out, strict=True)
+                ]
             )
         filters = make_mcmv(
             info,

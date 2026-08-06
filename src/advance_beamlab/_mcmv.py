@@ -285,6 +285,31 @@ def _intersect_noise_cov(common_ch, cov_matrix, noise_cov):
     return common_ch, cov_matrix
 
 
+def _check_eeg_reference(info, common_ch):
+    """Require an average EEG reference projector, as MNE's inverses do.
+
+    Beamforming EEG without an average reference is not well posed: the forward
+    model is computed against an average reference, so a differently referenced
+    recording is modelled with the wrong topographies.
+    :func:`mne.beamformer.make_lcmv` raises for this (via ``_check_reference``),
+    and so do we -- the messages below are MNE's verbatim, so the contract is
+    identical.
+    """
+    from mne import pick_info
+    from mne._fiff.pick import _electrode_types
+    from mne._fiff.proj import _needs_eeg_average_ref_proj
+
+    picks = [info["ch_names"].index(ch) for ch in common_ch]
+    info_pick = pick_info(info, picks, verbose=False)
+    if _needs_eeg_average_ref_proj(info_pick):
+        raise ValueError(
+            "EEG average reference (using a projector) is mandatory for "
+            "modeling, use the method set_eeg_reference(projection=True)"
+        )
+    if _electrode_types(info_pick) and info_pick.get("custom_ref_applied", False):
+        raise ValueError("Custom EEG reference is not allowed for inverse modeling.")
+
+
 def _check_noise_cov_required(info, common_ch, noise_cov):
     """Raise if several sensor types are present without a noise covariance.
 

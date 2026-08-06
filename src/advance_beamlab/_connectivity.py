@@ -38,10 +38,19 @@ et al. 2020, Discussion), so ``data`` and ``data_cov`` should be band-filtered;
 :math:`n`-source filter spends :math:`n` of its :math:`M` degrees of freedom on
 the constraints, degrading SNR.
 
-Connectivity metrics themselves are delegated to :mod:`mne_connectivity`
-(``envelope_correlation`` for resting-state amplitude coupling;
-``spectral_connectivity_epochs`` for coherence / PLV), so nothing already
-implemented there is duplicated.
+Coherence and the phase measures are delegated to
+:func:`mne_connectivity.spectral_connectivity_epochs`. The amplitude-envelope
+metric is computed here rather than delegated, because the paper's definition
+has a step :func:`mne_connectivity.envelope_correlation` does not expose: "the
+envelopes of the signals were computed by taking the absolute values of the
+analytic Hilbert transform of the signals and then low-pass filtering to 0.5 Hz"
+(Nunes et al. 2020, Sec. 2.5), and the correlations are computed on the
+downsampled envelopes. The low-pass cannot be applied from outside because
+``envelope_correlation`` takes the Hilbert transform internally, and it is not
+cosmetic: it is what makes the AR(1) surrogate null of
+:func:`ar1_surrogate_significance` -- which gates APW-MCMV -- correctly sized.
+With ``envelope_lowpass=None`` the estimator reduces exactly to
+``envelope_correlation``.
 """
 # Authors: Sepehr Shirani and Muzhi Wang <sepehrshirani@gmail.com>
 # License: BSD-3-Clause
@@ -49,15 +58,21 @@ implemented there is duplicated.
 from itertools import combinations
 
 import numpy as np
+from mne.filter import filter_data, next_fast_len, resample
 from mne.utils import _validate_type, logger, warn
+from scipy.signal import hilbert, lfilter
 
 from ._mcmv import apply_mcmv, make_mcmv
 
-# Metrics understood by :func:`_pair_connectivity`. "envelope" uses
-# mne_connectivity.envelope_correlation; the rest are passed through to
+# Metrics understood by :func:`_pair_connectivity`. "envelope" is computed here
+# (see the module docstring); the rest are passed through to
 # mne_connectivity.spectral_connectivity_epochs.
-_SPECTRAL_METHODS = ("coh", "cohy", "imcoh", "plv", "ciplv", "ppc", "pli", "wpli")
+_SPECTRAL_METHODS = ("coh", "imcoh", "plv", "ciplv", "ppc", "pli", "wpli")
 _CONN_METHODS = ("envelope",) + _SPECTRAL_METHODS
+# Metrics whose mne-connectivity output is complex. The connectivity matrices
+# returned by this module are real, so these are rejected rather than silently
+# truncated to their real part.
+_COMPLEX_METHODS = ("cohy",)
 
 
 def _as_pairs(n_sources):
@@ -67,9 +82,18 @@ def _as_pairs(n_sources):
     return list(combinations(range(n_sources), 2))
 
 
-def _validate_conn_params(method, sfreq, fmin, fmax):
-    """Validate the connectivity metric and its band arguments up front."""
+def _validate_conn_params(
+    method, sfreq, fmin, fmax, envelope_lowpass=None, envelope_resample=None
+):
+    """Validate the connectivity metric and its band / envelope arguments."""
     _validate_type(method, str, "method")
+    if method in _COMPLEX_METHODS:
+        raise ValueError(
+            f"method={method!r} returns complex coherency, which cannot be "
+            "represented in the real connectivity matrix returned here. Use "
+            "method='coh' for its magnitude or method='imcoh' for its "
+            "imaginary part."
+        )
     if method not in _CONN_METHODS:
         raise ValueError(f"method must be one of {_CONN_METHODS}, got {method!r}.")
     if method in _SPECTRAL_METHODS:
@@ -79,15 +103,23 @@ def _validate_conn_params(method, sfreq, fmin, fmax):
             raise ValueError(
                 f"method={method!r} requires a frequency band ``fmin`` and ``fmax``."
             )
+    elif sfreq is None and (
+        envelope_lowpass is not None or envelope_resample is not None
+    ):
+        raise ValueError(
+            "``envelope_lowpass`` and ``envelope_resample`` need ``sfreq`` to be "
+            "given; pass ``sfreq``, or set both to None to correlate the "
+            "unsmoothed envelopes."
+        )
 
 
 def _epoched(time_courses):
     """Return ``(n_epochs, n_signals, n_times)`` from an :func:`apply_mcmv` output.
 
     ``apply_mcmv`` returns ``(n_sources, n_times)`` for continuous input and
-    ``(n_epochs, n_sources, n_times)`` for epoched input; ``mne_connectivity``
-    always wants a leading epoch axis, so a single continuous segment becomes a
-    one-epoch array.
+    ``(n_epochs, n_sources, n_times)`` for epoched input; a connectivity
+    estimate always wants a leading epoch axis, so a single continuous segment
+    becomes a one-epoch array.
     """
     time_courses = np.asarray(time_courses)
     if time_courses.ndim == 2:
@@ -100,30 +132,110 @@ def _epoched(time_courses):
     )
 
 
+def _analytic_signal(data):
+    """Analytic signal of ``data`` along its last axis (zero-padded FFT)."""
+    n_times = data.shape[-1]
+    return hilbert(data, N=next_fast_len(n_times), axis=-1)[..., :n_times]
+
+
+def _prepare_envelope(magnitude, sfreq, envelope_lowpass, envelope_resample):
+    """Low-pass (and optionally downsample) an amplitude envelope.
+
+    Nunes et al. (2020), Sec. 2.5: the envelopes are low-pass filtered to
+    0.5 Hz and the correlations taken on the downsampled envelopes.
+    """
+    env = np.asarray(magnitude, float)
+    if envelope_lowpass is not None:
+        env = filter_data(env, sfreq, None, envelope_lowpass, verbose=False)
+    if envelope_resample is not None:
+        env = resample(
+            env, up=1.0, down=sfreq / envelope_resample, npad="auto", verbose=False
+        )
+    return env
+
+
+def _rowwise_pearson(x, y):
+    """Pearson correlation of ``x[i]`` with ``y[i]`` along the last axis."""
+    x = x - x.mean(axis=-1, keepdims=True)
+    y = y - y.mean(axis=-1, keepdims=True)
+    nx = np.linalg.norm(x, axis=-1)
+    ny = np.linalg.norm(y, axis=-1)
+    nx[nx == 0] = 1.0
+    ny[ny == 0] = 1.0
+    return np.sum(x * y, axis=-1) / nx / ny
+
+
+def _envelope_corr_matrix(
+    epoch, *, sfreq, orthogonalize, absolute, envelope_lowpass, envelope_resample
+):
+    """Envelope-correlation matrix of one ``(n_signals, n_times)`` segment.
+
+    With ``envelope_lowpass=None`` and ``envelope_resample=None`` this
+    reproduces :func:`mne_connectivity.envelope_correlation` exactly (for a
+    single epoch), including its pairwise-orthogonalisation variant; the
+    envelope smoothing of Nunes et al. (2020) is inserted between taking the
+    Hilbert magnitude and correlating.
+    """
+    if orthogonalize not in (False, "pairwise"):
+        raise ValueError(
+            f"orthogonalize must be False or 'pairwise', got {orthogonalize!r}."
+        )
+    analytic = _analytic_signal(np.asarray(epoch, float))
+    mag = _prepare_envelope(
+        np.abs(analytic), sfreq, envelope_lowpass, envelope_resample
+    )
+    n_signals = len(analytic)
+    if orthogonalize is False:
+        corr = np.empty((n_signals, n_signals))
+        for k in range(n_signals):
+            corr[k] = _rowwise_pearson(np.broadcast_to(mag[k], mag.shape), mag)
+        return np.abs(corr) if absolute else corr
+    # Pairwise orthogonalisation (Hipp et al., 2012): project the analytic
+    # signal of one region out of the other before enveloping, then correlate
+    # and symmetrise, as in mne_connectivity.envelope_correlation.
+    unit = analytic.conj() / np.abs(analytic)
+    corr = np.empty((n_signals, n_signals))
+    for k in range(n_signals):
+        orth = np.abs((analytic[k] * unit).imag)
+        orth[k] = 1.0  # self term: constant, contributes zero correlation
+        orth = _prepare_envelope(orth, sfreq, envelope_lowpass, envelope_resample)
+        corr[k] = _rowwise_pearson(orth, mag)
+    if absolute:
+        corr = np.abs(corr)
+    return (corr + corr.T) / 2.0
+
+
 def _pair_connectivity(
-    pair_tc, method, *, sfreq, fmin, fmax, orthogonalize, absolute, mt_bandwidth
+    pair_tc,
+    method,
+    *,
+    sfreq,
+    fmin,
+    fmax,
+    orthogonalize,
+    absolute,
+    mt_bandwidth,
+    envelope_lowpass=0.5,
+    envelope_resample=None,
 ):
     """Return connectivity between the two reconstructed rows of a pair.
 
     ``pair_tc`` holds the two leakage-corrected time courses of a single pair
-    (row 0 and row 1). The value is delegated to :mod:`mne_connectivity`.
+    (row 0 and row 1).
     """
     data = _epoched(pair_tc)  # (n_epochs, 2, n_times)
     if method == "envelope":
-        from mne_connectivity import envelope_correlation
-
-        # Delegated to mne-connectivity: the Hilbert amplitude envelopes are
-        # correlated directly. The paper additionally low-pass filters each
-        # envelope to 0.5 Hz before correlating (a noise-reduction step from
-        # Colclough et al., 2015); that smoothing is not applied here, as it is
-        # not exposed by ``envelope_correlation`` and does not affect the
-        # leakage suppression that is this module's contribution.
-        conn = envelope_correlation(
-            data, orthogonalize=orthogonalize, absolute=absolute
-        )
-        # (n_epochs, 2, 2, 1) -> average the off-diagonal over epochs (a single
-        # continuous segment is one epoch and returns one value).
-        values = conn.get_data(output="dense")[:, 0, 1, 0]
+        values = [
+            _envelope_corr_matrix(
+                epoch,
+                sfreq=sfreq,
+                orthogonalize=orthogonalize,
+                absolute=absolute,
+                envelope_lowpass=envelope_lowpass,
+                envelope_resample=envelope_resample,
+            )[0, 1]
+            for epoch in data
+        ]
         return float(np.mean(values))
 
     from mne_connectivity import spectral_connectivity_epochs
@@ -187,12 +299,18 @@ def reconstruct_pairwise_mcmv(
 
     Parameters
     ----------
-    data : ndarray, shape (n_channels, n_times) or (n_epochs, n_channels, n_times)
+    data : mne.Evoked | mne.Epochs | mne.io.Raw | ndarray
         Sensor data to reconstruct. For connectivity in a frequency band this
         should be band-filtered, consistently with ``data_cov`` (see module
-        docstring).
+        docstring). An MNE object is preferred, as its channels are matched by
+        name. A plain ndarray of shape ``(n_channels, n_times)`` or
+        ``(n_epochs, n_channels, n_times)`` is taken to be in the channel order
+        of the beamformer and must therefore *already be restricted to the good
+        channels*: :func:`~advance_beamlab.make_mcmv` drops ``info['bads']``, so
+        with bad channels present an array holding all of ``info['ch_names']``
+        has the wrong number of rows and is rejected.
     info : mne.Info
-        Measurement info describing the ``n_channels`` sensors of ``data``.
+        Measurement info describing the sensors of ``data``.
     forward : mne.Forward
         Forward solution covering the ``sources``.
     data_cov : mne.Covariance
@@ -211,7 +329,7 @@ def reconstruct_pairwise_mcmv(
     weight_norm : 'unit-gain' | 'unit-noise-gain' | None
         Weight normalisation passed through to :func:`~advance_beamlab.make_mcmv`.
         ``'unit-gain'`` reconstructs physical source amplitude.
-    rank : None | int | 'full'
+    rank : None | 'full' | 'info' | dict
         Rank handling passed through to :func:`~advance_beamlab.make_mcmv`.
 
     Returns
@@ -270,12 +388,14 @@ def pairwise_mcmv_connectivity(
     orthogonalize=False,
     absolute=False,
     mt_bandwidth=None,
+    envelope_lowpass=0.5,
+    envelope_resample=None,
 ):
     r"""Pairwise-MCMV connectivity matrix (PW-MCMV, Nunes et al., 2020).
 
     Every pair of ``sources`` is reconstructed with a 2-source MCMV
     (:func:`reconstruct_pairwise_mcmv`) and connectivity between the two
-    leakage-corrected time courses is computed with :mod:`mne_connectivity`.
+    leakage-corrected time courses is computed.
 
     Parameters
     ----------
@@ -283,31 +403,51 @@ def pairwise_mcmv_connectivity(
         See :func:`reconstruct_pairwise_mcmv`.
     orientations, noise_cov, reg, weight_norm, rank
         See :func:`reconstruct_pairwise_mcmv`.
-    method : 'envelope' | 'coh' | 'imcoh' | 'plv' | 'ciplv' | 'pli' | 'wpli' | ...
-        Connectivity metric. ``'envelope'`` uses
-        :func:`mne_connectivity.envelope_correlation` (resting-state amplitude
+    method : 'envelope' | 'coh' | 'imcoh' | 'plv' | 'ciplv' | 'ppc' | 'pli' | 'wpli'
+        Connectivity metric. ``'envelope'`` is the amplitude-envelope
+        correlation of Nunes et al. (2020), Sec. 2.5 (resting-state amplitude
         coupling); every other value is forwarded to
         :func:`mne_connectivity.spectral_connectivity_epochs` (task coherence /
-        phase measures) and requires ``sfreq``.
+        phase measures) and requires ``sfreq``, ``fmin`` and ``fmax``.
+        ``'cohy'`` is not accepted because coherency is complex and this
+        function returns a real matrix -- use ``'coh'`` or ``'imcoh'``.
     sfreq : float | None
-        Sampling frequency; required for the spectral methods.
+        Sampling frequency. Required for the spectral methods; for
+        ``method='envelope'`` it is needed by ``envelope_lowpass`` /
+        ``envelope_resample`` and defaults to ``info['sfreq']``.
     fmin, fmax : float | None
         Frequency band for the spectral methods; the metric is averaged over the
         band. Both are required for the spectral methods (the value is otherwise
         per-frequency and ill-defined for a single edge).
     orthogonalize : bool | 'pairwise'
-        Passed to :func:`mne_connectivity.envelope_correlation`. The default
+        Envelope leakage-orthogonalisation (Hipp et al., 2012). The default
         ``False`` gives *plain* envelope correlation, as MCMV already removes
         leakage; leakage-orthogonalisation (the symmetric-orthogonalisation
         baseline of Nunes et al., 2020) would double-correct and discard genuine
         zero-lag coupling.
     absolute : bool
-        Passed to :func:`mne_connectivity.envelope_correlation`. The default
+        Whether to take the magnitude of the envelope correlation. The default
         ``False`` returns the *signed* Pearson correlation of the amplitude
         envelopes, as in Nunes et al. (2020); ``True`` returns its magnitude.
+        Unlike :func:`mne_connectivity.envelope_correlation`, which ignores this
+        flag unless ``orthogonalize='pairwise'``, it is honoured for both
+        ``orthogonalize`` settings.
     mt_bandwidth : float | None
         Multitaper frequency smoothing (Hz) for the spectral methods (the paper
         uses 2 Hz for its task coherence/PLV analyses).
+    envelope_lowpass : float | None
+        Cut-off (Hz) of the low-pass filter applied to each amplitude envelope
+        before correlating, per Nunes et al. (2020), Sec. 2.5 ("low-pass
+        filtering to 0.5 Hz"). ``None`` correlates the unsmoothed envelopes,
+        reproducing :func:`mne_connectivity.envelope_correlation`; that variant
+        leaves far more sub-band ripple in the envelopes than the AR(1)
+        surrogate null of :func:`ar1_surrogate_significance` models, and is
+        anticonservative. Only used for ``method='envelope'``.
+    envelope_resample : float | None
+        If given, the sampling frequency (Hz) the low-passed envelopes are
+        downsampled to before correlating (the paper uses "downsampled envelope
+        correlations"). Downsampling does not change the expected correlation,
+        only the cost. Only used for ``method='envelope'``.
 
     Returns
     -------
@@ -316,7 +456,11 @@ def pairwise_mcmv_connectivity(
         connectivity between ``sources[i]`` and ``sources[j]``. The diagonal is
         zero.
     """
-    _validate_conn_params(method, sfreq, fmin, fmax)
+    if sfreq is None and method == "envelope":
+        sfreq = float(info["sfreq"])
+    _validate_conn_params(
+        method, sfreq, fmin, fmax, envelope_lowpass, envelope_resample
+    )
     sources = list(sources)
     n = len(sources)
     pairs, time_courses = reconstruct_pairwise_mcmv(
@@ -342,6 +486,8 @@ def pairwise_mcmv_connectivity(
             orthogonalize=orthogonalize,
             absolute=absolute,
             mt_bandwidth=mt_bandwidth,
+            envelope_lowpass=envelope_lowpass,
+            envelope_resample=envelope_resample,
         )
         conn[i, j] = conn[j, i] = value
     return conn
@@ -398,6 +544,8 @@ def augmented_pairwise_mcmv_connectivity(
     orthogonalize=False,
     absolute=False,
     mt_bandwidth=None,
+    envelope_lowpass=0.5,
+    envelope_resample=None,
 ):
     r"""Augmented pairwise-MCMV connectivity (APW-MCMV, Nunes et al., 2020, Sec. 2.4).
 
@@ -437,6 +585,9 @@ def augmented_pairwise_mcmv_connectivity(
     method, sfreq, fmin, fmax, orthogonalize, absolute, mt_bandwidth
         Connectivity settings, as in :func:`pairwise_mcmv_connectivity`; use the
         same values that produced ``connectivity``.
+    envelope_lowpass, envelope_resample
+        Envelope smoothing settings, as in :func:`pairwise_mcmv_connectivity`;
+        use the same values that produced ``connectivity``.
     radius : float
         Neighbour search radius in metres (default 0.04 m = 4 cm, per the paper).
     max_neighbours : int
@@ -449,7 +600,11 @@ def augmented_pairwise_mcmv_connectivity(
         Connectivity matrix with the significant edges re-estimated under
         augmentation and the non-significant edges left at their PW-MCMV value.
     """
-    _validate_conn_params(method, sfreq, fmin, fmax)
+    if sfreq is None and method == "envelope":
+        sfreq = float(info["sfreq"])
+    _validate_conn_params(
+        method, sfreq, fmin, fmax, envelope_lowpass, envelope_resample
+    )
     sources = list(sources)
     n = len(sources)
     connectivity = np.array(connectivity, dtype=float)
@@ -514,9 +669,66 @@ def augmented_pairwise_mcmv_connectivity(
             orthogonalize=orthogonalize,
             absolute=absolute,
             mt_bandwidth=mt_bandwidth,
+            envelope_lowpass=envelope_lowpass,
+            envelope_resample=envelope_resample,
         )
         conn[i, j] = conn[j, i] = value
     return conn
+
+
+def _fisher_z(r):
+    """Fisher :math:`z`-transform, clipped away from the +/-1 singularities."""
+    return np.arctanh(np.clip(r, -0.999999, 0.999999))
+
+
+def _benjamini_hochberg(pvals, alpha):
+    """Benjamini-Hochberg step-up rejections at level ``alpha``.
+
+    Equivalent to ``scipy.stats.false_discovery_control(pvals) <= alpha``.
+    Non-finite p-values are treated as 1 (not rejected).
+    """
+    pvals = np.where(np.isfinite(pvals), pvals, 1.0)
+    order = np.argsort(pvals)
+    ranked = pvals[order]
+    m = len(pvals)
+    thresh = alpha * (np.arange(1, m + 1) / m)
+    passed = ranked <= thresh
+    keep = np.zeros(m, dtype=bool)
+    if passed.any():
+        cutoff = int(np.max(np.nonzero(passed)))
+        keep[order[: cutoff + 1]] = True
+    return keep
+
+
+def _ar1_fit(ref):
+    """Per-row AR(1) coefficient and innovation standard deviation."""
+    n = len(ref)
+    phis = np.empty(n)
+    sigmas = np.empty(n)
+    for k in range(n):
+        x = ref[k] - ref[k].mean()
+        denom = float(x[:-1] @ x[:-1])
+        phi = 0.0 if denom == 0 else float(x[1:] @ x[:-1] / denom)
+        phi = float(np.clip(phi, -0.999, 0.999))  # keep the process stationary
+        resid = x[1:] - phi * x[:-1]
+        phis[k] = phi
+        sigmas[k] = resid.std() if resid.size else 1.0
+    return phis, sigmas
+
+
+def _ar1_surrogate(phis, sigmas, n_times, rng):
+    """Draw one ``(n_sources, n_times)`` set of independent AR(1) surrogates.
+
+    The recursion :math:`x_t = \\varphi x_{t-1} + \\sigma \\varepsilon_t` with
+    :math:`x_0 = \\sigma \\varepsilon_0` is the all-pole filter ``1 / (1 -
+    phi z^-1)`` at rest, so it is generated with :func:`scipy.signal.lfilter`
+    instead of a per-sample Python loop.
+    """
+    noise = rng.standard_normal((len(phis), n_times))
+    surr = np.empty((len(phis), n_times))
+    for k in range(len(phis)):
+        surr[k] = lfilter([1.0], [1.0, -phis[k]], sigmas[k] * noise[k])
+    return surr
 
 
 def ar1_surrogate_significance(
@@ -527,17 +739,16 @@ def ar1_surrogate_significance(
     n_surrogates=200,
     alpha=0.05,
     sfreq=None,
-    fmin=None,
-    fmax=None,
     orthogonalize=False,
     absolute=False,
-    mt_bandwidth=None,
+    envelope_lowpass=0.5,
+    envelope_resample=None,
     random_state=None,
 ):
     r"""Significance mask for a connectivity matrix via an AR(1) surrogate null.
 
     Implements the significance procedure of Nunes et al. (2020), Sec. 2.6-2.7,
-    for pairwise connectivity:
+    for pairwise envelope connectivity:
 
     1. Fit an order-one autoregressive model
        :math:`x_t = \varphi x_{t-1} + \varepsilon_t` to each region's
@@ -545,13 +756,12 @@ def ar1_surrogate_significance(
     2. Generate ``n_surrogates`` sets of *independent* Gaussian AR(1) source
        signals with those per-region coefficients -- surrogates with realistic
        temporal structure but no genuine pairwise coupling.
-    3. Compute the same connectivity ``method`` for every surrogate pair,
-       apply the Fisher :math:`z`-transform, and take the null standard
+    3. Compute the same envelope connectivity for every surrogate pair, apply
+       the Fisher :math:`z`-transform, and take the null mean and standard
        deviation.
     4. Convert the Fisher-transformed real connectivity to :math:`z`-scores
-       using that null standard deviation, then to two-sided :math:`p`-values
-       under Gaussianity, and threshold with Benjamini-Hochberg FDR at
-       ``alpha``.
+       using that null, then to two-sided :math:`p`-values under Gaussianity,
+       and threshold with Benjamini-Hochberg FDR at ``alpha``.
 
     Parameters
     ----------
@@ -560,13 +770,29 @@ def ar1_surrogate_significance(
         :func:`pairwise_mcmv_connectivity`).
     reference_time_courses : ndarray, shape (n_sources, n_times)
         One representative reconstructed time course per region, used to fit the
-        AR(1) coefficients. For epoched data, concatenate epochs first.
-    method, sfreq, fmin, fmax, orthogonalize, absolute, mt_bandwidth
-        Connectivity settings; must match those used for ``connectivity``.
+        AR(1) coefficients and to set the surrogate length. For epoched data,
+        concatenate epochs first.
+    method : 'envelope'
+        Only ``'envelope'`` is accepted. The paper prescribes this source-level
+        AR(1) surrogate for the resting-state amplitude-envelope correlations
+        only, and it is specific to them: a surrogate is a single continuous
+        segment, from which coherence and the phase measures cannot be estimated
+        (with one segment they are identically one), and the Fisher
+        :math:`z`-transform of step 3 is a variance-stabiliser for a correlation
+        coefficient, not for a phase-locking value. Task coherence/PLV in the
+        paper is tested with a different (trial-based) procedure.
     n_surrogates : int
         Number of surrogate datasets used to estimate the null (default 200).
+        Must be at least 2.
     alpha : float
         FDR level (default 0.05, per the paper).
+    sfreq : float | None
+        Sampling frequency of ``reference_time_courses``. Required unless both
+        ``envelope_lowpass`` and ``envelope_resample`` are ``None``.
+    orthogonalize, absolute, envelope_lowpass, envelope_resample
+        Envelope-correlation settings; must match those used for
+        ``connectivity``, or the null will not be the null of the tested
+        statistic.
     random_state : None | int | numpy.random.Generator
         Seed / generator for surrogate generation.
 
@@ -583,8 +809,30 @@ def ar1_surrogate_significance(
     region's course from any one pair) is used to characterise its temporal
     smoothness. The surrogate connectivity is computed directly on the surrogate
     source signals, which by construction contain no leakage.
+
+    An edge whose surrogate null degenerates (zero or non-finite standard
+    deviation -- for instance because the surrogates are too short for the
+    envelope filter) is reported as *not* significant, with a warning; a
+    degenerate null must never read as evidence of an effect.
     """
-    _validate_conn_params(method, sfreq, fmin, fmax)
+    if method != "envelope":
+        raise ValueError(
+            "ar1_surrogate_significance is defined for method='envelope' only "
+            f"(got {method!r}). Nunes et al. (2020) apply the AR(1) source-level "
+            "surrogate to the resting-state amplitude-envelope correlations; a "
+            "single continuous surrogate segment carries no usable coherence or "
+            "phase-locking estimate, and the Fisher z-transform used here "
+            "stabilises the variance of a correlation coefficient only."
+        )
+    _validate_conn_params(
+        method, sfreq, None, None, envelope_lowpass, envelope_resample
+    )
+    n_surrogates = int(n_surrogates)
+    if n_surrogates < 2:
+        raise ValueError(
+            f"n_surrogates must be at least 2 to estimate a null standard "
+            f"deviation, got {n_surrogates}."
+        )
 
     rng = np.random.default_rng(random_state)
     connectivity = np.asarray(connectivity, float)
@@ -596,72 +844,54 @@ def ar1_surrogate_significance(
             f"{n} reference time courses."
         )
 
-    # AR(1) fit per region: phi = <x_t x_{t-1}> / <x_{t-1}^2>, innovation std.
-    phis = np.empty(n)
-    sigmas = np.empty(n)
-    for k in range(n):
-        x = ref[k] - ref[k].mean()
-        denom = float(x[:-1] @ x[:-1])
-        phi = 0.0 if denom == 0 else float(x[1:] @ x[:-1] / denom)
-        phi = float(np.clip(phi, -0.999, 0.999))  # keep the process stationary
-        resid = x[1:] - phi * x[:-1]
-        phis[k] = phi
-        sigmas[k] = resid.std() if resid.size else 1.0
+    phis, sigmas = _ar1_fit(ref)
 
     pairs = _as_pairs(n)
+    rows = np.array([i for i, _ in pairs])
+    cols = np.array([j for _, j in pairs])
     null = np.empty((n_surrogates, len(pairs)))
     for s in range(n_surrogates):
-        surr = np.empty((n, n_times))
-        noise = rng.standard_normal((n, n_times))
-        for k in range(n):
-            x = np.empty(n_times)
-            x[0] = noise[k, 0] * sigmas[k]
-            for t in range(1, n_times):
-                x[t] = phis[k] * x[t - 1] + sigmas[k] * noise[k, t]
-            surr[k] = x
-        for p, (i, j) in enumerate(pairs):
-            null[s, p] = _pair_connectivity(
-                np.stack([surr[i], surr[j]]),
-                method,
-                sfreq=sfreq,
-                fmin=fmin,
-                fmax=fmax,
-                orthogonalize=orthogonalize,
-                absolute=absolute,
-                mt_bandwidth=mt_bandwidth,
-            )
+        surr = _ar1_surrogate(phis, sigmas, n_times, rng)
+        # One Hilbert transform and one envelope filter for the whole surrogate
+        # set, then read off every pair from the resulting matrix.
+        corr = _envelope_corr_matrix(
+            surr,
+            sfreq=sfreq,
+            orthogonalize=orthogonalize,
+            absolute=absolute,
+            envelope_lowpass=envelope_lowpass,
+            envelope_resample=envelope_resample,
+        )
+        null[s] = corr[rows, cols]
 
     # Fisher z-transform, standardise by the null mean and std (so the z-scores
     # have zero mean and unit variance under the null, per Colclough et al.,
     # 2015), two-sided p, then FDR. Subtracting the null mean matters when the
     # metric is non-negative (e.g. ``absolute=True``); for signed correlation the
     # null mean is ~0 and this reduces to dividing by the null std.
-    def _fisher(r):
-        return np.arctanh(np.clip(r, -0.999999, 0.999999))
-
     from scipy.stats import norm
 
-    null_z = _fisher(null)
-    null_mean = null_z.mean(axis=0)
-    null_std = null_z.std(axis=0, ddof=1)
-    null_std[null_std == 0] = np.finfo(float).eps
+    null_z = _fisher_z(null)
+    with np.errstate(invalid="ignore"):
+        null_mean = null_z.mean(axis=0)
+        null_std = null_z.std(axis=0, ddof=1)
+    degenerate = ~np.isfinite(null_mean) | ~np.isfinite(null_std) | (null_std <= 0)
+    if degenerate.any():
+        warn(
+            f"{int(degenerate.sum())} of {len(pairs)} edges have a degenerate "
+            "AR(1) surrogate null (zero or non-finite standard deviation); they "
+            "are reported as non-significant. Check that "
+            "``reference_time_courses`` are long enough for the envelope filter."
+        )
+        null_mean = np.where(degenerate, 0.0, null_mean)
+        null_std = np.where(degenerate, np.inf, null_std)
 
-    real = np.array([connectivity[i, j] for i, j in pairs])
-    zscores = (_fisher(real) - null_mean) / null_std
+    real = connectivity[rows, cols]
+    zscores = (_fisher_z(real) - null_mean) / null_std
     pvals = 2.0 * norm.sf(np.abs(zscores))
-
-    # Benjamini-Hochberg FDR at ``alpha``.
-    order = np.argsort(pvals)
-    ranked = pvals[order]
-    m = len(pvals)
-    thresh = alpha * (np.arange(1, m + 1) / m)
-    passed = ranked <= thresh
-    keep = np.zeros(m, dtype=bool)
-    if passed.any():
-        cutoff = np.max(np.nonzero(passed))
-        keep[order[: cutoff + 1]] = True
+    keep = _benjamini_hochberg(pvals, alpha)
 
     significance = np.zeros((n, n), dtype=bool)
-    for p, (i, j) in enumerate(pairs):
-        significance[i, j] = significance[j, i] = keep[p]
+    significance[rows, cols] = keep
+    significance[cols, rows] = keep
     return significance

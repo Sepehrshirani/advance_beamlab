@@ -25,21 +25,23 @@ single-sensor-type study needed:
 * **Noise whitening.** The projector is built from and applied in the space
   whitened by the noise covariance (via :func:`mne.cov.compute_whitener`, the
   same routine :func:`mne.beamformer.make_lcmv` uses, with the rank resolved per
-  sensor type). This is not a departure from the paper: Kuznetsova et al. (2021,
-  Section 2.6) state explicitly that whitening *changes the forward operator and
-  therefore requires recomputing the ReciPSIICOS projections*, that they skipped
-  it only for the computational cost of their 500 Monte-Carlo repetitions, and
-  that proper whitening *may improve localisation accuracy*. Whitening is what
-  makes the method valid for arrays that mix magnetometers (T) and gradiometers
-  (T/m), whose covariance is otherwise dominated by the larger-unit sensor type.
+  sensor type). Kuznetsova et al. (2021, Section 2.6) discuss whitening only to
+  note that it changes the forward operator and would therefore require
+  recomputing the ReciPSIICOS projections; they did not apply it, and worked in
+  raw sensor space throughout. Whitening here is an addition of ours, not a step
+  the paper prescribes: it is what makes the method valid for arrays that mix
+  magnetometers (T) and gradiometers (T/m), whose covariance is otherwise
+  dominated by the larger-unit sensor type.
 
 * **Virtual sensors.** Following the paper's preprocessing, the whitened
   leadfield is reduced by a truncated SVD to the principal directions capturing
-  a chosen fraction of its variance (``pct_var``), typically 42-80 virtual
-  sensors for a whole-head array. Everything -- the :math:`M^2`-space projector,
-  the data covariance and the beamformer -- then lives in this small working
-  space, which is what makes the :math:`M^2 \times M^2` correlation Gram
-  tractable (a 306-channel array would otherwise need a 93k x 93k matrix).
+  a chosen fraction of its variance (``pct_var``). At the default 0.99 a
+  whole-head array reduces to roughly 30-80 virtual sensors (29 magnetometers,
+  43 gradiometers and 76 for the two combined on the 306-channel ``sample``
+  array). Everything -- the :math:`M^2`-space projector, the data covariance and
+  the beamformer -- then lives in this small working space, which is what makes
+  the :math:`M^2 \times M^2` correlation Gram tractable (a 306-channel array
+  would otherwise need a 93k x 93k matrix).
 
 Because whitening and the virtual-sensor reduction both change the space the
 projector lives in, the cleaned covariance cannot simply be handed back to
@@ -75,19 +77,31 @@ import warnings
 import numpy as np
 from mne import Covariance
 from mne.beamformer import Beamformer
-from mne.beamformer._compute_beamformer import _compute_beamformer
+from mne.beamformer._compute_beamformer import _check_src_normal, _compute_beamformer
 from mne.forward import is_fixed_orient
 from mne.forward.forward import _subject_from_forward
 from mne.source_estimate import _get_src_type
 from mne.source_space._source_space import _get_vertno
 from mne.utils import _check_option, _validate_type, logger, verbose
 
-# Reuse the channel-alignment and whitener helpers from the MCMV module so that
-# both algorithms read the forward/covariance in the same channel space and
-# whiten identically to MNE's make_lcmv.
-from ._mcmv import _align_channels, _make_whitener
+# Reuse the channel-alignment, noise-covariance and whitener helpers from the
+# MCMV module so that both algorithms read the forward/covariance in the same
+# channel space and whiten identically to MNE's make_lcmv.
+from ._mcmv import (
+    _align_channels,
+    _check_noise_cov_required,
+    _intersect_noise_cov,
+    _make_whitener,
+)
 
 _ALLOWED_METHOD = ("recipsiicos", "whitened")
+
+# Mirrors mne.beamformer._compute_beamformer._prepare_beamformer_input and
+# _compute_beamformer, whose validation this module has to reproduce because it
+# solves the LCMV in its own working space rather than going through
+# _prepare_beamformer_input.
+_ALLOWED_PICK_ORI = ("normal", "max-power", "vector", None)
+_ALLOWED_WEIGHT_NORM = ("unit-noise-gain-invariant", "unit-noise-gain", "nai", None)
 
 # Fraction of the eigenvalue energy that the spectral-flip step is allowed to
 # carry in the negative eigenvalues before a warning is raised (the authors
@@ -95,9 +109,15 @@ _ALLOWED_METHOD = ("recipsiicos", "whitened")
 _NEG_ENERGY_LIMIT = 0.20
 
 # Default fraction of whitened-leadfield variance kept by the virtual-sensor
-# reduction. Kuznetsova et al. (2021) use 95-99%; 99% reproduces their reported
-# 42-80 virtual sensors on whole-head arrays.
+# reduction. Kuznetsova et al. (2021) keep 90% of the variance (95% in their
+# real-data analysis); 0.99 is the more conservative default here, and still
+# reduces a whole-head array to a few tens of virtual sensors.
 _DEFAULT_PCT_VAR = 0.99
+
+# Memory budget for one block of vectorised cross-products in
+# :func:`_correlation_blocks`. Each column is q^2 long, so the column count per
+# block has to be derived from q rather than fixed.
+_CORR_BLOCK_BYTES = 64 * 1024**2
 
 
 # --------------------------------------------------------------------------- #
@@ -197,7 +217,7 @@ def _power_columns(topos):
     return np.column_stack(cols)
 
 
-def _correlation_blocks(topos, block_pairs=20000):
+def _correlation_blocks(topos, max_block_bytes=_CORR_BLOCK_BYTES):
     """Yield blocks of vectorised cross-products (columns of G_cor).
 
     Fixed orientation: one column ``vec(g_i g_j^T + g_j g_i^T)`` per ordered
@@ -205,8 +225,22 @@ def _correlation_blocks(topos, block_pairs=20000):
     pair. The columns are produced in blocks so that the (potentially very
     large) matrix G_cor is never held in memory all at once -- the caller only
     needs the running Gram matrix ``G_cor G_cor^T``.
+
+    Parameters
+    ----------
+    topos : ndarray, shape (n_locations, q, n_ori)
+        The working-space topographies.
+    max_block_bytes : int
+        Memory budget for one block. A block is a dense ``(q^2, n_cols)`` array,
+        so ``n_cols`` is derived from ``q`` rather than fixed: a free-orientation
+        forward emits four columns of length ``q^2`` per source *pair*, and at
+        ``q = 60`` a thousand columns already cost 29 MB. The block is
+        materialised twice at the yield point (once as the list of columns, once
+        as the stacked array), so the transient cost is about twice this budget.
+        The caller's running Gram is a separate, unavoidable ``q^2 x q^2`` array.
     """
-    n_loc, _, n_ori = topos.shape
+    n_loc, q, n_ori = topos.shape
+    block_cols = max(1, int(max_block_bytes // (8 * q**2)))
     buffer = []
     for i in range(n_loc):
         for j in range(i + 1, n_loc):
@@ -219,7 +253,7 @@ def _correlation_blocks(topos, block_pairs=20000):
                 buffer.append(_vec(np.outer(ai, bj) + np.outer(bj, ai)))
                 buffer.append(_vec(np.outer(bi, aj) + np.outer(aj, bi)))
                 buffer.append(_vec(np.outer(bi, bj) + np.outer(bj, bi)))
-            if len(buffer) >= block_pairs:
+            if len(buffer) >= block_cols:
                 yield np.column_stack(buffer)
                 buffer = []
     if buffer:
@@ -227,11 +261,18 @@ def _correlation_blocks(topos, block_pairs=20000):
 
 
 def _correlation_gram(topos):
-    """Accumulate the Gram matrix C_cor = G_cor G_cor^T without storing G_cor."""
+    """Accumulate the Gram matrix C_cor = G_cor G_cor^T without storing G_cor.
+
+    Peak memory is the ``q^2 x q^2`` Gram plus one block (see
+    :func:`_correlation_blocks`); the rank-updating product is written into a
+    reused buffer so that no second Gram-sized temporary is allocated per block.
+    """
     msq = topos.shape[1] ** 2
     gram = np.zeros((msq, msq), dtype=np.float64)
+    update = np.empty((msq, msq), dtype=np.float64)
     for block in _correlation_blocks(topos):
-        gram += block @ block.T
+        np.matmul(block, block.T, out=update)
+        gram += update
     return gram
 
 
@@ -456,6 +497,22 @@ def _build_projector(gain_work, fixed, method, rank, reg):
     if method == "recipsiicos":
         projector, _ = _power_projector(g_pwr, rank)
     else:
+        # The whitened projector lives on the range of the power whitener, which
+        # is contained in the q(q+1)/2-dimensional subspace of symmetric
+        # matrices. Removing that many correlation directions removes all of it,
+        # so the projector -- and hence the modified covariance -- is exactly
+        # zero. Warn rather than raise: the bound is on the *whitener* range and
+        # a rank-deficient forward reaches it sooner still.
+        n_sym = gain_work.shape[0] * (gain_work.shape[0] + 1) // 2
+        if int(rank) >= n_sym:
+            warnings.warn(
+                f"rank={rank} is at or above q(q+1)/2={n_sym}, the dimension of "
+                "the symmetric subspace the power whitener spans, so the "
+                "whitened projector annihilates the covariance. Use a smaller "
+                "rank (see recipsiicos_rank_curve).",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         c_cor = _correlation_gram(topos)
         projector, _ = _whitened_projector(g_pwr, c_cor, rank, reg)
     return projector
@@ -484,6 +541,12 @@ def _recipsiicos_working(
     _check_option("method", method, _ALLOWED_METHOD)
 
     common_ch, cov = _align_channels(info, forward, data_cov)
+    # A MEG-only empty-room noise covariance with a MEG+EEG forward is standard
+    # practice, so drop whatever the noise covariance does not cover before it
+    # reaches compute_whitener; and refuse the mixed-sensor-type case without a
+    # noise covariance exactly as make_lcmv does.
+    common_ch, cov = _intersect_noise_cov(common_ch, cov, noise_cov)
+    _check_noise_cov_required(info, common_ch, noise_cov)
     b_op, q, r = _reduction_operator(
         info,
         forward,
@@ -516,6 +579,36 @@ def _recipsiicos_working(
             stacklevel=2,
         )
     return common_ch, b_op, gain_work, fixed, cov_clean, neg_energy, q
+
+
+def _check_pick_ori(forward, pick_ori):
+    """Validate ``pick_ori`` against the forward exactly as MNE's LCMV does.
+
+    :func:`mne.beamformer.make_lcmv` runs these four checks inside
+    :func:`mne.beamformer._compute_beamformer._prepare_beamformer_input`, which
+    this module bypasses because it solves the beamformer in its own working
+    space. They are reproduced here -- in MNE's order and with MNE's wording --
+    so that the two entry points refuse the same inputs in the same way.
+
+    Without them ``pick_ori='normal'`` silently reaches the filter computation,
+    which takes the third orientation column of each source. On the
+    ``surf_ori=False`` forward that :func:`mne.read_forward_solution` returns by
+    default that column is the head-coordinate +Z axis, and on a volume source
+    space it is not a surface normal at all, so the result is a perfectly
+    plausible :class:`~mne.SourceEstimate` for the wrong dipole orientation.
+    """
+    _check_option("pick_ori", pick_ori, _ALLOWED_PICK_ORI)
+    if pick_ori is not None and is_fixed_orient(forward):
+        raise ValueError(
+            f"Normal or max-power orientation (got {pick_ori!r}) can only be picked "
+            "when a forward operator with free orientation is used."
+        )
+    if pick_ori == "normal" and not forward["surf_ori"]:
+        raise ValueError(
+            "Normal orientation can only be picked when a forward operator oriented in "
+            "surface coordinates is used."
+        )
+    _check_src_normal(pick_ori, forward["src"])
 
 
 # --------------------------------------------------------------------------- #
@@ -685,8 +778,12 @@ def make_recipsiicos_lcmv(
     label : instance of mne.Label | None
         Restrict the source space to this label before building the filters.
     pick_ori : None | 'normal' | 'max-power' | 'vector'
-        Source orientation handling, passed to MNE's filter computation. Only
-        valid for a free-orientation forward.
+        Source orientation handling, passed to MNE's filter computation. Subject
+        to the same restrictions as in :func:`mne.beamformer.make_lcmv`: anything
+        other than ``None`` requires a free-orientation forward, and ``'normal'``
+        additionally requires a surface-oriented forward (``surf_ori=True``,
+        which :func:`mne.read_forward_solution` does *not* give by default) on a
+        surface or discrete source space.
     weight_norm : None | 'unit-noise-gain' | 'unit-noise-gain-invariant' | 'nai'
         Weight normalisation, passed to MNE's filter computation. In the working
         space the noise is white, so unit-noise-gain normalises to unit norm
@@ -741,6 +838,11 @@ def make_recipsiicos_lcmv(
         _validate_type(label, Label, "label")
         forward = restrict_forward_to_label(forward, label)
 
+    # Refuse the same orientation/normalisation inputs make_lcmv refuses, before
+    # spending any time on the projector.
+    _check_pick_ori(forward, pick_ori)
+    _check_option("weight_norm", weight_norm, _ALLOWED_WEIGHT_NORM)
+
     common_ch, b_op, gain_work, fixed, cov_clean, _, q = _recipsiicos_working(
         info,
         forward,
@@ -753,9 +855,6 @@ def make_recipsiicos_lcmv(
         n_virtual=n_virtual,
         reg=reg,
     )
-
-    if fixed and pick_ori is not None:
-        raise ValueError(f"pick_ori={pick_ori!r} requires a free-orientation forward.")
 
     n_orient = 1 if fixed else 3
 
@@ -961,6 +1060,13 @@ def recipsiicos_rank_curve(
         common_ch = [ch for ch in info["ch_names"] if ch in fwd_set and ch not in bads]
         if len(common_ch) == 0:
             raise ValueError("No common good channels between info and forward.")
+
+    # Same channel selection as the beamformer entry points, so the curve
+    # characterises the space the filters are actually built in. Only the
+    # channel list matters here, hence the placeholder matrix.
+    n_ch = len(common_ch)
+    common_ch, _ = _intersect_noise_cov(common_ch, np.empty((n_ch, n_ch)), noise_cov)
+    _check_noise_cov_required(info, common_ch, noise_cov)
 
     b_op, _, _ = _reduction_operator(
         info,
