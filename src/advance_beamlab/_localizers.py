@@ -234,7 +234,6 @@ def optimal_orientation(name, H_ref, H_loc, R, N, *, evoked_cov=None, metrics=No
     else:
         A_RR = H_ref.T @ mA @ H_ref
         A_Rk = H_ref.T @ mA @ H_loc
-        A_kR = A_Rk.T
         B_RR = H_ref.T @ mB @ H_ref
         B_Rk = H_ref.T @ mB @ H_loc
         B_kR = B_Rk.T
@@ -267,8 +266,9 @@ class MCMVScanResult(dict):
         localizer given the sources already fixed, so a source found later can
         carry the larger pseudo-Z.
     orientations : ndarray, shape (n_sources, 3) | None
-        Unit orientation of each discovered source; ``None`` for a
-        fixed-orientation forward.
+        Unit orientation of each discovered source **in head coordinates** (the
+        frame :func:`make_mcmv` takes), or ``None`` for a fixed-orientation
+        forward.
     pseudo_z : ndarray, shape (n_sources,)
         Pseudo-Z :math:`\bar z_k = (\mathbf{w}_k^{\mathsf T}\mathbf{R}
         \mathbf{w}_k)/(\mathbf{w}_k^{\mathsf T}\mathbf{N}\mathbf{w}_k)` of the
@@ -471,9 +471,7 @@ def scan_mcmv(
                 h = H_loc @ u
             H_full = np.column_stack([H_ref, h])
             try:
-                vals[i] = localizer_value(
-                    localizer, H_full, R_w, N_w, metrics=metrics
-                )
+                vals[i] = localizer_value(localizer, H_full, R_w, N_w, metrics=metrics)
             except _SINGULAR_ERRORS:
                 n_skipped += 1
                 continue
@@ -511,6 +509,17 @@ def scan_mcmv(
         )
     else:
         ori_out = np.array(orientations)
+        # The orientations were estimated against the forward's gain columns,
+        # which for a ``surf_ori=True`` forward are expressed in each source's
+        # local surface frame. Rotate them back into head coordinates -- the
+        # frame ``forward['source_nn']`` uses and the one make_mcmv documents for
+        # its ``orientations`` argument -- so that the returned array means the
+        # same physical dipole whichever representation of a forward was scanned.
+        if forward.get("surf_ori", False):
+            nn = np.asarray(forward["source_nn"], dtype=np.float64)
+            ori_out = np.array(
+                [nn[3 * s : 3 * s + 3].T @ u for s, u in zip(sources, ori_out, strict=True)]
+            )
         filters = make_mcmv(
             info,
             forward,

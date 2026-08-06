@@ -20,10 +20,9 @@ Two properties are deliberately exercised here and nowhere else:
   up to its scale), the test asserts that invariance directly.
 """
 
+import mne
 import numpy as np
 import pytest
-
-import mne
 from mne.beamformer import apply_lcmv, make_lcmv
 
 from advance_beamlab import (
@@ -253,9 +252,7 @@ def test_scan_filters_agree_with_make_mcmv(sphere_setup):
     result = scan_mcmv(
         info, fwd, data_cov, localizer="mai", n_sources=2, noise_cov=noise_cov
     )
-    direct = make_mcmv(
-        info, fwd, data_cov, result["sources"], noise_cov=noise_cov
-    )
+    direct = make_mcmv(info, fwd, data_cov, result["sources"], noise_cov=noise_cov)
     np.testing.assert_allclose(
         result["filters"]["weights"], direct["weights"], rtol=1e-10
     )

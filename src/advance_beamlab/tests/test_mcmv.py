@@ -569,9 +569,7 @@ def test_rank_accepts_mne_conventions(fwd_info, rank):
     assert np.all(np.isfinite(filters["weights"]))
 
 
-@pytest.mark.parametrize(
-    ("rank", "error"), [(20, TypeError), ("bogus", ValueError)]
-)
+@pytest.mark.parametrize(("rank", "error"), [(20, TypeError), ("bogus", ValueError)])
 def test_rank_rejects_unsupported_values(fwd_info, rank, error):
     """An integer or an unknown string is refused up front, not deep inside MNE."""
     fwd, info = fwd_info
@@ -586,21 +584,22 @@ def test_several_sensor_types_require_noise_cov():
 
     The ad-hoc noise model is only a harmless global scaling for a *single*
     sensor type. With more than one its arbitrary per-type variances set the
-    relative weighting of the types, so MNE refuses it; the error text here is
-    MNE's verbatim.
+    relative weighting of the types, so MNE refuses it; the error text asserted
+    here is MNE's verbatim.
     """
-    info = mne.create_info(
+    from advance_beamlab._mcmv import _check_noise_cov_required
+
+    mixed = mne.create_info(
         ["MEG 0111", "MEG 0112", "MEG 0113", "MEG 0122"],
         200.0,
         ["grad", "grad", "mag", "grad"],
     )
-    cov = _random_cov(info)
-    fwd = None  # unreachable: the check fires before the forward is used
     with pytest.raises(ValueError, match="several sensor types"):
-        from advance_beamlab._mcmv import _check_noise_cov_required
+        _check_noise_cov_required(mixed, mixed["ch_names"], None)
 
-        _check_noise_cov_required(info, info["ch_names"], None)
-    assert fwd is None and cov is not None
+    # A single sensor type keeps the ad-hoc fallback.
+    single = mne.create_info(["MEG 0111", "MEG 0112"], 200.0, ["grad", "grad"])
+    _check_noise_cov_required(single, single["ch_names"], None)
 
 
 def test_beamformer_copy_is_deep(fwd_info):
