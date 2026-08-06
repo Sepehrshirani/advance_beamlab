@@ -26,9 +26,10 @@ References
 import warnings
 
 import numpy as np
+from mne import Covariance
 from mne.beamformer._compute_beamformer import _reg_pinv
 from mne.forward import is_fixed_orient
-from mne.utils import logger, verbose
+from mne.utils import _validate_type, logger, verbose
 from scipy.linalg import eigh, solve
 
 from ._mcmv import (
@@ -251,7 +252,12 @@ def optimal_orientation(name, H_ref, H_loc, R, N, *, evoked_cov=None, metrics=No
     F = 0.5 * (F + F.T)
     eigvals, eigvecs = eigh(D, F)
     u = eigvecs[:, np.argmax(eigvals)]
-    return u / np.linalg.norm(u)
+    u = u / np.linalg.norm(u)
+    # An eigenvector is defined only up to sign, and every localizer is even in
+    # ``u``, so fix a deterministic convention: the largest-magnitude component
+    # is positive. Without it the returned orientation -- and hence the sign of
+    # the reconstructed time course -- flips arbitrarily between LAPACK builds.
+    return u if u[np.argmax(np.abs(u))] >= 0 else -u
 
 
 class MCMVScanResult(dict):
@@ -392,6 +398,9 @@ def scan_mcmv(
     ----------
     .. footbibliography::
     """
+    _validate_type(data_cov, Covariance, "data_cov")
+    if noise_cov is not None:
+        _validate_type(noise_cov, Covariance, "noise_cov")
     _check_localizer(localizer, evoked_cov)
     if n_sources < 1:
         raise ValueError(f"n_sources must be >= 1, got {n_sources}.")
