@@ -371,9 +371,11 @@ def sbl_covariance(
 class ABMCResult:
     r"""Result of an ABMC beamformer scan (Shirani et al., 2024, Stage 2).
 
-    See :func:`make_abmc` and :footcite:`Shirani2024`.
+    See :func:`make_abmc` and :footcite:`Shirani2024`. This is a
+    :func:`~dataclasses.dataclass`, so the fields below are both its constructor
+    parameters and its attributes; :func:`make_abmc` builds it for you.
 
-    Attributes
+    Parameters
     ----------
     stc : mne.SourceEstimate | mne.VolSourceEstimate | mne.MixedSourceEstimate
         The localization map -- the per-grid-point template match (see
@@ -842,8 +844,21 @@ def make_abmc_dictionary(
     P : float
         Ratio :math:`\beta_2/\beta_1` for the template constraint; see
         :func:`make_abmc`. Applied to every template.
-    mu, reg, f, max_iter, tol, max_lag, return_weights
-        As in :func:`make_abmc`; applied to every template.
+    mu : float | None
+        Gradient step size, as in :func:`make_abmc`; applied to every template.
+    reg : float
+        Diagonal loading for the lag-seeding inverse, as in :func:`make_abmc`.
+    f : float
+        Distortionless gain, as in :func:`make_abmc`.
+    max_iter : int
+        Maximum weight-update iterations, as in :func:`make_abmc`.
+    tol : float
+        Convergence tolerance on the weights, as in :func:`make_abmc`.
+    max_lag : int | None
+        Template-lag search window in samples, as in :func:`make_abmc`.
+    return_weights : bool
+        Whether to include the beamformer weights in each result, as in
+        :func:`make_abmc`.
     %(verbose)s
 
     Returns

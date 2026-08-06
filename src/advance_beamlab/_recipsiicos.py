@@ -716,10 +716,15 @@ def make_recipsiicos_cov(
     cov_sensor = b_pinv @ cov_clean @ b_pinv.T
     cov_sensor = 0.5 * (cov_sensor + cov_sensor.T)
 
+    # ``bads`` must only name channels this covariance actually carries: the
+    # working space is built on ``common_ch``, which already excludes the bad
+    # channels, so carrying the input's list forward would advertise channels
+    # that are not in ``ch_names`` and confuse ``pick_channels_cov``.
+    kept = set(common_ch)
     return Covariance(
         cov_sensor,
         common_ch,
-        list(data_cov.get("bads", [])),
+        [ch for ch in data_cov.get("bads", []) if ch in kept],
         list(data_cov.get("projs", [])),
         nfree=int(data_cov.get("nfree", 1)),
     )
@@ -910,6 +915,16 @@ def make_recipsiicos_lcmv(
     subject = _subject_from_forward(forward)
     is_free_ori = (not fixed) if pick_ori in (None, "vector") else False
 
+    # Record the projectors the filters were built under, exactly as make_lcmv
+    # does. ``compute_whitener`` already folded them into ``b_op``, so
+    # ``apply_lcmv`` will not re-apply them (it only does that when ``whitener``
+    # is None); recording them re-enables MNE's safety check that the data a
+    # filter is applied to carries the same projectors it was computed with.
+    from mne._fiff.proj import make_projector
+
+    proj, _, _ = make_projector(info["projs"], list(common_ch))
+    is_ssp = bool(info["projs"])
+
     filters = Beamformer(
         kind="LCMV",
         weights=weights,
@@ -921,8 +936,8 @@ def make_recipsiicos_lcmv(
         weight_norm=weight_norm,
         pick_ori=pick_ori,
         ch_names=list(common_ch),
-        proj=None,
-        is_ssp=False,
+        proj=proj,
+        is_ssp=is_ssp,
         vertices=vertno,
         is_free_ori=is_free_ori,
         n_sources=forward["nsource"],

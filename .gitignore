@@ -42,6 +42,3 @@ env/
 .DS_Store
 Thumbs.db
 
-doc/_build/
-doc/generated/
-

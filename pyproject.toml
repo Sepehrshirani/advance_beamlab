@@ -11,9 +11,27 @@ requires-python = ">=3.10"
 license = "BSD-3-Clause"
 keywords = ["MEG", "EEG", "beamformer", "MCMV", "source localization", "MNE"]
 authors = [{ name = "Sepehr Shirani", email = "sepehrshirani@gmail.com" }, { name = "Muzhi Wang" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
 dependencies = [
     "numpy>=1.25",
     "scipy>=1.11",
+    # The MNE APIs used here (``_reg_pinv``, ``_compute_beamformer``,
+    # ``compute_whitener``, ``Beamformer``, ``_get_src_type``, ``_get_vertno``)
+    # are unchanged back to 1.8, but 1.10 is the floor actually exercised in CI
+    # and is the first release whose ``Covariance._get_square`` and per-type rank
+    # handling this package relies on. Do not lower it without adding a CI job.
     "mne>=1.10",
     "mne-connectivity>=0.5",
 ]

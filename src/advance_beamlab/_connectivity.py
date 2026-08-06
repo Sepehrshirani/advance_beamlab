@@ -401,10 +401,18 @@ def pairwise_mcmv_connectivity(
 
     Parameters
     ----------
-    data, info, forward, data_cov, sources
-        See :func:`reconstruct_pairwise_mcmv`.
-    orientations, noise_cov, reg, weight_norm, rank
-        See :func:`reconstruct_pairwise_mcmv`.
+    data : ndarray, shape (n_channels, n_times) or (n_epochs, n_channels, n_times)
+        Sensor data to reconstruct, band-filtered to the analysis band. An array
+        must already be restricted to the good channels; see
+        :func:`reconstruct_pairwise_mcmv`.
+    info : instance of mne.Info
+        Measurement info describing the sensors of ``data``.
+    forward : instance of mne.Forward
+        Forward solution covering the ``sources``.
+    data_cov : instance of mne.Covariance
+        Sensor data covariance, band-limited to the analysis band.
+    sources : sequence of int
+        Indices of the regions of interest into the forward source space.
     method : 'envelope' | 'coh' | 'imcoh' | 'plv' | 'ciplv' | 'ppc' | 'pli' | 'wpli'
         Connectivity metric. ``'envelope'`` is the amplitude-envelope
         correlation of Nunes et al. (2020), Sec. 2.5 (resting-state amplitude
@@ -421,6 +429,19 @@ def pairwise_mcmv_connectivity(
         Frequency band for the spectral methods; the metric is averaged over the
         band. Both are required for the spectral methods (the value is otherwise
         per-frequency and ill-defined for a single edge).
+    orientations : ndarray, shape (n_sources, 3) | None
+        Head-coordinate source orientations for a free-orientation forward, in
+        the same order as ``sources``; ``None`` for a fixed-orientation forward.
+    noise_cov : instance of mne.Covariance | None
+        Noise covariance used for whitening. For resting-state data a diagonal
+        (ad-hoc) covariance is customary, as no baseline exists.
+    reg : float
+        Regularisation passed through to :func:`~advance_beamlab.make_mcmv`.
+    weight_norm : 'unit-gain' | 'unit-noise-gain' | None
+        Weight normalisation passed through to :func:`~advance_beamlab.make_mcmv`.
+        ``'unit-gain'`` reconstructs physical source amplitude.
+    rank : None | 'full' | 'info' | dict
+        Rank handling passed through to :func:`~advance_beamlab.make_mcmv`.
     orthogonalize : bool | 'pairwise'
         Envelope leakage-orthogonalisation (Hipp et al., 2012). The default
         ``False`` gives *plain* envelope correlation, as MCMV already removes
@@ -572,10 +593,18 @@ def augmented_pairwise_mcmv_connectivity(
 
     Parameters
     ----------
-    data, info, forward, data_cov, sources
-        See :func:`reconstruct_pairwise_mcmv`.
-    orientations, noise_cov, reg, weight_norm, rank
-        See :func:`reconstruct_pairwise_mcmv`.
+    data : ndarray, shape (n_channels, n_times) or (n_epochs, n_channels, n_times)
+        Sensor data to reconstruct, band-filtered to the analysis band. An array
+        must already be restricted to the good channels; see
+        :func:`reconstruct_pairwise_mcmv`.
+    info : instance of mne.Info
+        Measurement info describing the sensors of ``data``.
+    forward : instance of mne.Forward
+        Forward solution covering the ``sources``.
+    data_cov : instance of mne.Covariance
+        Sensor data covariance, band-limited to the analysis band.
+    sources : sequence of int
+        Indices of the regions of interest into the forward source space.
     connectivity : ndarray, shape (n_sources, n_sources)
         The PW-MCMV connectivity matrix to refine (from
         :func:`pairwise_mcmv_connectivity`).
@@ -584,17 +613,46 @@ def augmented_pairwise_mcmv_connectivity(
     positions : ndarray, shape (n_sources, 3) | None
         Source positions (metres) used for the neighbour search. Defaults to the
         forward positions of ``sources`` (``forward['source_rr'][sources]``).
-    method, sfreq, fmin, fmax, orthogonalize, absolute, mt_bandwidth
-        Connectivity settings, as in :func:`pairwise_mcmv_connectivity`; use the
-        same values that produced ``connectivity``.
-    envelope_lowpass, envelope_resample
-        Envelope smoothing settings, as in :func:`pairwise_mcmv_connectivity`;
-        use the same values that produced ``connectivity``.
+    method : 'envelope' | 'coh' | 'imcoh' | 'plv' | 'ciplv' | 'ppc' | 'pli' | 'wpli'
+        Connectivity metric, as in :func:`pairwise_mcmv_connectivity`; use the
+        same value that produced ``connectivity``.
     radius : float
         Neighbour search radius in metres (default 0.04 m = 4 cm, per the paper).
     max_neighbours : int
         Maximum neighbours added per source of the pair (default 2, per the
         paper), capping the beamformer order at ``2 + 2 * max_neighbours``.
+    sfreq : float | None
+        Sampling frequency, as in :func:`pairwise_mcmv_connectivity`.
+    fmin, fmax : float | None
+        Frequency band for the spectral methods, as in
+        :func:`pairwise_mcmv_connectivity`.
+    orientations : ndarray, shape (n_sources, 3) | None
+        Head-coordinate source orientations for a free-orientation forward, in
+        the same order as ``sources``; ``None`` for a fixed-orientation forward.
+    noise_cov : instance of mne.Covariance | None
+        Noise covariance used for whitening.
+    reg : float
+        Regularisation passed through to :func:`~advance_beamlab.make_mcmv`.
+    weight_norm : 'unit-gain' | 'unit-noise-gain' | None
+        Weight normalisation passed through to :func:`~advance_beamlab.make_mcmv`.
+    rank : None | 'full' | 'info' | dict
+        Rank handling passed through to :func:`~advance_beamlab.make_mcmv`.
+    orthogonalize : bool | 'pairwise'
+        Envelope leakage-orthogonalisation, as in
+        :func:`pairwise_mcmv_connectivity`.
+    absolute : bool
+        Whether to take the magnitude of the envelope correlation, as in
+        :func:`pairwise_mcmv_connectivity`.
+    mt_bandwidth : float | None
+        Multitaper frequency smoothing (Hz) for the spectral methods.
+    envelope_lowpass : float | None
+        Envelope low-pass cut-off (Hz), as in
+        :func:`pairwise_mcmv_connectivity`; use the same value that produced
+        ``connectivity``.
+    envelope_resample : float | None
+        Envelope resampling frequency (Hz), as in
+        :func:`pairwise_mcmv_connectivity`; use the same value that produced
+        ``connectivity``.
 
     Returns
     -------
@@ -791,10 +849,19 @@ def ar1_surrogate_significance(
     sfreq : float | None
         Sampling frequency of ``reference_time_courses``. Required unless both
         ``envelope_lowpass`` and ``envelope_resample`` are ``None``.
-    orthogonalize, absolute, envelope_lowpass, envelope_resample
-        Envelope-correlation settings; must match those used for
+    orthogonalize : bool | 'pairwise'
+        Envelope leakage-orthogonalisation; must match the value used for
         ``connectivity``, or the null will not be the null of the tested
         statistic.
+    absolute : bool
+        Whether the envelope correlation is taken in magnitude; must match the
+        value used for ``connectivity``.
+    envelope_lowpass : float | None
+        Envelope low-pass cut-off (Hz); must match the value used for
+        ``connectivity``.
+    envelope_resample : float | None
+        Envelope resampling frequency (Hz); must match the value used for
+        ``connectivity``.
     random_state : None | int | numpy.random.Generator
         Seed / generator for surrogate generation.
 

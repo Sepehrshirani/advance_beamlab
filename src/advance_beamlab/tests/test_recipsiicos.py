@@ -933,3 +933,44 @@ def test_several_sensor_types_without_noise_cov_raises():
     # Identical to what make_lcmv does with the same inputs.
     with pytest.raises(ValueError, match=msg):
         mne.beamformer.make_lcmv(info, fwd, data_cov, reg=0.05)
+
+
+def test_beamformer_records_projectors(fwd_fixed):
+    """The filters record ``proj``/``is_ssp`` so MNE's SSP safety check works.
+
+    ``compute_whitener`` already folds the projectors into the reduction
+    operator, so ``apply_lcmv`` must not re-apply them (it only does that when
+    ``whitener`` is None) -- but recording them re-enables the check that data a
+    filter is applied to carries the projectors it was built with.
+    """
+    from mne.beamformer._compute_beamformer import _proj_whiten_data
+
+    data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.9)
+    info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
+    info.set_montage("standard_1020")
+    info = (
+        mne.io.RawArray(np.zeros((len(info["ch_names"]), 2)), info, verbose=False)
+        .set_eeg_reference("average", projection=True, verbose=False)
+        .info
+    )
+    filters = make_recipsiicos_lcmv(
+        info, fwd_fixed, data_cov, rank=20, method="recipsiicos", pct_var=1.0
+    )
+
+    assert filters["is_ssp"] is True
+    assert filters["proj"] is not None
+    n_ch = len(filters["ch_names"])
+    assert filters["proj"].shape == (n_ch, n_ch)
+
+    # The data's own projections match, so the check passes and the reduction
+    # operator is applied exactly once (it already contains the projection).
+    rng = np.random.default_rng(0)
+    data = rng.standard_normal((n_ch, 40))
+    out = _proj_whiten_data(data, info["projs"], filters)
+    assert out.shape == (filters["whitener"].shape[0], 40)
+    assert_allclose(out, filters["whitener"] @ data, atol=1e-12)
+
+    # Data carrying different projections is rejected rather than silently
+    # filtered with the wrong operator -- the check this restores.
+    with pytest.raises(ValueError, match="SSP projections present in the data"):
+        _proj_whiten_data(data, [], filters)

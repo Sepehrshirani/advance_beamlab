@@ -5,6 +5,7 @@ r"""Tests for pairwise and augmented-pairwise MCMV connectivity (Nunes et al., 2
 import mne
 import numpy as np
 import pytest
+from numpy.testing import assert_allclose
 
 from advance_beamlab import (
     ar1_surrogate_significance,
@@ -817,3 +818,180 @@ def test_augmented_validates_shapes(scenario):
             positions=np.zeros((n, 2)),
             noise_cov=d["ncov"],
         )
+
+
+# --------------------------------------------------------------------------- #
+# Previously untested paths: free-orientation forwards, the default
+# ``positions``, and epoched input to the augmented estimator.
+# --------------------------------------------------------------------------- #
+def _free_scenario():
+    """A free-orientation EEG scenario with three well-separated sources."""
+    montage = mne.channels.make_standard_montage("standard_1020")
+    ch = list(dict.fromkeys(montage.ch_names))[:32]
+    info = mne.create_info(ch, 200.0, "eeg")
+    info.set_montage(montage)
+    info = (
+        mne.io.RawArray(np.zeros((len(ch), 2)), info, verbose=False)
+        .set_eeg_reference("average", projection=True, verbose=False)
+        .info
+    )
+    sphere = mne.make_sphere_model("auto", "auto", info, verbose=False)
+    src = mne.setup_volume_source_space(sphere=sphere, pos=30.0, verbose=False)
+    fwd = mne.make_forward_solution(
+        info, None, src, sphere, eeg=True, meg=False, verbose=False
+    )
+    assert not mne.forward.is_fixed_orient(fwd)
+
+    rng = np.random.default_rng(5)
+    gain = fwd["sol"]["data"]
+    rr = fwd["source_rr"]
+    # three sources spread across the volume
+    order = np.argsort(np.linalg.norm(rr - rr.mean(0), axis=1))
+    sources = [int(order[0]), int(order[len(order) // 2]), int(order[-1])]
+    oris = np.array([[1.0, 0, 0], [0, 1.0, 0], [0, 0, 1.0]])
+
+    n_times = 4000
+    t = np.arange(n_times) / 200.0
+    env = 1.0 + 0.5 * np.sin(2 * np.pi * 0.3 * t)
+    tcs = np.stack(
+        [
+            env * np.cos(2 * np.pi * 10 * t),
+            env * np.cos(2 * np.pi * 10 * t + 0.4),  # shares the envelope
+            np.cos(2 * np.pi * 10 * t + 1.1),  # flat envelope, independent
+        ]
+    )
+    data = sum(
+        np.outer(gain[:, 3 * s : 3 * s + 3] @ u, tc)
+        for s, u, tc in zip(sources, oris, tcs, strict=True)
+    )
+    data = data + 0.05 * np.abs(data).max() * rng.standard_normal(data.shape)
+
+    raw = mne.io.RawArray(data, info, verbose=False)
+    raw.set_eeg_reference("average", projection=True, verbose=False)
+    epochs = mne.make_fixed_length_epochs(raw, duration=5.0, verbose=False)
+    dcov = mne.compute_covariance(epochs, method="empirical", verbose=False)
+    evoked = mne.EvokedArray(raw.get_data(), info, tmin=0.0, verbose=False)
+    evoked.set_eeg_reference("average", projection=True, verbose=False)
+    return info, fwd, dcov, sources, oris, evoked, epochs
+
+
+def test_free_orientation_connectivity_runs_and_is_leakage_free():
+    """PW-MCMV works on a free-orientation forward with explicit orientations."""
+    info, fwd, dcov, sources, oris, evoked, _ = _free_scenario()
+
+    conn = pairwise_mcmv_connectivity(
+        evoked,
+        info,
+        fwd,
+        dcov,
+        sources,
+        orientations=oris,
+        method="envelope",
+        noise_cov=mne.make_ad_hoc_cov(info, verbose=False),
+        sfreq=info["sfreq"],
+    )
+    assert conn.shape == (3, 3)
+    assert np.allclose(conn, conn.T)
+    assert np.allclose(np.diag(conn), 0.0)
+    assert np.all(np.abs(conn) <= 1.0)
+
+    # The defining property: each pair's filter nulls the other pair member.
+    filters = make_mcmv(
+        info,
+        fwd,
+        dcov,
+        sources=[sources[0], sources[1]],
+        orientations=oris[:2],
+        noise_cov=mne.make_ad_hoc_cov(info, verbose=False),
+    )
+    assert_allclose(filters["weights"] @ filters["leadfield"], np.eye(2), atol=1e-9)
+
+
+def test_augmented_defaults_positions_from_the_forward():
+    """``positions=None`` uses ``forward['source_rr'][sources]``."""
+    info, fwd, dcov, sources, oris, evoked, _ = _free_scenario()
+    ncov = mne.make_ad_hoc_cov(info, verbose=False)
+    conn = pairwise_mcmv_connectivity(
+        evoked,
+        info,
+        fwd,
+        dcov,
+        sources,
+        orientations=oris,
+        method="envelope",
+        noise_cov=ncov,
+        sfreq=info["sfreq"],
+    )
+    sig = np.zeros((3, 3), dtype=bool)
+    sig[0, 1] = sig[1, 0] = True
+
+    explicit = augmented_pairwise_mcmv_connectivity(
+        evoked,
+        info,
+        fwd,
+        dcov,
+        sources,
+        conn,
+        sig,
+        positions=np.asarray(fwd["source_rr"])[sources],
+        orientations=oris,
+        method="envelope",
+        noise_cov=ncov,
+        sfreq=info["sfreq"],
+    )
+    defaulted = augmented_pairwise_mcmv_connectivity(
+        evoked,
+        info,
+        fwd,
+        dcov,
+        sources,
+        conn,
+        sig,
+        positions=None,
+        orientations=oris,
+        method="envelope",
+        noise_cov=ncov,
+        sfreq=info["sfreq"],
+    )
+    assert_allclose(defaulted, explicit, rtol=1e-12)
+
+
+def test_augmented_accepts_epoched_data():
+    """The augmented estimator handles (n_epochs, n_channels, n_times) input."""
+    info, fwd, dcov, sources, oris, _, epochs = _free_scenario()
+    ncov = mne.make_ad_hoc_cov(info, verbose=False)
+    data = epochs.get_data(copy=True)
+    picks = [epochs.ch_names.index(c) for c in epochs.ch_names]
+    data = data[:, picks]
+
+    conn = pairwise_mcmv_connectivity(
+        data,
+        info,
+        fwd,
+        dcov,
+        sources,
+        orientations=oris,
+        method="envelope",
+        noise_cov=ncov,
+        sfreq=info["sfreq"],
+    )
+    sig = np.zeros((3, 3), dtype=bool)
+    sig[0, 1] = sig[1, 0] = True
+    out = augmented_pairwise_mcmv_connectivity(
+        data,
+        info,
+        fwd,
+        dcov,
+        sources,
+        conn,
+        sig,
+        orientations=oris,
+        method="envelope",
+        noise_cov=ncov,
+        sfreq=info["sfreq"],
+    )
+    assert out.shape == (3, 3)
+    assert np.all(np.isfinite(out))
+    assert np.allclose(out, out.T)
+    # Non-significant edges keep their PW value; the significant one is redone.
+    assert out[0, 2] == conn[0, 2]
