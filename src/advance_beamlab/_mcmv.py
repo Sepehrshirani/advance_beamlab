@@ -26,6 +26,7 @@ References
 # License: BSD-3-Clause
 
 import warnings
+from copy import deepcopy
 
 import numpy as np
 from mne import Covariance
@@ -35,17 +36,58 @@ from mne import Covariance
 # level and are reliably catchable by ``pytest.warns``. When upstreaming into
 # MNE-Python these can be swapped for ``mne.utils.warn``, whose test harness
 # handles the stack-rewriting behaviour.
-# MNE's regularised (pseudo-)inverse of a covariance matrix. Re-using it here
-# means the data-covariance inversion -- including the ``reg`` diagonal-loading
-# convention and rank handling -- is numerically identical to that performed by
+# MNE's regularised (pseudo-)inverse of a covariance matrix. Re-using it -- with
+# the ``reg`` rescaling applied in ``make_mcmv`` to compensate for our ``pca=True``
+# whitener -- means the data-covariance inversion, including the diagonal-loading
+# convention and rank handling, is numerically identical to that performed by
 # ``mne.beamformer.make_lcmv``, so the n == 1 MCMV filter reduces *exactly* to
-# the corresponding LCMV filter and every covariance estimator/shrinkage method
-# available through ``mne.compute_covariance`` is inherited unchanged.
+# the corresponding LCMV filter (including on rank-deficient data) and every
+# covariance estimator/shrinkage method available through
+# ``mne.compute_covariance`` is inherited unchanged.
 from mne.beamformer._compute_beamformer import _reg_pinv
 from mne.forward import is_fixed_orient
 from mne.utils import _check_option, _validate_type, logger, verbose
 
 _ALLOWED_WEIGHT_NORM = ("unit-gain", "unit-noise-gain", None)
+
+# ``rank`` values understood by :func:`mne.cov.compute_whitener`. MNE's own
+# beamformers accept exactly these, so we accept them and nothing else.
+_ALLOWED_RANK = (None, "full", "info")
+
+
+def _cov_as_matrix(cov, ch_names):
+    """Return the dense covariance over ``ch_names`` as a square ndarray.
+
+    A :class:`mne.Covariance` may store a *diagonal* covariance as a 1-D array
+    (``cov['diag'] is True``) -- this is what :func:`mne.make_ad_hoc_cov` returns
+    and what MNE writes for diagonal covariance files. ``Covariance._get_square``
+    is the same accessor :func:`mne.beamformer.make_lcmv` uses, so diagonal and
+    full covariances are handled identically here and in MNE.
+    """
+    cov_ch = list(cov.ch_names)
+    idx = [cov_ch.index(ch) for ch in ch_names]
+    return np.asarray(cov._get_square(), dtype=np.float64)[np.ix_(idx, idx)]
+
+
+def _split_rank(rank):
+    """Split ``rank`` into the whitener and the covariance-inverse conventions.
+
+    :func:`mne.cov.compute_whitener` accepts ``None | 'full' | 'info' | dict``
+    whereas :func:`mne.beamformer._compute_beamformer._reg_pinv` accepts only
+    ``None | 'full' | int``. Passing one convention to the other raises
+    ``TypeError``, so the caller-facing ``rank`` (MNE's convention) is translated
+    here: the whitener receives it unchanged, and the covariance inverse receives
+    ``'full'`` only when the caller explicitly asked for it, else ``None`` (which
+    makes ``_reg_pinv`` estimate the rank numerically, as ``make_lcmv`` does).
+    """
+    _validate_type(rank, (None, str, dict), "rank")
+    if isinstance(rank, str) and rank not in ("full", "info"):
+        raise ValueError(
+            f"rank must be None, 'full', 'info' or a dict of per-channel-type "
+            f"ranks, got {rank!r}. An explicit integer is not supported; use a "
+            "dict such as {'meg': 60} to set the rank of a sensor type."
+        )
+    return rank, ("full" if rank == "full" else None)
 
 
 class MCMVBeamformer(dict):
@@ -58,6 +100,20 @@ class MCMVBeamformer(dict):
     matrix under the key ``'weights'`` with shape ``(n_sources, n_channels)``
     (one filter -- one row -- per constrained source).
     """
+
+    def copy(self):
+        """Return a deep copy of the beamformer.
+
+        Overrides ``dict.copy`` (which is shallow) so that the semantics match
+        :meth:`mne.beamformer.Beamformer.copy`: mutating the copy's arrays -- e.g.
+        ``filters.copy()['weights'] *= 2`` -- must not corrupt the original.
+
+        Returns
+        -------
+        filters : instance of MCMVBeamformer
+            A deep copy of this beamformer.
+        """
+        return deepcopy(self)
 
     def __repr__(self):  # noqa: D105
         n = self.get("n_sources", "?")
@@ -164,8 +220,7 @@ def _align_channels(info, forward, data_cov):
             f"data_cov ({dropped} dropped as missing or bad)."
         )
 
-    cov_idx = [cov_ch.index(ch) for ch in common]
-    R = np.asarray(data_cov.data, dtype=np.float64)[np.ix_(cov_idx, cov_idx)]
+    R = _cov_as_matrix(data_cov, common)
     return common, R
 
 
@@ -314,7 +369,7 @@ def make_mcmv(
         global scaling that leaves the unit-gain filter unchanged.
     reg : float
         Diagonal-loading regularisation of ``data_cov`` as a fraction of the
-        mean eigenvalue, applied via MNE's :func:`~mne.beamformer` inversion
+        mean eigenvalue, applied via the same :mod:`mne.beamformer` inversion
         machinery. ``reg=0`` uses the unregularised inverse of Eq. (5). This is
         a deliberate, documented departure from the bare equation -- never a
         silent fix -- and defaults to ``0.05`` to match ``make_lcmv``.
@@ -327,19 +382,27 @@ def make_mcmv(
         Output normalisation. ``'unit-gain'`` (and ``None``) returns the literal
         Eq. (5) filter (the unit-gain / zero-gain constraint
         :math:`\mathbf{W}^{\mathsf T}\mathbf{H}=\mathbf{I}` holds on the raw
-        leadfield). ``'unit-noise-gain'`` rescales each filter so that
-        :math:`\mathbf{w}_i^{\mathsf T}\mathbf{C}_n\mathbf{w}_i = 1`
-        :footcite:`SekiharaNagarajan2008`; because the solve is performed in the
-        whitened space this is exactly unit Euclidean norm of the whitened
-        filter, matching MNE's definition.
-    rank : int | None | 'full'
+        leadfield). ``'unit-noise-gain'`` rescales each filter to unit Euclidean
+        norm *in the whitened space* :footcite:`SekiharaNagarajan2008`, which is
+        MNE's definition and is used by :func:`mne.beamformer.make_lcmv`. That
+        equals :math:`\mathbf{w}_i^{\mathsf T}\mathbf{C}_n\mathbf{w}_i = 1`
+        exactly when the whitener is a single block. :func:`mne.cov.compute_whitener`
+        eigendecomposes the noise covariance separately per sensor-type group
+        (MEG together, EEG separately), so for a combined MEG+EEG array the
+        whitened noise covariance is the identity only up to its cross-type
+        blocks and the realised noise gain departs from 1 (by of order one tenth
+        in power on the MNE ``sample`` data). This matches ``make_lcmv`` exactly.
+    rank : None | 'full' | 'info' | dict
         Rank handling, applied to both the noise-covariance whitener
-        (:func:`mne.cov.compute_whitener`) and the data-covariance inverse. The
-        default ``None`` auto-detects the rank per sensor type and drops the null
-        space, as :func:`mne.beamformer.make_lcmv` does -- the correct choice for
+        (:func:`mne.cov.compute_whitener`) and the data-covariance inverse, using
+        MNE's own convention. The default ``None`` auto-detects the rank per
+        sensor type and drops the null space -- the correct choice for
         rank-deficient data (e.g. after SSP/ICA), where ``'full'`` would instead
-        invert the near-null directions and give an unstable whitener. Pass an
-        integer to set the rank explicitly.
+        invert the near-null directions and give an unstable whitener. Use a dict
+        such as ``{'meg': 60}`` to set the rank of a sensor type explicitly; a
+        bare integer is not accepted, because the rank must be resolved per
+        sensor type. Note :func:`mne.beamformer.make_lcmv` defaults to ``'info'``
+        rather than ``None``.
     %(verbose)s
 
     Returns
@@ -356,8 +419,9 @@ def make_mcmv(
         forward type; no common channels; non-finite covariance; a beamformer
         order exceeding the data rank.
     RuntimeError
-        If the constrained-source system is singular (see
-        :func:`_compute_mcmv_weights`).
+        If :math:`\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\mathbf{H}` is singular:
+        the constrained sources are numerically collinear (coincident location
+        and orientation), or the beamformer order exceeds the rank of the data.
 
     Notes
     -----
@@ -463,7 +527,8 @@ def make_mcmv(
     # CTF gradiometer array) that model is a global scalar that cancels from the
     # unit-gain filter, so single-type results are unchanged.
     adhoc_noise = noise_cov is None
-    whitener = _make_whitener(info, noise_cov, common_ch, rank)
+    whitener_rank, pinv_rank = _split_rank(rank)
+    whitener = _make_whitener(info, noise_cov, common_ch, whitener_rank)
     H_w = whitener @ H  # whitened leadfield (n_white, n_sources)
     R_w = whitener @ R @ whitener.T  # whitened data covariance (n_white, n_white)
     # The congruence above is symmetric in exact arithmetic; enforce it against
@@ -475,7 +540,19 @@ def make_mcmv(
 
     # -- regularised inverse of the (whitened) data covariance -------------- #
     # Diagonal-loading convention identical to MNE's make_lcmv (_reg_pinv).
-    Rinv_w, loading, rnk = _reg_pinv(R_w, reg=reg, rank=rank)
+    #
+    # ``_reg_pinv`` loads by ``reg * mean(singular values of the matrix it is
+    # given``. ``make_lcmv`` whitens with ``pca=False``, so its whitened
+    # covariance is ``n_channels x n_channels`` of rank ``n_white`` and the mean
+    # is taken over ``n_channels`` values -- including the ``n_channels -
+    # n_white`` structural zeros. We whiten with ``pca=True`` (which is what lets
+    # a rank-deficient noise covariance be handled per sensor type), so our
+    # matrix is ``n_white x n_white`` and the mean is over ``n_white`` values.
+    # Without the rescaling below our absolute loading would be larger by exactly
+    # ``n_channels / n_white`` and the n == 1 filter would *not* reduce to
+    # ``make_lcmv`` on rank-deficient data (SSP, average reference, SSS/ICA).
+    reg_eff = float(reg) * n_white / len(common_ch)
+    Rinv_w, loading, rnk = _reg_pinv(R_w, reg=reg_eff, rank=pinv_rank)
     if rnk < n_white:
         warnings.warn(
             f"data_cov is rank-deficient (rank {rnk} < {n_white} whitened "
@@ -599,9 +676,6 @@ def apply_mcmv_cov(data_cov, filters):
     """
     _validate_type(data_cov, Covariance, "data_cov")
     _validate_type(filters, MCMVBeamformer, "filters")
-    ch = filters["ch_names"]
-    cov_ch = list(data_cov.ch_names)
-    idx = [cov_ch.index(c) for c in ch]
-    R = np.asarray(data_cov.data)[np.ix_(idx, idx)]
+    R = _cov_as_matrix(data_cov, filters["ch_names"])
     W = filters["weights"]  # (n_sources, n_channels)
     return W @ R @ W.T
