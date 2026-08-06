@@ -50,10 +50,6 @@ from mne.utils import _check_option, _validate_type, logger, verbose
 
 _ALLOWED_WEIGHT_NORM = ("unit-gain", "unit-noise-gain", None)
 
-# ``rank`` values understood by :func:`mne.cov.compute_whitener`. MNE's own
-# beamformers accept exactly these, so we accept them and nothing else.
-_ALLOWED_RANK = (None, "full", "info")
-
 
 def _cov_as_matrix(cov, ch_names):
     """Return the dense covariance over ``ch_names`` as a square ndarray.
@@ -225,7 +221,19 @@ def _align_channels(info, forward, data_cov):
 
 
 def _get_leadfield(forward, common_ch, sources, orientations):
-    """Build the joint forward matrix H (n_channels x n_sources)."""
+    """Build the joint forward matrix H (n_channels x n_sources).
+
+    ``orientations`` are always interpreted in **head coordinates**. For a
+    ``surf_ori=True`` free-orientation forward the three gain columns of a source
+    are expressed in that source's *local surface* frame (two tangential
+    directions and the normal) rather than in head x/y/z, so the orientation is
+    rotated into the local frame before it is applied. Without this the same
+    ``orientations`` array would mean two different physical dipoles depending on
+    which representation of the same forward the caller happened to pass -- and
+    the most natural user action, taking the cortical normal from
+    ``forward['source_nn']`` (which is in head coordinates), would be the one
+    that breaks.
+    """
     fwd_ch = list(forward["sol"]["row_names"])
     fwd_idx = [fwd_ch.index(ch) for ch in common_ch]
     G = np.asarray(forward["sol"]["data"], dtype=np.float64)[fwd_idx]  # rows aligned
@@ -238,11 +246,69 @@ def _get_leadfield(forward, common_ch, sources, orientations):
         # Free-orientation forward: 3 columns per source location. The forward
         # field of source i is h_i = L_i u_i, with L_i the (n_channels x 3)
         # leadfield block and u_i the orientation unit vector.
+        surf_ori = bool(forward.get("surf_ori", False))
+        nn = np.asarray(forward["source_nn"], dtype=np.float64)
         H = np.empty((G.shape[0], len(sources)), dtype=np.float64)
         for col, (s, u) in enumerate(zip(sources, orientations, strict=True)):
             L = G[:, 3 * s : 3 * s + 3]  # (n_channels, 3)
+            if surf_ori:
+                # ``source_nn`` holds, per source, the 3x3 rotation whose rows are
+                # the local frame axes expressed in head coordinates. Its action
+                # on a head-coordinate vector gives the local components.
+                u = nn[3 * s : 3 * s + 3] @ u
             H[:, col] = L @ u
     return H
+
+
+def _intersect_noise_cov(common_ch, cov_matrix, noise_cov):
+    """Restrict ``common_ch``/``cov_matrix`` to the channels ``noise_cov`` covers.
+
+    A MEG-only empty-room noise covariance combined with a MEG+EEG forward is
+    standard practice, so the noise covariance is allowed to cover a subset of
+    the channels; everything it does not cover is dropped, exactly as
+    :func:`make_mcmv` has always done. Shared with the localizer scan and the
+    ReciPSIICOS entry points so that all algorithms select channels identically.
+    """
+    if noise_cov is None:
+        return common_ch, cov_matrix
+    ncov_set = set(noise_cov.ch_names)
+    keep = [i for i, ch in enumerate(common_ch) if ch in ncov_set]
+    if len(keep) == 0:
+        raise ValueError("noise_cov shares no channels with info/forward/data_cov.")
+    if len(keep) < len(common_ch):
+        logger.info(
+            f"    Dropping {len(common_ch) - len(keep)} channel(s) not covered by "
+            "noise_cov."
+        )
+        common_ch = [common_ch[i] for i in keep]
+        cov_matrix = cov_matrix[np.ix_(keep, keep)]
+    return common_ch, cov_matrix
+
+
+def _check_noise_cov_required(info, common_ch, noise_cov):
+    """Raise if several sensor types are present without a noise covariance.
+
+    The ad-hoc fallback is only defensible for a single sensor type, where it is
+    a global scaling that cancels from the unit-gain filter. With more than one
+    type its arbitrary per-type variances set the relative weighting of
+    magnetometers, gradiometers and EEG and the beamformer localises elsewhere.
+    :func:`mne.beamformer.make_lcmv` refuses this case, and the error message
+    below is MNE's verbatim so the contract is identical.
+    """
+    if noise_cov is not None:
+        return
+    from mne import pick_info
+    from mne._fiff.pick import _contains_ch_type
+
+    picks = [info["ch_names"].index(ch) for ch in common_ch]
+    info_pick = pick_info(info, picks, verbose=False)
+    n_types = sum(_contains_ch_type(info_pick, tt) for tt in ("mag", "grad", "eeg"))
+    if n_types > 1:
+        raise ValueError(
+            "Source reconstruction with several sensor types"
+            " requires a noise covariance matrix to be "
+            "able to apply whitening."
+        )
 
 
 def _make_whitener(info, noise_cov, common_ch, rank):
@@ -374,10 +440,15 @@ def make_mcmv(
         a deliberate, documented departure from the bare equation -- never a
         silent fix -- and defaults to ``0.05`` to match ``make_lcmv``.
     orientations : ndarray, shape (n_sources, 3) | None
-        Source orientation unit vectors, required when ``forward`` has free
-        orientation and ignored (must be ``None``) when it is fixed-orientation.
-        Data-driven orientation estimation (the generalised-eigenvalue
-        localiser of Moiseev et al., 2011) is provided by a separate function.
+        Source orientation unit vectors **in head coordinates**, required when
+        ``forward`` has free orientation and ignored (must be ``None``) when it is
+        fixed-orientation. A ``surf_ori=True`` forward stores its gain columns in
+        each source's local surface frame; the rotation is applied internally, so
+        the same head-coordinate vectors give the same physical dipole for either
+        representation of a forward (e.g. ``forward['source_nn'][2::3]``, the
+        cortical normals, may be passed directly). Data-driven orientation
+        estimation (the generalised-eigenvalue localiser of Moiseev et al., 2011)
+        is provided by :func:`~advance_beamlab.scan_mcmv`.
     weight_norm : 'unit-gain' | 'unit-noise-gain' | None
         Output normalisation. ``'unit-gain'`` (and ``None``) returns the literal
         Eq. (5) filter (the unit-gain / zero-gain constraint
@@ -497,14 +568,8 @@ def make_mcmv(
     # If a noise covariance is supplied it must also cover the channels we use,
     # so intersect with it before building anything (the no-noise-cov path uses
     # an ad-hoc model defined on all of ``info`` and needs no intersection).
-    if noise_cov is not None:
-        ncov_set = set(noise_cov.ch_names)
-        keep = [i for i, ch in enumerate(common_ch) if ch in ncov_set]
-        if len(keep) == 0:
-            raise ValueError("noise_cov shares no channels with info/forward/data_cov.")
-        if len(keep) < len(common_ch):
-            common_ch = [common_ch[i] for i in keep]
-            R = R[np.ix_(keep, keep)]
+    common_ch, R = _intersect_noise_cov(common_ch, R, noise_cov)
+    _check_noise_cov_required(info, common_ch, noise_cov)
 
     n = sources.size
     if n > len(common_ch):
@@ -621,7 +686,10 @@ def _pick_data(data, ch_names):
     if arr.shape[-2] != len(ch_names):
         raise ValueError(
             f"Array has {arr.shape[-2]} channels but the filter expects "
-            f"{len(ch_names)}. Pass an MNE object or a correctly ordered array."
+            f"{len(ch_names)}. The filter is built on the good channels shared by "
+            "info, forward and data_cov, so it excludes info['bads']; pass an MNE "
+            "object (Raw/Epochs/Evoked), whose channels are matched by name, or "
+            "index the array down to filters['ch_names'] first."
         )
     return arr
 
