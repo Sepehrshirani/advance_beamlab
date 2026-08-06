@@ -186,9 +186,11 @@ def _envelope_corr_matrix(
     )
     n_signals = len(analytic)
     if orthogonalize is False:
-        corr = np.empty((n_signals, n_signals))
-        for k in range(n_signals):
-            corr[k] = _rowwise_pearson(np.broadcast_to(mag[k], mag.shape), mag)
+        centred = mag - mag.mean(axis=-1, keepdims=True)
+        norms = np.linalg.norm(centred, axis=-1)
+        norms[norms == 0] = 1.0
+        centred /= norms[:, np.newaxis]
+        corr = centred @ centred.T
         return np.abs(corr) if absolute else corr
     # Pairwise orthogonalisation (Hipp et al., 2012): project the analytic
     # signal of one region out of the other before enveloping, then correlate

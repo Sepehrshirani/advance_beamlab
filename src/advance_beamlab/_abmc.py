@@ -529,7 +529,7 @@ def make_abmc(
     mu=None,
     reg=0.05,
     f=1.0,
-    max_iter=60,
+    max_iter=200,
     tol=1e-4,
     max_lag=None,
     return_weights=False,
@@ -601,10 +601,11 @@ def make_abmc(
     f : float
         Distortionless gain (default 1.0).
     max_iter : int
-        Maximum weight-update iterations (default 60). The gain constraint holds
-        exactly at every step, so this governs only how far the output-variance
-        term has settled; the number of steps needed grows with the condition
-        number of :math:`R`, and a warning is emitted if ``tol`` is not met.
+        Maximum weight-update iterations (default 200). The gain constraint
+        holds exactly at every step, so this governs only how far the
+        output-variance term has settled; the number of steps needed grows with
+        the condition number of :math:`R`, and a warning is emitted if ``tol``
+        is not met.
     tol : float
         Stop when the relative change in :math:`\|W\|` falls below this.
     max_lag : int | None
@@ -792,7 +793,7 @@ def make_abmc_dictionary(
     mu=None,
     reg=0.05,
     f=1.0,
-    max_iter=60,
+    max_iter=200,
     tol=1e-4,
     max_lag=None,
     return_weights=False,

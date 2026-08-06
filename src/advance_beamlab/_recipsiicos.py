@@ -936,23 +936,42 @@ def _optimal_rank(p_pwr, p_cor, method, floor=0.1):
     ``(P_pwr, P_cor)`` curve, i.e. the sign change of
     ``dP_cor/dk - dP_pwr/dk``.
 
-    The two projectors traverse the rank axis in opposite directions, so the
-    criterion is applied per method. For ``recipsiicos`` (projection *onto* the
-    power subspace) both curves rise with ``k`` and ``K*`` is the last rank before
-    the difference turns negative; for ``whitened`` (projection *away from* the
-    correlation subspace) both curves fall with ``k`` and ``K*`` is the last rank
-    before it turns positive. In each case a ``floor`` on the retained power
-    guards against a degenerate curve (a rank-deficient forward, e.g. a
-    single-shell sphere model, whose subspaces do not separate) returning a rank
-    that (near-)empties the covariance.
+    The two projectors traverse the rank axis in *opposite directions*, which is
+    the whole subtlety of this criterion, and it is worth being explicit about it
+    because the sign convention is easy to get backwards. Section 3.1 of the
+    paper states that "increased projection rank for ReciPSIICOS corresponds to a
+    less restrictive situation", and its Fig. 19 plots the two methods on a
+    shared axis whose lower (ReciPSIICOS) scale "is arranged in the descending
+    order". So:
+
+    * ``whitened`` projects *away from* the correlation subspace. Its identity
+      end is ``k = 0``, both curves fall with ``k``, and the axis is scanned
+      *upward* from ``k = 1``: ``K*`` is the last rank before the difference
+      turns positive.
+    * ``recipsiicos`` projects *onto* the power subspace. Its identity end is
+      ``k = q^2``, both curves rise with ``k``, and the axis is scanned
+      *downward* from there: ``K*`` is the last rank before the difference turns
+      negative *as ``k`` decreases*, i.e. one past the final negative difference
+      when read in ascending order. Scanning it upward instead would stop at the
+      first negative difference, which on any realistic forward occurs almost
+      immediately -- the difference *starts* negative, because the leading power
+      direction is also the direction the correlation subspace overlaps most --
+      and would return ``K* = 1`` or ``2``, discarding nearly all of the
+      source-power subspace.
+
+    In each case a ``floor`` on the retained power guards against a degenerate
+    curve (a rank-deficient forward, e.g. a single-shell sphere model, whose
+    subspaces do not separate) returning a rank that (near-)empties the
+    covariance; the back-off runs toward that method's identity end.
     """
     n = int(p_pwr.size)
     if n < 3:
         return n
     delta = np.diff(p_cor) - np.diff(p_pwr)  # delta[i] links rank i+1 and i+2
     if method == "recipsiicos":
+        # Descending axis: the crossing is the *last* negative difference.
         hit = np.nonzero(delta < 0)[0]
-        k = int(hit[0] + 1) if hit.size else n
+        k = int(hit[-1] + 2) if hit.size else 1
         # Increasing curve: back off toward larger (near-identity) rank.
         while k < n and p_pwr[k - 1] < floor:
             k += 1
@@ -985,10 +1004,17 @@ def recipsiicos_rank_curve(
 
     Computes, for every projection rank ``k`` in the working space, the fraction
     of the power- and correlation-subspace energy that survives the projection
-    (Eqs. 20-21). The useful rank is the largest ``k`` for which the correlation
-    subspace is depleted faster than the power subspace; plotting ``p_cor``
-    against ``p_pwr`` makes this trade-off visible and its 45-degree point
-    (Section 2.4) is the recommended rank.
+    (Eqs. 20-21). The useful rank is the one beyond which the correlation
+    subspace stops being depleted faster than the power subspace; plotting
+    ``p_cor`` against ``p_pwr`` makes this trade-off visible and its 45-degree
+    point (Section 2.4) is the recommended rank.
+
+    Note that the two methods traverse the rank axis in opposite directions --
+    ``k = q^2`` is the identity for ``'recipsiicos'`` and ``k = 0`` is the
+    identity for ``'whitened'`` -- so ``p_pwr`` and ``p_cor`` rise with ``k`` for
+    the former and fall with it for the latter, and the returned ``K*`` is
+    located accordingly (Fig. 19 of the paper puts the ReciPSIICOS scale in
+    descending order for exactly this reason).
 
     Parameters
     ----------

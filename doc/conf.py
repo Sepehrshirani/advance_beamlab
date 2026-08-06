@@ -41,7 +41,22 @@ intersphinx_mapping = {
     "numpy": ("https://numpy.org/doc/stable", None),
     "scipy": ("https://docs.scipy.org/doc/scipy", None),
     "mne": ("https://mne.tools/stable", None),
+    # The connectivity metrics are delegated to mne-connectivity, so its API is
+    # referenced throughout ``_connectivity.py`` and must resolve.
+    "mne_connectivity": ("https://mne.tools/mne-connectivity/stable", None),
 }
+
+# ``sphinx_gallery_conf`` holds a function (the style reset), which Sphinx cannot
+# pickle into its config cache. The warning is unavoidable and harmless, but it
+# would fail the ``-W`` documentation build in CI.
+suppress_warnings = ["config.cache"]
+
+# Cross-references are checked in nitpicky mode; the entries below are targets
+# that legitimately have no documentation page to point at.
+nitpick_ignore = [
+    ("py:class", "optional"),
+    ("py:class", "instance of mne.Info"),
+]
 
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
