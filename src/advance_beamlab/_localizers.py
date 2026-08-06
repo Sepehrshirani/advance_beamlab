@@ -23,17 +23,33 @@ References
 # Authors: Sepehr Shirani and Muzhi Wang <sepehrshirani@gmail.com>
 # License: BSD-3-Clause
 
+import warnings
+
 import numpy as np
+from mne.beamformer._compute_beamformer import _reg_pinv
 from mne.forward import is_fixed_orient
-from mne.utils import logger
-from scipy.linalg import eigh
+from mne.utils import logger, verbose
+from scipy.linalg import eigh, solve
 
 from ._mcmv import (
     _align_channels,
+    _check_noise_cov_required,
     _compute_mcmv_weights,
+    _cov_as_matrix,
+    _intersect_noise_cov,
     _make_whitener,
+    _split_rank,
     make_mcmv,
 )
+
+# The linear algebra behind a localizer evaluation is a symmetric-definite
+# generalized eigenproblem (``scipy.linalg.eigh``) or a solve. At a numerically
+# degenerate grid location the relevant matrix loses positive-definiteness, and
+# LAPACK's failure surfaces as ``LinAlgError`` from ``solve``/``numpy`` but as a
+# plain ``ValueError`` from ``eigh`` (its ``potrf`` step reports a non-positive
+# leading minor). Both must be caught wherever such a location is to be skipped
+# rather than aborting the scan.
+_SINGULAR_ERRORS = (np.linalg.LinAlgError, ValueError)
 
 # Each localizer is (A_key, B_key, subtract_n): its value is
 # Tr(B_result A_result^-1) - (n if subtract_n else 0), where A is the
@@ -62,7 +78,7 @@ def _check_localizer(name, evoked_cov):
         )
 
 
-def _metric_matrices(R, N, evoked_cov=None):
+def _metric_matrices(R, N, evoked_cov=None, *, metrics=None):
     r"""Return the per-localizer metric matrices that sit between leadfields.
 
     Returns the matrices :math:`\mathbf{M}` such that the Table-2 quantities are
@@ -73,7 +89,15 @@ def _metric_matrices(R, N, evoked_cov=None):
     - ``T`` uses :math:`\mathbf{R}^{-1}\mathbf{N}\mathbf{R}^{-1}`
     - ``E`` uses :math:`\mathbf{R}^{-1}\bar{\mathbf{R}}\mathbf{R}^{-1}`
       (only when ``evoked_cov`` is supplied)
+
+    The matrices depend only on the covariances, never on the leadfields, so a
+    scan over a source grid computes them once and passes them back in through
+    ``metrics``, which is then returned unchanged. That turns the two dense
+    inversions below -- otherwise repeated at every grid point of every
+    iteration -- into a single one per scan.
     """
+    if metrics is not None:
+        return metrics
     Rinv = np.linalg.inv(R)
     metrics = {
         "S": Rinv,
@@ -90,7 +114,7 @@ def _result_matrix(H, metric):
     return H.T @ metric @ H
 
 
-def localizer_value(name, H, R, N, *, evoked_cov=None):
+def localizer_value(name, H, R, N, *, evoked_cov=None, metrics=None):
     r"""Evaluate an MCMV localizer for a set of ``n`` constrained sources.
 
     Implements the Table-1 functions of :footcite:`Moiseev2011`:
@@ -112,6 +136,11 @@ def localizer_value(name, H, R, N, *, evoked_cov=None):
     evoked_cov : ndarray, shape (n_channels, n_channels) | None
         The covariance of the epoch-averaged field :math:`\bar{\mathbf{R}}`,
         required for the event-related localizers ``'mer'`` and ``'rmer'``.
+    metrics : dict | None
+        Pre-computed metric matrices from :func:`_metric_matrices` for these
+        covariances. When given, ``R``, ``N`` and ``evoked_cov`` are not used to
+        rebuild them; this is how a grid scan avoids re-inverting ``R`` at every
+        location. Leave as ``None`` to compute them from the covariances.
 
     Returns
     -------
@@ -124,7 +153,7 @@ def localizer_value(name, H, R, N, *, evoked_cov=None):
     """
     _check_localizer(name, evoked_cov)
     a_key, b_key, subtract_n = _LOCALIZERS[name]
-    metrics = _metric_matrices(R, N, evoked_cov)
+    metrics = _metric_matrices(R, N, evoked_cov, metrics=metrics)
     A = _result_matrix(H, metrics[a_key])
     B = _result_matrix(H, metrics[b_key])
     # Tr(B A^-1) = Tr(A^-1 B) = trace of the solution of A X = B, computed via a
@@ -135,7 +164,7 @@ def localizer_value(name, H, R, N, *, evoked_cov=None):
     return float(value)
 
 
-def optimal_orientation(name, H_ref, H_loc, R, N, *, evoked_cov=None):
+def optimal_orientation(name, H_ref, H_loc, R, N, *, evoked_cov=None, metrics=None):
     r"""Data-driven orientation of a new source (Moiseev 2011, Eqs. 13-14).
 
     Given the leadfields ``H_ref`` of the sources already found (held fixed) and
@@ -172,6 +201,10 @@ def optimal_orientation(name, H_ref, H_loc, R, N, *, evoked_cov=None):
         Data and noise covariances (pass the identity for ``N`` when whitened).
     evoked_cov : ndarray | None
         The averaged-field covariance, required for ``'mer'`` and ``'rmer'``.
+    metrics : dict | None
+        Pre-computed metric matrices from :func:`_metric_matrices`, as in
+        :func:`localizer_value`; supply them to avoid re-inverting ``R`` at every
+        location of a grid scan.
 
     Returns
     -------
@@ -188,7 +221,7 @@ def optimal_orientation(name, H_ref, H_loc, R, N, *, evoked_cov=None):
             f"H_loc must have 3 columns (x, y, z leadfields), got {H_loc.shape[1]}."
         )
     a_key, b_key, _ = _LOCALIZERS[name]
-    metrics = _metric_matrices(R, N, evoked_cov)
+    metrics = _metric_matrices(R, N, evoked_cov, metrics=metrics)
     mA, mB = metrics[a_key], metrics[b_key]
 
     # kk blocks (3 x 3) always present.
@@ -205,8 +238,11 @@ def optimal_orientation(name, H_ref, H_loc, R, N, *, evoked_cov=None):
         B_RR = H_ref.T @ mB @ H_ref
         B_Rk = H_ref.T @ mB @ H_loc
         B_kR = B_Rk.T
-        # P = A_kR A_RR^-1 (solve for stability), reused across the D terms.
-        P = A_kR @ np.linalg.inv(A_RR)
+        # P = A_kR A_RR^-1, reused across the D terms. A_RR is symmetric positive
+        # definite (it is S or T over the reference leadfields), so it is formed
+        # by a Cholesky solve rather than an explicit inverse: solving
+        # A_RR X = A_Rk gives X = A_RR^-1 A_Rk, whose transpose is P.
+        P = solve(A_RR, A_Rk, assume_a="pos").T
         F = A_kk - P @ A_Rk
         D = P @ B_RR @ P.T - P @ B_Rk - B_kR @ P.T + B_kk
 
@@ -219,34 +255,28 @@ def optimal_orientation(name, H_ref, H_loc, R, N, *, evoked_cov=None):
     return u / np.linalg.norm(u)
 
 
-def _cov_as_matrix(cov, ch_names):
-    """Dense covariance matrix over ``ch_names`` (handles diagonal covs)."""
-    cov_ch = list(cov.ch_names)
-    idx = [cov_ch.index(ch) for ch in ch_names]
-    data = np.asarray(cov.data, dtype=np.float64)
-    if data.ndim == 1:  # a diagonal covariance stores only its diagonal
-        return np.diag(data[idx])
-    return data[np.ix_(idx, idx)]
-
-
 class MCMVScanResult(dict):
     r"""Result of a sequential MCMV source search (see :func:`scan_mcmv`).
 
     Behaves like a dictionary with the following keys.
 
     sources : list of int
-        Grid indices (into ``forward``) of the discovered sources, ordered as
-        found (strongest first).
+        Grid indices (into ``forward``) of the discovered sources, in the order
+        the greedy search found them. That order is not guaranteed to be
+        monotone in source strength: each iteration maximises the *joint*
+        localizer given the sources already fixed, so a source found later can
+        carry the larger pseudo-Z.
     orientations : ndarray, shape (n_sources, 3) | None
         Unit orientation of each discovered source; ``None`` for a
         fixed-orientation forward.
     pseudo_z : ndarray, shape (n_sources,)
-        Single-source pseudo-Z :math:`\\bar z_k = (\\mathbf{w}_k^{\\mathsf T}
-        \\mathbf{R}\\mathbf{w}_k)/(\\mathbf{w}_k^{\\mathsf T}\\mathbf{N}
-        \\mathbf{w}_k)` of each source at the iteration it was found. Used to
-        decide how many sources are real: iterate until it drops to a baseline
-        (which, per Moiseev et al. 2011, must be determined experimentally and
-        is generally not one).
+        Pseudo-Z :math:`\bar z_k = (\mathbf{w}_k^{\mathsf T}\mathbf{R}
+        \mathbf{w}_k)/(\mathbf{w}_k^{\mathsf T}\mathbf{N}\mathbf{w}_k)` of the
+        source added at iteration ``k``, evaluated on **that source's row of the
+        joint ``k``-source MCMV filter** -- not on a single-source (LCMV) filter
+        at the same location. Used to decide how many sources are real: iterate
+        until it drops to a baseline (which, per Moiseev et al. 2011, must be
+        determined experimentally and is generally not one).
     filters : instance of MCMVBeamformer
         The jointly-optimal MCMV filters for the discovered source set.
     localizer : str
@@ -264,6 +294,7 @@ class MCMVScanResult(dict):
         )
 
 
+@verbose
 def scan_mcmv(
     info,
     forward,
@@ -314,11 +345,15 @@ def scan_mcmv(
         required for ``localizer in {'mer', 'rmer'}``.
     reg : float
         Diagonal-loading regularisation applied to the (whitened) data
-        covariance, as in :func:`make_mcmv`.
-    rank : int | None | 'full'
-        Rank handling for the whitener and the covariance inverse, as in
-        :func:`make_mcmv`. The default ``None`` auto-detects the rank and drops
-        the null space.
+        covariance, as in :func:`make_mcmv`. Must be in ``[0, 1]``.
+    rank : None | 'full' | 'info' | dict
+        Rank handling for the whitener and the data-covariance inverse, in MNE's
+        convention and applied exactly as in :func:`make_mcmv`. The default
+        ``None`` auto-detects the rank per sensor type and drops the null space.
+        This matters more here than for a single filter: the scan compares
+        localizer values *across* the grid, and inverting the near-null
+        directions of a rank-deficient covariance perturbs those values enough to
+        change which locations win.
     %(verbose)s
 
     Returns
@@ -340,18 +375,17 @@ def scan_mcmv(
     _check_localizer(localizer, evoked_cov)
     if n_sources < 1:
         raise ValueError(f"n_sources must be >= 1, got {n_sources}.")
+    # Validate ``reg`` here rather than letting make_mcmv reject it at the very
+    # end -- by then the whole grid scan has already been paid for.
+    if not (0.0 <= float(reg) <= 1.0):
+        raise ValueError(f"reg must be in [0, 1], got {reg}.")
     fixed = is_fixed_orient(forward)
 
-    # -- common channel space (also intersect noise_cov, as make_mcmv does) - #
+    # -- common channel space (shared helpers, so the scan, make_mcmv and the
+    # filters returned below all select exactly the same channels) ---------- #
     common_ch, R = _align_channels(info, forward, data_cov)
-    if noise_cov is not None:
-        ncov_set = set(noise_cov.ch_names)
-        keep = [i for i, ch in enumerate(common_ch) if ch in ncov_set]
-        if len(keep) == 0:
-            raise ValueError("noise_cov shares no channels with info/forward/data_cov.")
-        if len(keep) < len(common_ch):
-            common_ch = [common_ch[i] for i in keep]
-            R = R[np.ix_(keep, keep)]
+    common_ch, R = _intersect_noise_cov(common_ch, R, noise_cov)
+    _check_noise_cov_required(info, common_ch, noise_cov)
 
     n_loc = forward["nsource"]
     if n_sources > n_loc:
@@ -360,30 +394,66 @@ def scan_mcmv(
         )
 
     # -- whiten: in this space the noise covariance is the identity --------- #
-    whitener = _make_whitener(info, noise_cov, common_ch, rank)
+    whitener_rank, pinv_rank = _split_rank(rank)
+    whitener = _make_whitener(info, noise_cov, common_ch, whitener_rank)
     fwd_ch = list(forward["sol"]["row_names"])
     fwd_idx = [fwd_ch.index(ch) for ch in common_ch]
     G = np.asarray(forward["sol"]["data"], dtype=np.float64)[fwd_idx]
     G_w = whitener @ G  # whitened leadfield (n_white, n_cols)
     R_w = whitener @ R @ whitener.T
+    # The congruence is symmetric in exact arithmetic; enforce it against
+    # floating-point drift, which would otherwise trip the Hermitian check in
+    # ``_reg_pinv`` (see make_mcmv).
+    R_w = (R_w + R_w.T) / 2.0
     n_white = R_w.shape[0]
 
-    # Diagonal loading matching make_mcmv (a fraction of the mean eigenvalue).
-    loading = reg * np.trace(R_w) / n_white
-    R_w_reg = R_w + loading * np.eye(n_white)
-    N_w = np.eye(n_white)  # whitened noise covariance
-    Rinv_w = np.linalg.inv(R_w_reg)
+    # -- regularised inverse of the (whitened) data covariance -------------- #
+    # This is the same inversion make_mcmv performs, with the same ``reg``
+    # rescaling for our ``pca=True`` whitener, so the localizer maps are built
+    # from exactly the covariance inverse that the returned filters use. The
+    # rank truncation is not cosmetic here: on a covariance whose deficiency the
+    # whitener cannot see (ICA/SSP-cleaned data whose projectors never reached
+    # ``info['projs']``, too few samples, a mismatched noise_cov) a plain
+    # inverse amplifies the near-null directions and the scan silently ranks the
+    # wrong locations highest.
+    reg_eff = float(reg) * n_white / len(common_ch)
+    Rinv_w, _, rnk = _reg_pinv(R_w, reg=reg_eff, rank=pinv_rank)
+    if rnk < n_white:
+        warnings.warn(
+            f"data_cov is rank-deficient (rank {rnk} < {n_white} whitened "
+            "dimensions); a pseudo-inverse was used. Supply a shrinkage-"
+            "regularised covariance (e.g. method='oas'/'shrunk' in "
+            "mne.compute_covariance) or set ``reg`` > 0 for a stable inverse.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    if n_sources > rnk:
+        raise ValueError(
+            f"n_sources={n_sources} exceeds the data-covariance rank ({rnk}); "
+            "fewer than n_sources independent spatial dimensions are available "
+            "to satisfy the constraints."
+        )
 
     Rbar_w = None
     if evoked_cov is not None:
         Rbar_w = whitener @ _cov_as_matrix(evoked_cov, common_ch) @ whitener.T
 
+    # The Table-2 metric matrices depend only on the covariances, so they are
+    # built once for the whole scan instead of at every grid point. In the
+    # whitened space N is the identity, which removes both dense inversions:
+    # G = N^-1 = I and T = R^-1 N R^-1 = R^-1 R^-1.
+    N_w = np.eye(n_white)  # whitened noise covariance
+    metrics = {"S": Rinv_w, "G": N_w, "T": Rinv_w @ Rinv_w}
+    if Rbar_w is not None:
+        metrics["E"] = Rinv_w @ Rbar_w @ Rinv_w
+
     # -- sequential search -------------------------------------------------- #
     sources, orientations, pseudo_z, maps = [], [], [], []
     H_ref = np.empty((n_white, 0))  # whitened leadfields of found sources
-    for _k in range(n_sources):
+    for k in range(n_sources):
         vals = np.full(n_loc, -np.inf)
         oris = [None] * n_loc
+        n_skipped = 0
         for i in range(n_loc):
             if i in sources:
                 continue  # never re-select a found location
@@ -393,26 +463,36 @@ def scan_mcmv(
                 H_loc = G_w[:, 3 * i : 3 * i + 3]
                 try:
                     u = optimal_orientation(
-                        localizer, H_ref, H_loc, R_w_reg, N_w, evoked_cov=Rbar_w
+                        localizer, H_ref, H_loc, R_w, N_w, metrics=metrics
                     )
-                except np.linalg.LinAlgError:
+                except _SINGULAR_ERRORS:
+                    n_skipped += 1
                     continue  # skip a numerically singular location
                 h = H_loc @ u
             H_full = np.column_stack([H_ref, h])
             try:
                 vals[i] = localizer_value(
-                    localizer, H_full, R_w_reg, N_w, evoked_cov=Rbar_w
+                    localizer, H_full, R_w, N_w, metrics=metrics
                 )
-            except np.linalg.LinAlgError:
+            except _SINGULAR_ERRORS:
+                n_skipped += 1
                 continue
             oris[i] = u
 
-        if not np.any(np.isfinite(vals)):
+        # ``vals`` may hold -inf (skipped/already-found) and, if a localizer
+        # evaluated to a non-finite number without raising, NaN or +inf; mask
+        # everything non-finite out before taking the maximum.
+        finite = np.isfinite(vals)
+        if not finite.any():
             raise RuntimeError(
                 "No valid source location found; the data covariance or forward "
                 "may be degenerate, or too many sources were requested."
             )
-        best = int(np.argmax(vals))
+        logger.debug(
+            f"    Iteration {k + 1}/{n_sources}: {int(finite.sum())} of {n_loc} "
+            f"locations evaluated ({n_skipped} skipped as singular)."
+        )
+        best = int(np.nanargmax(np.where(finite, vals, np.nan)))
         sources.append(best)
         orientations.append(oris[best])
         maps.append(np.where(np.isfinite(vals), vals, np.nan))

@@ -534,3 +534,103 @@ def test_order_exceeds_rank_raises(fwd_info):
         pytest.raises(ValueError, match="exceeds the data-covariance rank"),
     ):
         make_mcmv(info, fwd, cov, [1, 2, 3, 4, 5], orientations=oris, reg=0.0)
+
+
+# --------------------------------------------------------------------------- #
+# 9. Interoperability with the rest of the MNE pipeline.
+# --------------------------------------------------------------------------- #
+def test_diagonal_covariance_is_accepted(fwd_info):
+    """A diagonal mne.Covariance (1-D ``.data``) works, as it does in make_lcmv.
+
+    ``mne.make_ad_hoc_cov`` and MNE's diagonal covariance files store only the
+    diagonal, so indexing ``cov.data`` as a square matrix raises. MNE's own
+    beamformers go through ``Covariance._get_square``; so do we.
+    """
+    fwd, info = fwd_info
+    diag_cov = mne.make_ad_hoc_cov(info)
+    assert diag_cov["diag"] and np.asarray(diag_cov.data).ndim == 1
+
+    ori = np.tile([0.0, 0.0, 1.0], (2, 1))
+    filters = make_mcmv(info, fwd, diag_cov, [0, 5], orientations=ori)
+    assert filters["weights"].shape == (2, len(filters["ch_names"]))
+    assert np.all(np.isfinite(filters["weights"]))
+    # ``apply_mcmv_cov`` must accept one too.
+    src_cov = apply_mcmv_cov(diag_cov, filters)
+    assert src_cov.shape == (2, 2) and np.all(np.isfinite(src_cov))
+
+
+@pytest.mark.parametrize("rank", [None, "full", "info", {"eeg": 20}])
+def test_rank_accepts_mne_conventions(fwd_info, rank):
+    """``rank`` takes MNE's None | 'full' | 'info' | dict, as make_lcmv does."""
+    fwd, info = fwd_info
+    cov = _random_cov(info)
+    ori = np.tile([0.0, 0.0, 1.0], (1, 1))
+    filters = make_mcmv(info, fwd, cov, [0], orientations=ori, rank=rank)
+    assert np.all(np.isfinite(filters["weights"]))
+
+
+@pytest.mark.parametrize(
+    ("rank", "error"), [(20, TypeError), ("bogus", ValueError)]
+)
+def test_rank_rejects_unsupported_values(fwd_info, rank, error):
+    """An integer or an unknown string is refused up front, not deep inside MNE."""
+    fwd, info = fwd_info
+    cov = _random_cov(info)
+    ori = np.tile([0.0, 0.0, 1.0], (1, 1))
+    with pytest.raises(error):
+        make_mcmv(info, fwd, cov, [0], orientations=ori, rank=rank)
+
+
+def test_several_sensor_types_require_noise_cov():
+    """Refuse the ad-hoc fallback for mixed sensor types, exactly as make_lcmv does.
+
+    The ad-hoc noise model is only a harmless global scaling for a *single*
+    sensor type. With more than one its arbitrary per-type variances set the
+    relative weighting of the types, so MNE refuses it; the error text here is
+    MNE's verbatim.
+    """
+    info = mne.create_info(
+        ["MEG 0111", "MEG 0112", "MEG 0113", "MEG 0122"],
+        200.0,
+        ["grad", "grad", "mag", "grad"],
+    )
+    cov = _random_cov(info)
+    fwd = None  # unreachable: the check fires before the forward is used
+    with pytest.raises(ValueError, match="several sensor types"):
+        from advance_beamlab._mcmv import _check_noise_cov_required
+
+        _check_noise_cov_required(info, info["ch_names"], None)
+    assert fwd is None and cov is not None
+
+
+def test_beamformer_copy_is_deep(fwd_info):
+    """``.copy()`` deep-copies, matching mne.beamformer.Beamformer.copy."""
+    fwd, info = fwd_info
+    cov = _random_cov(info)
+    ori = np.tile([0.0, 0.0, 1.0], (2, 1))
+    filters = make_mcmv(info, fwd, cov, [0, 5], orientations=ori)
+    before = filters["weights"].copy()
+    duplicate = filters.copy()
+    duplicate["weights"][:] = 0.0
+    assert_allclose(filters["weights"], before)
+
+
+def test_orientations_are_head_coordinates(fwd_info):
+    """The same head-coordinate orientation means the same dipole for either forward.
+
+    ``convert_forward_solution(..., surf_ori=True)`` expresses each source's three
+    gain columns in its local surface frame. Orientations are documented as head
+    coordinates, so the two representations of one forward must agree.
+    """
+    fwd, info = fwd_info
+    cov = _random_cov(info)
+    fwd_head = mne.convert_forward_solution(fwd, surf_ori=False, force_fixed=False)
+    fwd_surf = mne.convert_forward_solution(fwd, surf_ori=True, force_fixed=False)
+    assert not fwd_head["surf_ori"] and fwd_surf["surf_ori"]
+
+    sources = [0, 5]
+    ori = np.asarray(fwd_head["source_nn"])[2::3][sources]
+    ori = ori / np.linalg.norm(ori, axis=1, keepdims=True)
+    w_head = make_mcmv(info, fwd_head, cov, sources, orientations=ori)["weights"]
+    w_surf = make_mcmv(info, fwd_surf, cov, sources, orientations=ori)["weights"]
+    assert_allclose(w_surf, w_head, rtol=1e-8, atol=0)
