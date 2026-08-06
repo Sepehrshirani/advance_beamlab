@@ -3,6 +3,8 @@
 # Authors: Sepehr Shirani and Muzhi Wang <sepehrshirani@gmail.com>
 # License: BSD-3-Clause
 
+import os
+
 import advance_beamlab
 
 # -- Project information ----------------------------------------------------- #
@@ -70,9 +72,14 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 # intentional: the built docs show real results on real MEG data.
 #
 # Figure capture uses the matplotlib scraper, plus the PyVista scraper for the
-# 3-D brain plot when PyVista/Qt are available. If they are not, the gallery
-# still builds -- the brain plot is simply not captured.
+# cortical-surface plots. Those are the only images in the gallery that show a
+# source estimate on an actual brain, so a build that quietly loses them is a
+# materially worse build. The 3-D setup therefore reports what it did instead of
+# failing silently, and setting ``BEAMLAB_REQUIRE_3D=1`` -- which CI does --
+# turns a missing or broken 3-D backend into a build error rather than a gallery
+# with the brain figures missing and nobody noticing.
 image_scrapers = ["matplotlib"]
+_require_3d = os.environ.get("BEAMLAB_REQUIRE_3D", "") not in ("", "0", "false")
 try:
     import pyvista
 
@@ -82,9 +89,18 @@ try:
     import mne
 
     mne.viz.set_3d_backend("pyvistaqt")
+    # Antialiasing is unreliable on headless software renderers and is not worth
+    # a failed build; the captured images are unaffected in any way that matters.
+    mne.viz.set_3d_options(antialias=False, depth_peeling=False)
     image_scrapers.append("pyvista")
-except Exception:
-    pass
+except Exception as exc:  # pragma: no cover - depends on the local 3-D stack
+    if _require_3d:
+        raise RuntimeError(
+            f"BEAMLAB_REQUIRE_3D is set but the 3-D backend is unavailable: {exc}. "
+            "Install the doc extras (pyvista, pyvistaqt) and, on a headless "
+            "machine, run the build under xvfb."
+        ) from exc
+    print(f"conf.py: 3-D backend unavailable, brain figures will be missing ({exc})")
 
 
 def _reset_mpl_style(gallery_conf, fname):

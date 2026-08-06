@@ -46,8 +46,13 @@ doc = [
     "sphinxcontrib-bibtex",
     "pydata-sphinx-theme",
     "matplotlib",
-    "pyvista",
+    # The cortical-surface figures in the gallery need a working 3-D stack.
+    # ``pyvistaqt`` is only a Qt wrapper, so a Qt binding has to be requested
+    # explicitly or the backend silently fails to load and the brain figures
+    # disappear from the build.
+    "pyvista>=0.44",
     "pyvistaqt",
+    "PyQt6",
 ]
 dev = ["advance_beamlab[test,doc]", "ruff>=0.6"]
 
