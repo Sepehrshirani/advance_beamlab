@@ -1,0 +1,26 @@
+/* The right-hand "On this page" list truncated long entries mid-word, so
+   several of the mathematical-background sections were unreadable. Let them
+   wrap instead of overflowing their container. */
+.bd-sidebar-secondary .toc-entry a.nav-link,
+.bd-sidebar-secondary nav.page-toc a {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+/* Gallery thumbnails: give the captions room so two-line titles are not
+   clipped, and lift the card slightly on hover so the grid reads as clickable. */
+.sphx-glr-thumbcontainer {
+  min-height: 250px;
+  transition: transform 0.12s ease-in-out;
+}
+.sphx-glr-thumbcontainer:hover {
+  transform: translateY(-2px);
+}
+
+/* Equations in the background page are wide; let them scroll rather than
+   forcing the whole page to scroll horizontally on a narrow screen. */
+div.math {
+  overflow-x: auto;
+  overflow-y: hidden;
+}

@@ -45,6 +45,7 @@ doc = [
     "numpydoc",
     "sphinxcontrib-bibtex",
     "pydata-sphinx-theme",
+    "sphinx-design",
     "matplotlib",
     # The cortical-surface figures in the gallery need a working 3-D stack.
     # ``pyvistaqt`` is only a Qt wrapper, so a Qt binding has to be requested

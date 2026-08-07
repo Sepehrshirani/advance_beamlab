@@ -8,9 +8,9 @@ contribution standards, so that each algorithm can be upstreamed into
 Every algorithm is implemented exactly from its peer-reviewed source, cites the
 official paper, uses the algorithm's published name, and mirrors the
 `mne.beamformer` API. This README is written to be **self-contained**: the
-[Mathematical background](#mathematical-background) section derives every
-equation from first principles, so you can understand and tune each method
-without reading the papers.
+[Mathematical background](https://sepehrshirani.github.io/advance_beamlab-docs/background.html)
+section below derives every equation from first principles, so you can
+understand and tune each method without reading the papers.
 
 ## Implemented algorithms
 
@@ -105,6 +105,8 @@ conn_apw = augmented_pairwise_mcmv_connectivity(
 ```
 
 ---
+
+<!-- doc-split: background -->
 
 # Mathematical background
 
@@ -700,6 +702,8 @@ per case; `make_abmc_dictionary` runs the ABMC scan for a whole dictionary of
 desired waveforms in one call, estimating the SBL covariance once (it depends
 only on the data) and reusing it for every template.
 
+<!-- doc-split: tuning -->
+
 # Parameter tuning
 
 ## `make_mcmv` / `scan_mcmv`
@@ -764,6 +768,8 @@ for the matrix under test, plus its `sfreq`.
 | `reg` | Diagonal loading of $R$ for the Stage-2 solve | Default 0.05, the same convention as `make_lcmv` and `make_mcmv`. Stage 2 is solved at the fixed point of the paper's Eqs. 17–19 rather than by descending to it, so there is no step size, iteration count or tolerance to tune — see below. |
 | `max_lag` | Template-lag search window (samples) | `None` searches all lags; restrict it when the true delay range is known, to avoid spurious matches. |
 | `max_iter` / `tol` (`sbl_covariance`) | SBL convergence | Iterate the Champagne updates until the Eq. 6 cost changes by less than `tol` (default 1e-5) or `max_iter` (default 100) is reached. |
+
+<!-- doc-split: reference -->
 
 # API
 

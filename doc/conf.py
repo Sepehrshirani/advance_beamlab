@@ -25,6 +25,7 @@ extensions = [
     "myst_parser",
     "sphinxcontrib.bibtex",
     "sphinx_gallery.gen_gallery",
+    "sphinx_design",
 ]
 
 # MyST: enable $...$ / $$...$$ math so the README's LaTeX renders here too.
@@ -72,13 +73,6 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 # whitened ReciPSIICOS example computes an O(N^2) correlation Gram). This is
 # intentional: the built docs show real results on real MEG data.
 #
-# Figure capture uses the matplotlib scraper, plus the PyVista scraper for the
-# cortical-surface plots. Those are the only images in the gallery that show a
-# source estimate on an actual brain, so a build that quietly loses them is a
-# materially worse build. The 3-D setup therefore reports what it did instead of
-# failing silently, and setting ``BEAMLAB_REQUIRE_3D=1`` -- which CI does --
-# turns a missing or broken 3-D backend into a build error rather than a gallery
-# with the brain figures missing and nobody noticing.
 # Figure capture uses the matplotlib scraper, plus the PyVista scraper for the
 # cortical-surface plots -- the only images in the gallery that show a source
 # estimate on an actual brain.
@@ -162,8 +156,41 @@ def _reset_mpl_style(gallery_conf, fname):
     )
 
 
+class _PedagogicalOrder:
+    """Order the gallery so it reads as a course rather than a directory listing.
+
+    Sphinx-gallery sorts by filename by default, which interleaved the
+    simulations, the real-data examples and the applications arbitrarily. The
+    intended reading order is: establish the problem on a simulation, show the
+    method finding sources, then show it on real data -- and only then the
+    second algorithm, the connectivity application, and the separate spike
+    problem. Anything not listed sorts last, alphabetically, so adding an
+    example never silently breaks the build.
+    """
+
+    _order = [
+        "plot_mcmv_simulation.py",
+        "plot_mcmv_source_discovery.py",
+        "plot_mcmv_auditory.py",
+        "plot_recipsiicos_simulation.py",
+        "plot_recipsiicos_auditory.py",
+        "plot_apw_mcmv_connectivity.py",
+        "plot_abmc_localization.py",
+    ]
+
+    def __init__(self, src_dir):
+        self.src_dir = src_dir
+
+    def __call__(self, filename):
+        try:
+            return (0, self._order.index(filename))
+        except ValueError:
+            return (1, filename)
+
+
 sphinx_gallery_conf = {
     "examples_dirs": "../examples",
+    "within_subsection_order": _PedagogicalOrder,
     "gallery_dirs": "auto_examples",
     "filename_pattern": r"/plot_",
     "image_scrapers": tuple(image_scrapers),
@@ -178,3 +205,32 @@ sphinx_gallery_conf = {
 # -- HTML output ------------------------------------------------------------- #
 html_theme = "pydata_sphinx_theme"
 html_title = f"advance_beamlab {release}"
+html_static_path = ["_static"]
+html_css_files = ["custom.css"]
+html_favicon = "_static/favicon.svg"
+
+html_theme_options = {
+    "icon_links": [
+        {
+            "name": "GitHub",
+            "url": "https://github.com/Sepehrshirani/advance_beamlab",
+            "icon": "fa-brands fa-github",
+        },
+        {
+            "name": "MNE-Python",
+            "url": "https://mne.tools",
+            "icon": "fa-solid fa-brain",
+        },
+    ],
+    "use_edit_page_button": False,
+    "navbar_align": "left",
+    "show_prev_next": True,
+    # The mathematical background is a long single page; four levels of
+    # in-page contents keeps its right-hand sidebar navigable.
+    "show_toc_level": 2,
+    "header_links_before_dropdown": 5,
+    "footer_start": ["copyright"],
+    "footer_end": ["sphinx-version", "theme-version"],
+}
+
+html_context = {"default_mode": "auto"}

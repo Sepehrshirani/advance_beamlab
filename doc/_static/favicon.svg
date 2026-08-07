@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="6" fill="#0072B2"/>
+  <!-- three sensors converging on one source: the beamformer in miniature -->
+  <g stroke="#ffffff" stroke-width="2" stroke-linecap="round" fill="none">
+    <path d="M6 8 L16 19"/>
+    <path d="M16 6 L16 19"/>
+    <path d="M26 8 L16 19"/>
+  </g>
+  <circle cx="16" cy="21" r="4" fill="#CC79A7"/>
+</svg>
