@@ -26,6 +26,7 @@ Currently implemented:
 
 from ._abmc import (
     ABMCResult,
+    abmc_stability_curve,
     make_abmc,
     make_abmc_dictionary,
     sbl_covariance,
@@ -73,6 +74,7 @@ __all__ = [
     "sbl_covariance",
     "make_abmc",
     "make_abmc_dictionary",
+    "abmc_stability_curve",
     "ABMCResult",
 ]
 

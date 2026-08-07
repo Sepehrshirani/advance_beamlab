@@ -12,6 +12,7 @@ from numpy.testing import assert_allclose
 
 from advance_beamlab import (
     ABMCResult,
+    abmc_stability_curve,
     make_abmc,
     make_abmc_dictionary,
     sbl_covariance,
@@ -597,3 +598,107 @@ def test_abmc_dictionary_validation(sphere_fwd):
         make_abmc_dictionary(info, fwd, x, {})
     with pytest.raises(ValueError, match="must match data"):
         make_abmc_dictionary(info, fwd, x, {"bad": _spike(300, 150)})
+
+
+# --------------------------------------------------------------------------- #
+# Hyperparameter selection, and the paper's literal descent.
+# --------------------------------------------------------------------------- #
+def test_stability_curve_finds_the_plateau(sphere_fwd):
+    """The curve reports a run of P over which the localised peak is fixed.
+
+    The paper states that P "is empirically adjusted" and reports no value, so
+    the useful setting has to be found on the data at hand. Selection is by
+    stability rather than by template match, which rises with P by construction.
+    """
+    fwd, info = sphere_fwd
+    (i,) = _shell_sources(fwd, 1)
+    x = _si_data(fwd, i, n=200, t0=100, seed=7)
+    template = _spike(200, 100)
+
+    P, peak, match, blowup, coupling, P_opt = abmc_stability_curve(
+        info, fwd, x, template, return_optimal=True
+    )
+    assert P.ndim == peak.ndim == 1
+    assert np.all(np.diff(P) > 0)  # ascending and deduplicated
+    assert len(P) == len(peak) == len(match) == len(blowup) == len(coupling)
+    assert np.all(coupling > 0)
+
+    # The selected P sits inside the plateau it was chosen from, and that
+    # plateau localises the implanted source.
+    inside = np.argmin(np.abs(P - P_opt))
+    assert peak[inside] == np.argmax(np.bincount(peak))
+    err = np.linalg.norm(fwd["source_rr"][peak[inside]] - fwd["source_rr"][i])
+    assert err < 0.03
+
+    # Coupling is monotone in P: it is P times a fixed ratio.
+    assert np.all(np.diff(coupling) >= -1e-12)
+
+
+def test_auto_p_matches_an_explicit_p_from_the_plateau(sphere_fwd):
+    """``P='auto'`` reproduces what the curve selected."""
+    fwd, info = sphere_fwd
+    (i,) = _shell_sources(fwd, 1)
+    x = _si_data(fwd, i, n=200, t0=100, seed=7)
+    template = _spike(200, 100)
+
+    *_, P_opt = abmc_stability_curve(info, fwd, x, template, return_optimal=True)
+    auto = make_abmc(info, fwd, x, template, P="auto")
+    explicit = make_abmc(info, fwd, x, template, P=P_opt)
+    assert_allclose(auto.template_match, explicit.template_match, rtol=1e-10)
+
+
+def test_iterative_method_reaches_the_closed_form(sphere_fwd):
+    """The paper's descent, run to convergence, gives the closed-form answer.
+
+    This is the check that the two are one estimator rather than two: Eqs. 17-19
+    iterated to a tight tolerance must reproduce the closed form, and the
+    convergence test is the true distance to that fixed point rather than the
+    size of the step -- the latter goes small on an ill-conditioned R precisely
+    when the descent is furthest from converging.
+    """
+    fwd, info = sphere_fwd
+    (i,) = _shell_sources(fwd, 1)
+    x = _si_data(fwd, i, n=200, t0=100, seed=7)
+    template = _spike(200, 100)
+
+    exact = make_abmc(info, fwd, x, template, P=0.03, return_weights=True)
+    descended = make_abmc(
+        info,
+        fwd,
+        x,
+        template,
+        P=0.03,
+        method="iterative",
+        max_iter=200000,
+        tol=1e-8,
+        return_weights=True,
+    )
+    assert descended.converged
+    assert descended.n_iter > 1  # it really did iterate
+    rel = np.linalg.norm(descended.weights - exact.weights) / np.linalg.norm(
+        exact.weights
+    )
+    assert rel < 1e-6
+    assert_allclose(descended.template_match, exact.template_match, atol=1e-6)
+
+
+def test_iterative_method_warns_when_stopped_short(sphere_fwd):
+    """A truncated descent is reported as unconverged, not silently returned."""
+    fwd, info = sphere_fwd
+    (i,) = _shell_sources(fwd, 1)
+    x = _si_data(fwd, i, n=200, t0=100, seed=7)
+    with pytest.warns(RuntimeWarning, match="did not reach the fixed point"):
+        res = make_abmc(
+            info, fwd, x, _spike(200, 100), method="iterative", max_iter=3, tol=1e-12
+        )
+    assert not res.converged
+    assert res.n_iter == 3
+
+
+def test_unknown_method_is_rejected(sphere_fwd):
+    """``method`` is validated up front."""
+    fwd, info = sphere_fwd
+    (i,) = _shell_sources(fwd, 1)
+    x = _si_data(fwd, i, n=200, t0=100, seed=7)
+    with pytest.raises(ValueError, match="method"):
+        make_abmc(info, fwd, x, _spike(200, 100), method="steepest-descent")

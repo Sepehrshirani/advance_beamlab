@@ -764,8 +764,12 @@ for the matrix under test, plus its `sfreq`.
 | Parameter | What it controls | Effect of changing it |
 |---|---|---|
 | `cov` | The beamformer covariance $R$ | `None` (default) estimates the SBL covariance from the data — the intended ABMC pipeline. Pass a precomputed `sbl_covariance` result, or any `mne.Covariance`, to override. |
-| `P` | Ratio $\beta_2/\beta_1$ weighting the template constraint | Default 0.03. The constraint column is rescaled to its leadfield column first, so `P` is dimensionless and its useful range does not depend on the units of the data: 0.01–0.1 gives the template a perceptible but subordinate weight, far below that reduces ABMC to an iterative LCMV (a warning fires), and large `P` enters the weight-blow-up / non-convergence regime — watch `result.blowup_fraction` (a warning fires above ~5%). |
-| `reg` | Diagonal loading of $R$ for the Stage-2 solve | Default 0.05, the same convention as `make_lcmv` and `make_mcmv`. Stage 2 is solved at the fixed point of the paper's Eqs. 17–19 rather than by descending to it, so there is no step size, iteration count or tolerance to tune — see below. |
+| `P` | Ratio $\beta_2/\beta_1$ weighting the template constraint | The one genuinely free parameter. The paper states it "is empirically adjusted" and reports no value, because the useful setting depends on the recording — its own data is 20–32 subdural contacts. Pass **`P="auto"`** to have `abmc_stability_curve` choose it on your data (see below), or set it yourself: the constraint column is rescaled to its leadfield column so `P` is dimensionless, and 0.01–1 is typically the live range. Far below it the constraint is inert and ABMC reduces to a plain LCMV (a warning fires); far above it the weights blow up — watch `result.blowup_fraction` (a warning fires above ~5%). |
+
+| `reg` | Diagonal loading of $R$ for the Stage-2 solve | **Default 0**, which is what the paper does. Its $R = G\alpha G^{\mathsf T} + \Lambda$ carries an *estimated* per-channel noise term and is positive definite by construction — condition number ~20 on the MNE `sample` data, against ~10¹⁵ for the empirical covariance of the same segment — so no loading is needed. Raise it only when you supply your own ill-conditioned `cov`. |
+| `method` | How Stage 2 is solved | `"closed-form"` (default) solves at the fixed point of the paper's Eqs. 17–19 directly. `"iterative"` runs the paper's gradient descent verbatim, for exact reproduction; `mu`, `max_iter` and `tol` apply only to that path. The two agree to ~1e-8 when the descent is run to convergence, and a test pins them together. Note the descent's step count grows with the condition number of $R$ — on an ill-conditioned covariance it can need 10⁵ steps, which is why it is not the default. |
+| `mu` / `max_iter` / `tol` (`method="iterative"`) | Descent step size, budget and tolerance | `mu=None` uses $1/\lambda_{\max}(R)$. **`tol` is a distance to the fixed point, not a step size.** Those are not interchangeable: on an ill-conditioned $R$ the steps go small precisely because the descent is crawling along a shallow direction, so a step-size rule reports convergence while the weights are still far away. Because the fixed point is known in closed form, the honest test is available. |
+
 | `max_lag` | Template-lag search window (samples) | `None` searches all lags; restrict it when the true delay range is known, to avoid spurious matches. |
 | `max_iter` / `tol` (`sbl_covariance`) | SBL convergence | Iterate the Champagne updates until the Eq. 6 cost changes by less than `tol` (default 1e-5) or `max_iter` (default 100) is reached. |
 
@@ -788,6 +792,7 @@ for the matrix under test, plus its `sfreq`.
 | `sbl_covariance` | Sparse Bayesian learning (Champagne) model covariance — ABMC Stage 1 |
 | `make_abmc` → `ABMCResult` | Template-constrained beamformer for spike-like sources — ABMC Stage 2 |
 | `make_abmc_dictionary` | Run ABMC for a dictionary of desired templates, reusing one SBL covariance |
+| `abmc_stability_curve` | Explore and refine the template-constraint trade-off $P$ on your own data |
 
 # References
 

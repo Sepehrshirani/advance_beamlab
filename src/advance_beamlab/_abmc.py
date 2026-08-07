@@ -21,8 +21,22 @@ ABMC has two stages:
   minimum-variance beamformer with the usual distortionless constraint *plus* a
   maximum-cross-correlation-to-template constraint that locks the output onto the
   known DR/IED morphology. The paper reaches it by gradient descent; this
-  implementation solves it at that descent's fixed point, which is available in
-  closed form (see :func:`make_abmc`).
+  implementation solves at that descent's fixed point, which is available in
+  closed form, and offers the descent itself as ``method='iterative'`` for exact
+  reproduction. The two agree to ~1e-8 once the descent has converged.
+
+Choosing the trade-off :math:`P`
+--------------------------------
+The paper states that :math:`P` "is empirically adjusted according to the
+convergence rate" and reports no value for it, nor for the step size, iteration
+count or tolerance. That is not an omission: the useful setting depends on the
+recording, and the paper's own data is 20-32 subdural contacts, a different
+regime from a whole-head MEG array. :func:`abmc_stability_curve` performs that
+adjustment on the data at hand -- a coarse logarithmic sweep to find the range
+where the constraint is neither inert nor divergent, then a refinement around
+the widest run over which the localised peak does not move. ``P='auto'`` uses
+it. Selection is by stability rather than by template match, because the match
+rises with :math:`P` by construction and maximising it would be circular.
 
 Localization follows the paper's criterion: the source is the grid location whose
 beamformer output has the **maximum cross-correlation with the desired template**
@@ -78,7 +92,7 @@ from mne import Covariance
 from mne.forward.forward import _subject_from_forward
 from mne.source_estimate import _get_src_type, _make_stc
 from mne.source_space._source_space import _get_vertno
-from mne.utils import _validate_type, logger, verbose
+from mne.utils import _check_option, _validate_type, logger, verbose
 from scipy.linalg import cho_factor, cho_solve
 
 # NOTE: as in ``_mcmv``, the stdlib ``warnings.warn`` (RuntimeWarning) is used
@@ -537,6 +551,440 @@ def _abmc_stc(forward, values):
     )
 
 
+def _abmc_prepare(info, forward, data, template, cov, noise_cov, reg, max_lag):
+    """Assemble everything in Stage 2 that does not depend on ``P``.
+
+    The sparse Bayesian covariance, the noise scaling, the per-column template
+    lag and the template-constraint columns are all independent of the
+    constraint trade-off ``P``. Separating them means a sweep over ``P`` costs
+    one linear solve per value instead of rebuilding the whole problem, which is
+    what makes :func:`~advance_beamlab.abmc_stability_curve` affordable.
+    """
+    leadfield, x, ch_names = _aligned_leadfield_and_data(info, forward, data)
+    u = np.asarray(template, float).ravel()
+    if u.shape[0] != x.shape[1]:
+        raise ValueError(
+            f"template length {u.shape[0]} must match data length {x.shape[1]}."
+        )
+
+    if cov is None:
+        data_cov = Covariance(
+            x @ x.T / x.shape[1], ch_names, bads=[], projs=[], nfree=x.shape[1]
+        )
+        cov = sbl_covariance(info, forward, data_cov, noise_cov=noise_cov)
+    else:
+        _validate_type(cov, Covariance, "cov")
+    leadfield, x, ch_names, cov_mat = _restrict_to_cov(cov, leadfield, x, ch_names)
+    n_channels, n_columns = leadfield.shape
+    _check_noise_cov_required(info, ch_names, noise_cov)
+    _check_eeg_reference(info, ch_names)
+
+    # Stage 2 runs in the noise-scaled space, for the same reason Stage 1 does:
+    # in recorded units a mixed-sensor covariance spans ~16 orders of magnitude
+    # and the solve is driven by whichever type has the larger numerical scale.
+    sd = _noise_scaling(info, ch_names, noise_cov)
+    leadfield = leadfield / sd[:, None]
+    x = x / sd[:, None]
+    cov_mat = cov_mat / np.outer(sd, sd)
+
+    r = 0.5 * (cov_mat + cov_mat.T)
+    r_reg = r + reg * np.trace(r) / n_channels * np.eye(n_channels)
+
+    # Seed the per-column template lag from an initial distortionless output.
+    r_inv_g = np.linalg.solve(r_reg, leadfield)
+    w0 = r_inv_g / np.einsum("mk,mk->k", leadfield, r_inv_g)[None, :]
+    y0 = w0.T @ x
+    lags_full = np.arange(-(len(u) - 1), len(u))
+    lag_mask = (
+        np.ones_like(lags_full, dtype=bool)
+        if max_lag is None
+        else np.abs(lags_full) <= max_lag
+    )
+    c = np.empty((n_channels, n_columns))
+    u_shift = np.empty((n_columns, len(u)))
+    col_lag = np.empty(n_columns, dtype=int)
+    for k in range(n_columns):
+        xc = np.correlate(y0[k], u, mode="full")
+        j = int(lags_full[lag_mask][np.argmax(np.abs(xc[lag_mask]))])
+        col_lag[k] = j
+        u_shift[k] = _shift_template(u, j)
+        c[:, k] = x @ u_shift[k]
+
+    # Put the template-constraint column on the same scale as the leadfield
+    # column it competes with in Eq. 19, so ``P`` is the dimensionless trade-off
+    # the paper describes rather than a quantity carrying the units of the data.
+    c *= (
+        np.linalg.norm(leadfield, axis=0)
+        / np.clip(np.linalg.norm(c, axis=0), _TINY, None)
+    )[None, :]
+
+    return dict(
+        leadfield=leadfield,
+        x=x,
+        ch_names=ch_names,
+        sd=sd,
+        r=r,
+        r_reg=r_reg,
+        c=c,
+        u_shift=u_shift,
+        col_lag=col_lag,
+        gg=np.einsum("mk,mk->k", leadfield, leadfield),
+        gc=np.einsum("mk,mk->k", leadfield, c),
+        n_channels=n_channels,
+        n_columns=n_columns,
+    )
+
+
+def _abmc_fixed_point(prep, P, f):
+    """Closed-form solution of Eqs. 17-19, plus the degenerate-column mask.
+
+    Setting the update of Eq. 17 to zero gives ``R w = (g + P c) beta1``, and the
+    consistency of Eq. 19 then forces ``g^T w = f``, so the estimator the paper's
+    descent converges to is available directly:
+
+        ``w* = f R^-1 (g + P c) / (g^T R^-1 (g + P c))``.
+    """
+    leadfield = prep["leadfield"]
+    v = leadfield + P * prep["c"]
+    ri_v = np.linalg.solve(prep["r_reg"], v)
+    denom = np.einsum("mk,mk->k", leadfield, ri_v)
+    scale = _EPS * np.linalg.norm(leadfield, axis=0) * np.linalg.norm(ri_v, axis=0)
+    degenerate = np.abs(denom) <= scale
+    w = np.where(degenerate[None, :], 0.0, ri_v / np.where(degenerate, 1.0, denom))
+    return w * f, degenerate
+
+
+def _abmc_descend(prep, P, f, mu, max_iter, tol):
+    """Run the paper's gradient descent, Eqs. 17-19, verbatim.
+
+    Convergence is measured as the distance to the fixed point, not as the size
+    of the step. The two are not interchangeable: on an ill-conditioned ``R`` the
+    steps become small precisely because the descent is crawling along a shallow
+    direction, so a step-size rule reports convergence while the weights are
+    still far from the solution. Since the fixed point is available in closed
+    form, the honest test is available too.
+    """
+    leadfield, c, r_reg = prep["leadfield"], prep["c"], prep["r_reg"]
+    target, degenerate = _abmc_fixed_point(prep, P, f)
+    target_norm = max(float(np.linalg.norm(target)), _TINY)
+    if mu is None:
+        mu = 1.0 / float(np.linalg.eigvalsh(r_reg).max())
+    denom = mu * (prep["gg"] + P * prep["gc"])
+
+    w = np.zeros_like(leadfield)
+    n_run, converged, distance = 0, False, np.inf
+    for iteration in range(int(max_iter)):
+        rw = r_reg @ w
+        beta1 = (
+            f
+            - np.einsum("mk,mk->k", leadfield, w)
+            + mu * np.einsum("mk,mk->k", leadfield, rw)
+        ) / denom
+        w = w - mu * (rw - leadfield * beta1[None, :] - c * (P * beta1)[None, :])
+        n_run = iteration + 1
+        distance = float(np.linalg.norm(w - target)) / target_norm
+        if distance < tol:
+            converged = True
+            break
+    return w, degenerate, n_run, converged, distance, mu
+
+
+def _abmc_map(prep, w, forward):
+    """Per-grid-point template match, orientation, lag, power and blow-up share.
+
+    Kept separate from :func:`_abmc_readout` so a sweep over ``P`` can score a
+    solution without paying to build a source estimate for every value.
+    """
+    x, u_shift, n_columns = prep["x"], prep["u_shift"], prep["n_columns"]
+    out = np.einsum("mk,mt->kt", w, x)
+    out_c = out - out.mean(1, keepdims=True)
+    us_c = u_shift - u_shift.mean(1, keepdims=True)
+    out_norm = np.linalg.norm(out_c, axis=1)
+    us_norm = np.linalg.norm(us_c, axis=1)
+    num_corr = np.abs(np.einsum("kt,kt->k", out_c, us_c))
+    # Per column and overflow-safe: a single blown-up column can make its own
+    # norm overflow to inf while every weight entry is still finite, and a global
+    # floor built from ``max()`` would then be inf and zero the entire map.
+    ref = np.abs(out_c).max(axis=1) * np.sqrt(out_c.shape[1])
+    good = (
+        np.isfinite(out_norm)
+        & np.isfinite(us_norm)
+        & (out_norm > _EPS * ref)
+        & (us_norm > 0)
+    )
+    tmatch = np.zeros(n_columns)
+    tmatch[good] = num_corr[good] / (out_norm[good] * us_norm[good])
+    power = 0.5 * np.einsum("mk,mk->k", w, prep["r"] @ w)
+
+    col_norm = np.linalg.norm(w, axis=0)
+    blowup = float((col_norm > 10 * np.median(col_norm)).mean())
+
+    # ``out``, ``tmatch`` and ``power`` are invariant to the noise scaling, but
+    # the returned weights must act on the recorded data.
+    w_out = w / prep["sd"][:, None]
+
+    n_sources = forward["nsource"]
+    n_ori = n_columns // n_sources
+    if n_ori * n_sources != n_columns:
+        raise RuntimeError("leadfield columns are not an integer multiple of sources.")
+    tmatch_s = tmatch.reshape(n_sources, n_ori)
+    orientation = tmatch_s.argmax(1)
+    lag_grid = prep["col_lag"].reshape(n_sources, n_ori)[
+        np.arange(n_sources), orientation
+    ]
+    return dict(
+        template_match=tmatch_s.max(1),
+        power=power.reshape(n_sources, n_ori).sum(1),
+        lag=lag_grid,
+        orientation=orientation if n_ori > 1 else np.zeros(n_sources, int),
+        weights=w_out,
+        blowup=blowup,
+    )
+
+
+def _abmc_readout(prep, w, forward, P, f, return_weights, n_iter, converged):
+    """Turn the per-column weights into an :class:`ABMCResult`."""
+    m = _abmc_map(prep, w, forward)
+    return ABMCResult(
+        stc=_abmc_stc(forward, m["template_match"]),
+        template_match=m["template_match"],
+        power=m["power"],
+        lag=m["lag"],
+        orientation=m["orientation"],
+        weights=m["weights"] if return_weights else None,
+        n_iter=n_iter,
+        converged=converged,
+        blowup_fraction=m["blowup"],
+    )
+
+
+def _plateau(peaks, viable):
+    """Longest run of consecutive viable entries sharing one peak location.
+
+    Returns ``(start, stop)`` inclusive, or ``None`` if nothing is viable. The
+    plateau, not the best score, is the selection criterion: the template match
+    rises with ``P`` by construction -- the constraint pushes the output towards
+    the template -- so maximising it would be circular. A range of ``P`` over
+    which the *localised source does not move* is evidence that the answer is
+    determined by the data rather than by the setting.
+    """
+    best = None
+    i = 0
+    n = len(peaks)
+    while i < n:
+        if not viable[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and viable[j + 1] and peaks[j + 1] == peaks[i]:
+            j += 1
+        if best is None or (j - i) > (best[1] - best[0]):
+            best = (i, j)
+        i = j + 1
+    return best
+
+
+@verbose
+def abmc_stability_curve(
+    info,
+    forward,
+    data,
+    template,
+    *,
+    cov=None,
+    noise_cov=None,
+    P_range=(1e-4, 1e4),
+    n_coarse=17,
+    n_refine=9,
+    reg=0.0,
+    f=1.0,
+    max_lag=None,
+    return_optimal=False,
+    verbose=None,
+):
+    r"""Explore the template-constraint trade-off :math:`P`, then refine it.
+
+    Shirani et al. (2024) :footcite:`Shirani2024` state that :math:`P` "is
+    empirically adjusted" and report no value for it, because the useful setting
+    depends on the recording: the paper's own data is 20-32 subdural contacts,
+    which is a different regime from a whole-head MEG array. This function does
+    that adjustment on *your* data, in two stages.
+
+    **Coarse exploration.** :math:`P` is swept logarithmically across
+    ``P_range``. Each value is scored on three things that together say whether
+    the method is operating at all: the *coupling*
+    :math:`P\,g^\mathsf{T}c / g^\mathsf{T}g`, which must be non-negligible or the
+    template constraint is inert and ABMC degenerates to a plain LCMV; the
+    fraction of grid weights that have blown up, which marks the paper's
+    non-convergence regime at large :math:`P`; and the location of the localiser
+    peak.
+
+    **Refinement.** The widest run of consecutive viable values over which the
+    peak *does not move* is the plateau. Its edges are then re-sampled more
+    finely and the geometric centre of the refined plateau is returned.
+
+    The upper edge is not arbitrary. Eliminating :math:`\beta_1` from Eq. 17
+    using Eq. 19 leaves an affine recursion whose linear part is
+    :math:`\Pi(I - \mu R)`, with :math:`\Pi = I - d g^\mathsf{T}/(g^\mathsf{T}d)`
+    an *oblique* projector and :math:`d = g + Pc`. The obliquity, and hence the
+    norm of :math:`\Pi`, grows as :math:`g^\mathsf{T}d = g^\mathsf{T}g +
+    P\,g^\mathsf{T}c` shrinks -- so wherever :math:`g^\mathsf{T}c < 0` there is a
+    :math:`P` beyond which the paper's descent is unstable. That is the
+    "threshold for each segment" the paper reports without deriving, and it is
+    why the viable range has to be found per dataset rather than assumed.
+
+    Selection is by stability rather than by score, deliberately. The template
+    match increases with :math:`P` by construction -- a stronger constraint pulls
+    the output towards the template whether or not the location is right -- so
+    choosing the :math:`P` that maximises it would be circular. A plateau over
+    which the answer is unchanged is evidence about the data; a maximum of a
+    self-referential score is not.
+
+    Parameters
+    ----------
+    info : instance of mne.Info
+        Measurement info (channel set only).
+    forward : instance of mne.Forward
+        Forward solution, as for :func:`make_abmc`.
+    data : instance of mne.Evoked | instance of mne.io.Raw | ndarray
+        The sensor data segment, as for :func:`make_abmc`.
+    template : ndarray, shape (n_times,)
+        The desired-source waveform, as for :func:`make_abmc`.
+    cov : instance of mne.Covariance | None
+        Covariance for the beamformer. ``None`` estimates it once with
+        :func:`sbl_covariance` and reuses it for every :math:`P`.
+    noise_cov : instance of mne.Covariance | None
+        Noise covariance, as for :func:`make_abmc`.
+    P_range : tuple of float
+        Inclusive ``(low, high)`` bounds of the logarithmic sweep.
+    n_coarse : int
+        Number of points in the coarse sweep.
+    n_refine : int
+        Number of points in the refinement sweep. Set to ``0`` to skip
+        refinement and return the coarse plateau centre.
+    reg : float
+        Diagonal loading, as for :func:`make_abmc`.
+    f : float
+        Distortionless gain, as for :func:`make_abmc`.
+    max_lag : int | None
+        Template-lag search window, as for :func:`make_abmc`.
+    return_optimal : bool
+        If ``True``, also return the selected :math:`P`.
+    %(verbose)s
+
+    Returns
+    -------
+    p_values : ndarray, shape (n_points,)
+        The values of :math:`P` evaluated, ascending (coarse and refinement
+        points merged).
+    peak : ndarray of int, shape (n_points,)
+        Index of the localiser peak at each :math:`P`.
+    template_match : ndarray, shape (n_points,)
+        Peak template-match value at each :math:`P`. Reported for inspection;
+        it is deliberately *not* the selection criterion.
+    blowup : ndarray, shape (n_points,)
+        Fraction of grid weights that blew up at each :math:`P`.
+    coupling : ndarray, shape (n_points,)
+        The realised constraint coupling at each :math:`P`.
+    p_opt : float
+        The selected :math:`P`; returned only if ``return_optimal`` is ``True``.
+
+    See Also
+    --------
+    make_abmc : Pass ``P='auto'`` to use this selection directly.
+
+    References
+    ----------
+    .. footbibliography::
+    """
+    prep = _abmc_prepare(info, forward, data, template, cov, noise_cov, reg, max_lag)
+    out = _abmc_select_p(prep, forward, f, P_range, n_coarse, n_refine)
+    return out if return_optimal else out[:-1]
+
+
+def _abmc_select_p(prep, forward, f, P_range, n_coarse, n_refine):
+    """Coarse sweep then local refinement of ``P``; see the public wrapper."""
+    lo, hi = (float(v) for v in P_range)
+    if not 0 < lo < hi:
+        raise ValueError(f"P_range must satisfy 0 < low < high, got {P_range}.")
+    if int(n_coarse) < 3:
+        raise ValueError(f"n_coarse must be >= 3, got {n_coarse}.")
+
+    gg, gc = prep["gg"], prep["gc"]
+
+    def score(p_vals):
+        peaks, matches, blows, coups = [], [], [], []
+        for p in p_vals:
+            w, _ = _abmc_fixed_point(prep, float(p), f)
+            m = _abmc_map(prep, w, forward)
+            tm = m["template_match"]
+            peaks.append(int(np.argmax(tm)))
+            matches.append(float(tm.max()))
+            blows.append(float(m["blowup"]))
+            coups.append(float(np.max(np.abs(p * gc / np.clip(gg, _TINY, None)))))
+        return (
+            np.asarray(peaks),
+            np.asarray(matches),
+            np.asarray(blows),
+            np.asarray(coups),
+        )
+
+    p_coarse = np.geomspace(lo, hi, int(n_coarse))
+    peaks, matches, blows, coups = score(p_coarse)
+    viable = (coups >= 1e-6) & (blows <= 0.05)
+    span = _plateau(peaks, viable)
+
+    p_all, pk_all, tm_all, bl_all, cp_all = p_coarse, peaks, matches, blows, coups
+    if span is None:
+        warnings.warn(
+            "no value of P in the requested range gave a usable solution: the "
+            "template constraint is inert at the low end and the weights blow "
+            "up at the high end. Widen P_range, or check that the template "
+            "resembles anything in the data.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        p_opt = float(np.sqrt(lo * hi))
+    else:
+        i, j = span
+        p_opt = float(np.sqrt(p_coarse[i] * p_coarse[j]))
+        if int(n_refine) > 0:
+            # Re-sample between the neighbours of the plateau, so its edges are
+            # located more precisely than the coarse grid can resolve.
+            left = p_coarse[max(i - 1, 0)]
+            right = p_coarse[min(j + 1, len(p_coarse) - 1)]
+            p_fine = np.geomspace(left, right, int(n_refine))
+            fp, fm, fb, fc = score(p_fine)
+            merged = np.concatenate([p_coarse, p_fine])
+            order = np.argsort(merged)
+            # The refinement brackets the plateau using coarse grid points, so
+            # the two sweeps share their endpoints; drop the repeats.
+            keep = order[np.concatenate([[True], np.diff(merged[order]) > 0])]
+            p_all = merged[keep]
+            pk_all = np.concatenate([peaks, fp])[keep]
+            tm_all = np.concatenate([matches, fm])[keep]
+            bl_all = np.concatenate([blows, fb])[keep]
+            cp_all = np.concatenate([coups, fc])[keep]
+            fine_span = _plateau(fp, (fc >= 1e-6) & (fb <= 0.05))
+            if fine_span is not None and fp[fine_span[0]] == peaks[i]:
+                p_opt = float(np.sqrt(p_fine[fine_span[0]] * p_fine[fine_span[1]]))
+        logger.info(
+            f"    ABMC stability: peak {peaks[i]} held over P in "
+            f"[{p_coarse[i]:.3g}, {p_coarse[j]:.3g}]; selected P = {p_opt:.4g}."
+        )
+        if i == j:
+            warnings.warn(
+                f"the localiser peak is stable at only one value of P "
+                f"({p_coarse[i]:.3g}); the result is sensitive to this setting. "
+                "Treat the localisation with caution, and consider a denser "
+                "sweep (larger n_coarse) or a longer data segment.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+    return p_all, pk_all, tm_all, bl_all, cp_all, p_opt
+
+
 @verbose
 def make_abmc(
     info,
@@ -547,9 +995,13 @@ def make_abmc(
     cov=None,
     noise_cov=None,
     P=0.03,
-    reg=0.05,
+    reg=0.0,
     f=1.0,
     max_lag=None,
+    method="closed-form",
+    mu=None,
+    max_iter=100000,
+    tol=1e-6,
     return_weights=False,
     verbose=None,
 ):
@@ -612,13 +1064,37 @@ def make_abmc(
         an iterative LCMV, and large ``P`` enters the paper's weight-blow-up /
         non-convergence regime. Watch ``result.blowup_fraction``.
     reg : float
-        Diagonal loading (fraction of :math:`\mathrm{tr}(R)/M`) for the inverse
-        used to seed the lag (default 0.05).
+        Diagonal loading of :math:`R`, as a fraction of
+        :math:`\mathrm{tr}(R)/M`. The default is **0**, which is what the paper
+        does: its :math:`R = G\alpha G^\mathsf{T} + \Lambda` has an estimated
+        per-channel noise term :math:`\Lambda` and is positive definite by
+        construction, so no loading is needed (its condition number is about 20
+        on the MNE ``sample`` data). Raise it only when supplying your own
+        ill-conditioned ``cov``; at 0.05 the Stage-2 weights move by a couple of
+        per cent on a well-conditioned :math:`R`, and considerably more on a
+        poorly conditioned one.
     f : float
         Distortionless gain (default 1.0).
     max_lag : int | None
         Restrict the template lag search to :math:`|j|\le` ``max_lag`` samples.
         ``None`` searches all lags.
+    method : 'closed-form' | 'iterative'
+        How Stage 2 is solved. ``'closed-form'`` (default) evaluates the fixed
+        point of Eqs. 17-19 directly. ``'iterative'`` runs the paper's gradient
+        descent verbatim, which is slower -- its step count grows with the
+        condition number of :math:`R` -- and is provided for exact reproduction;
+        the two agree once the descent has converged.
+    mu : float | None
+        Descent step size, used only when ``method='iterative'``. ``None`` uses
+        :math:`1/\lambda_{\max}(R)`.
+    max_iter : int
+        Maximum descent iterations, used only when ``method='iterative'``.
+    tol : float
+        Convergence tolerance for the descent, used only when
+        ``method='iterative'``. It is the *relative distance to the fixed point*,
+        not the size of the step: on an ill-conditioned :math:`R` the steps
+        become small precisely because the descent is crawling, so a step-size
+        rule reports convergence while the weights are still far away.
     return_weights : bool
         If ``True``, include the beamformer weights in the result.
     %(verbose)s
@@ -634,116 +1110,51 @@ def make_abmc(
     """
     if max_lag is not None and int(max_lag) < 0:
         raise ValueError(f"max_lag must be >= 0 samples, got {max_lag}.")
-    if not 0 < P:
-        raise ValueError(f"P must be > 0, got {P}.")
-    leadfield, x, ch_names = _aligned_leadfield_and_data(info, forward, data)
-    u = np.asarray(template, float).ravel()
-    if u.shape[0] != x.shape[1]:
-        raise ValueError(
-            f"template length {u.shape[0]} must match data length {x.shape[1]}."
-        )
+    _check_option("method", method, ("closed-form", "iterative"))
+    prep = _abmc_prepare(info, forward, data, template, cov, noise_cov, reg, max_lag)
 
-    # covariance R: use the SBL estimate by default (the ABMC pipeline)
-    if cov is None:
-        data_cov = Covariance(
-            x @ x.T / x.shape[1], ch_names, bads=[], projs=[], nfree=x.shape[1]
-        )
-        cov = sbl_covariance(info, forward, data_cov, noise_cov=noise_cov)
-    else:
-        _validate_type(cov, Covariance, "cov")
-    leadfield, x, ch_names, cov_mat = _restrict_to_cov(cov, leadfield, x, ch_names)
-    n_channels, n_columns = leadfield.shape
-    _check_noise_cov_required(info, ch_names, noise_cov)
-    _check_eeg_reference(info, ch_names)
+    if P == "auto":
+        P = _abmc_select_p(prep, forward, f, (1e-4, 1e4), 17, 9)[-1]
+        logger.info(f"    ABMC: selected P = {P:.4g} from the stability curve.")
+    P = float(P)
+    if not P > 0:
+        raise ValueError(f"P must be > 0 or 'auto', got {P}.")
 
-    # Stage 2 runs in the noise-scaled space, for the same reason Stage 1 does.
-    # In recorded units a magnetometer/gradiometer/EEG covariance spans ~16
-    # orders of magnitude, R is numerically indefinite, and the solve is driven
-    # by whichever sensor type has the larger numerical scale -- on a
-    # Neuromag + EEG array the EEG channels contributed essentially all of the
-    # filter output and the 305 MEG channels ~1e-10 of it. Dividing each channel
-    # by its noise standard deviation makes the types commensurable and R
-    # positive definite (condition number ~1e6 rather than ~1e16). The filter is
-    # scale-covariant, so the localiser, the output and the power are unchanged;
-    # only the returned weights are mapped back to recorded units at the end.
-    sd = _noise_scaling(info, ch_names, noise_cov)
-    leadfield = leadfield / sd[:, None]
-    x = x / sd[:, None]
-    cov_mat = cov_mat / np.outer(sd, sd)
-
-    r = 0.5 * (cov_mat + cov_mat.T)
-
-    # seed the per-column lag from an initial (distortionless LCMV) output
-    r_reg = r + reg * np.trace(r) / n_channels * np.eye(n_channels)
-    r_inv_g = np.linalg.solve(r_reg, leadfield)
-    w0 = r_inv_g / np.einsum("mk,mk->k", leadfield, r_inv_g)[None, :]
-    y0 = w0.T @ x
-    lags_full = np.arange(-(len(u) - 1), len(u))
-    if max_lag is not None:
-        lag_mask = np.abs(lags_full) <= max_lag
-    else:
-        lag_mask = np.ones_like(lags_full, dtype=bool)
-    c = np.empty((n_channels, n_columns))
-    u_shift = np.empty((n_columns, len(u)))
-    col_lag = np.empty(n_columns, dtype=int)
-    for k in range(n_columns):
-        xc = np.correlate(y0[k], u, mode="full")
-        j = int(lags_full[lag_mask][np.argmax(np.abs(xc[lag_mask]))])
-        col_lag[k] = j
-        u_shift[k] = _shift_template(u, j)
-        c[:, k] = x @ u_shift[k]
-
-    # Put the template-constraint column on the same scale as the leadfield
-    # column it competes with in Eq. 19. ``c = X u^T`` carries the units of the
-    # data times the template while ``g`` carries those of the forward model, so
-    # without this the ratio P g^T c / g^T g is a dimensional quantity: on
-    # SI-unit MEG it is ~1e-19 at any sane P and the paper's second constraint
-    # is inert. Rescaled, P is the dimensionless trade-off the paper describes
-    # and the whole scan is invariant to the units of the data and the template.
-    c *= (
-        np.linalg.norm(leadfield, axis=0)
-        / np.clip(np.linalg.norm(c, axis=0), _TINY, None)
-    )[None, :]
-
-    gg = np.einsum("mk,mk->k", leadfield, leadfield)
-    gc = np.einsum("mk,mk->k", leadfield, c)
-    coupling = float(np.max(np.abs(P * gc / np.clip(gg, _TINY, None))))
+    coupling = float(np.max(np.abs(P * prep["gc"] / np.clip(prep["gg"], _TINY, None))))
     if coupling < 1e-6:
         warnings.warn(
             "the template constraint is numerically inert (P g^T c / g^T g is "
-            f"at most {coupling:.2e}); ABMC reduces to an iterative LCMV "
-            "beamformer. Raise P, or check that the template is not orthogonal "
-            "to the data.",
+            f"at most {coupling:.2e}); ABMC reduces to a plain LCMV beamformer. "
+            "Raise P, or check that the template is not orthogonal to the data.",
             RuntimeWarning,
             stacklevel=2,
         )
-    # Solve Eqs. 17-19 at their fixed point rather than descending to it.
-    # Setting the update step to zero gives R w = (g + P c) beta1, and the
-    # consistency of Eq. 19 then forces g^T w = f, so the estimator the paper's
-    # iteration converges to is available in closed form:
-    #
-    #     w* = f R^-1 (g + P c) / (g^T R^-1 (g + P c)).
-    #
-    # This is the same estimator, not a different one -- the shipped iteration's
-    # own relative step at w* is ~2e-12 -- but it removes the tuning. The
-    # gradient descent needed several thousand steps on a real gradiometer
-    # covariance, and its tolerance test (on the size of the *step*) reported
-    # convergence while the weights were still ~40% away from w*, moving the
-    # localiser peak by ~9 cm. ``r_reg`` rather than ``r`` is inverted, so ``reg``
-    # regularises this solve exactly as it does in ``make_mcmv`` and ``make_lcmv``.
-    v = leadfield + P * c
-    ri_v = np.linalg.solve(r_reg, v)
-    denom_w = np.einsum("mk,mk->k", leadfield, ri_v)
-    # A column whose gain constraint is degenerate cannot be normalised; it is
-    # zeroed and excluded from the localiser below rather than poisoning the map.
-    scale = _EPS * np.linalg.norm(leadfield, axis=0) * np.linalg.norm(ri_v, axis=0)
-    degenerate = np.abs(denom_w) <= scale
-    w = np.where(degenerate[None, :], 0.0, ri_v / np.where(degenerate, 1.0, denom_w))
-    w *= f
-    n_run, converged = 0, True
+
+    if method == "closed-form":
+        w, degenerate = _abmc_fixed_point(prep, P, f)
+        n_iter, converged = 0, True
+    else:
+        w, degenerate, n_iter, converged, distance, mu_used = _abmc_descend(
+            prep, P, f, mu, max_iter, tol
+        )
+        logger.info(
+            f"    ABMC: descent ran {n_iter} iteration(s), mu = {mu_used:.3e}, "
+            f"relative distance to the fixed point {distance:.2e}."
+        )
+        if not converged:
+            warnings.warn(
+                f"the ABMC descent did not reach the fixed point in {max_iter} "
+                f"iterations (relative distance {distance:.2e} > tol={tol}). The "
+                "number of steps needed grows with the condition number of R; "
+                "raise max_iter, or use the default method='closed-form', which "
+                "solves for the same estimator directly.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
     if degenerate.any():
         warnings.warn(
-            f"{int(degenerate.sum())} of {n_columns} grid columns have a "
+            f"{int(degenerate.sum())} of {prep['n_columns']} grid columns have a "
             "degenerate gain constraint (g^T R^-1 (g + P c) is numerically "
             "zero); their localiser value is set to 0. Reduce P, or check the "
             "forward model at those locations.",
@@ -751,69 +1162,16 @@ def make_abmc(
             stacklevel=2,
         )
 
-    # readouts per column
-    out = np.einsum("mk,mt->kt", w, x)
-    out_c = out - out.mean(1, keepdims=True)
-    us_c = u_shift - u_shift.mean(1, keepdims=True)
-    out_norm = np.linalg.norm(out_c, axis=1)
-    us_norm = np.linalg.norm(us_c, axis=1)
-    denom_corr = out_norm * us_norm
-    num_corr = np.abs(np.einsum("kt,kt->k", out_c, us_c))
-    # A correlation is scale free, so the guard against a constant (zero
-    # variance) signal must be scale free too. An absolute floor carries the
-    # units of the data times the template and silently returns a wrong -- and
-    # unbounded -- value for a small-amplitude template.
-    # Per column, and overflow-safe. A single blown-up column can make its own
-    # norm overflow to inf while every weight entry is still finite; a global
-    # floor built from ``max()`` would then be inf and zero the entire map.
-    ref = np.abs(out_c).max(axis=1) * np.sqrt(out_c.shape[1])
-    good = (
-        np.isfinite(out_norm)
-        & np.isfinite(us_norm)
-        & (out_norm > _EPS * ref)
-        & (us_norm > 0)
-    )
-    tmatch = np.zeros(n_columns)
-    tmatch[good] = num_corr[good] / denom_corr[good]
-    power = 0.5 * np.einsum("mk,mk->k", w, r @ w)
-
-    col_norm = np.linalg.norm(w, axis=0)
-    blowup = float((col_norm > 10 * np.median(col_norm)).mean())
-    if blowup > 0.05:
+    result = _abmc_readout(prep, w, forward, P, f, return_weights, n_iter, converged)
+    if result.blowup_fraction > 0.05:
         warnings.warn(
-            f"{blowup:.0%} of grid weights blew up; P={P} is likely too large "
-            "for this segment (cf. the paper's non-convergence regime).",
+            f"{result.blowup_fraction:.0%} of grid weights blew up; P={P:.4g} is "
+            "likely too large for this segment (cf. the paper's non-convergence "
+            "regime).",
             RuntimeWarning,
             stacklevel=2,
         )
-
-    # ``out``, ``tmatch`` and ``power`` are invariant to the noise scaling, but
-    # the returned weights must act on the recorded data, so map them back:
-    # the solve enforced (g / sd)^T w = f, which is g^T (w / sd) = f.
-    w = w / sd[:, None]
-
-    # combine orientations -> one value per grid point
-    n_sources = forward["nsource"]
-    n_ori = n_columns // n_sources
-    if n_ori * n_sources != n_columns:
-        raise RuntimeError("leadfield columns are not an integer multiple of sources.")
-    tmatch_s = tmatch.reshape(n_sources, n_ori)
-    orientation = tmatch_s.argmax(1)
-    tmatch_grid = tmatch_s.max(1)
-    power_grid = power.reshape(n_sources, n_ori).sum(1)
-    lag_grid = col_lag.reshape(n_sources, n_ori)[np.arange(n_sources), orientation]
-
-    return ABMCResult(
-        stc=_abmc_stc(forward, tmatch_grid),
-        template_match=tmatch_grid,
-        power=power_grid,
-        lag=lag_grid,
-        orientation=orientation if n_ori > 1 else np.zeros(n_sources, int),
-        weights=w if return_weights else None,
-        n_iter=n_run,
-        converged=converged,
-        blowup_fraction=blowup,
-    )
+    return result
 
 
 @verbose
@@ -826,7 +1184,7 @@ def make_abmc_dictionary(
     cov=None,
     noise_cov=None,
     P=0.03,
-    reg=0.05,
+    reg=0.0,
     f=1.0,
     max_lag=None,
     return_weights=False,
@@ -867,7 +1225,7 @@ def make_abmc_dictionary(
         Ratio :math:`\beta_2/\beta_1` for the template constraint; see
         :func:`make_abmc`. Applied to every template.
     reg : float
-        Diagonal loading of :math:`R`, as in :func:`make_abmc`.
+        Diagonal loading of :math:`R`, as in :func:`make_abmc` (default 0).
     f : float
         Distortionless gain, as in :func:`make_abmc`.
     max_lag : int | None
