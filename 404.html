@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Redirecting…</title>
+<script>
+  (function () {
+    var prefix = "/advance_beamlab/";
+    var path = window.location.pathname;
+    var rest = path.indexOf(prefix) === 0 ? path.slice(prefix.length) : "";
+    window.location.replace(
+      "https://sepehrshirani.github.io/advance_beamlab-docs/" +
+      rest + window.location.search + window.location.hash);
+  })();
+</script>
+</head>
+<body><p>Redirecting to the current documentation…</p></body>
+</html>
