@@ -1,0 +1,75 @@
+name: deploy docs
+
+# Build the documentation -- gallery and all -- and publish it to the
+# advance_beamlab-docs repository, which serves
+# https://sepehrshirani.github.io/advance_beamlab-docs/ from its gh-pages branch.
+#
+# This exists because the site was previously built by hand and pushed
+# occasionally, so it drifted a month behind the code. Publishing from CI on
+# every push to main means the site cannot disagree with the package again.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: docs-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install the system libraries PyVista/Qt need
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb libgl1 libglx-mesa0 libxrender1 libxkbcommon-x11-0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-xinerama4 libegl1
+
+      - name: Install the package with doc extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[doc]"
+
+      - name: Cache the MNE sample dataset
+        uses: actions/cache@v4
+        with:
+          path: ~/mne_data
+          key: mne-sample-${{ runner.os }}-v1
+
+      - name: Fetch the sample dataset
+        run: python -c "import mne; mne.datasets.sample.data_path()"
+
+      - name: Build the documentation
+        # BEAMLAB_REQUIRE_3D makes a missing or broken 3-D backend fail the build
+        # rather than silently publishing a gallery with its brain figures gone.
+        env:
+          BEAMLAB_REQUIRE_3D: "1"
+          MNE_3D_OPTION_ANTIALIAS: "false"
+        run: |
+          xvfb-run -a python -m sphinx -b html doc doc/_build/html -W -n --keep-going
+
+      - name: Strip the Sphinx build cache
+        # ``.doctrees`` is the incremental-build cache, not part of the site. It
+        # was previously committed and accounted for 15 MB of a 40 MB repository.
+        run: |
+          rm -rf doc/_build/html/.doctrees
+          touch doc/_build/html/.nojekyll
+
+      - name: Publish to advance_beamlab-docs
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          deploy_key: ${{ secrets.DOCS_DEPLOY_KEY }}
+          external_repository: Sepehrshirani/advance_beamlab-docs
+          publish_branch: gh-pages
+          publish_dir: doc/_build/html
+          force_orphan: true
+          commit_message: "Documentation for ${{ github.sha }}"

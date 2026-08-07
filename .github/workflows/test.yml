@@ -117,6 +117,9 @@ jobs:
     # BEAMLAB_REQUIRE_3D set -- which makes a missing or broken 3-D backend a
     # build error instead of a gallery that silently lost its brain figures.
     name: docs (full gallery)
+    # Pull requests only: pushes to main are covered by the docs-deploy workflow,
+    # which performs the same build and then publishes it.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
