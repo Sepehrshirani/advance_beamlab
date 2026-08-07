@@ -39,7 +39,8 @@ beamformers use unit-gain weights (``weight_norm=None`` for
 :func:`~advance_beamlab.make_mcmv`); a noise-normalised readout rescales the axis and
 obscures the comparison.
 """
-# Authors: Sepehr Shirani and Muzhi Wang
+# Authors: Sepehr Shirani <sepehrshirani@gmail.com>, <s.shirani@ucl.ac.uk>
+#          Muzhi Wang
 # License: BSD-3-Clause
 
 # %%

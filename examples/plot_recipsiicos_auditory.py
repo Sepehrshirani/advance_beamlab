@@ -34,7 +34,8 @@ the forward and must span where the data covariance's energy lives, so we use a
 covariances are shrinkage-regularised, the correct estimator across the
 magnetometer/gradiometer unit scales.
 """
-# Authors: Sepehr Shirani and Muzhi Wang
+# Authors: Sepehr Shirani <sepehrshirani@gmail.com>, <s.shirani@ucl.ac.uk>
+#          Muzhi Wang
 # License: BSD-3-Clause
 
 # %%

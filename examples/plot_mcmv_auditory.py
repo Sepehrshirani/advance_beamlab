@@ -22,7 +22,8 @@ magnetometer/gradiometer unit scales), and the forward is the full whole-brain
 BEM solution -- MCMV constrains only the two chosen sources, so no decimation is
 needed.
 """
-# Authors: Sepehr Shirani and Muzhi Wang
+# Authors: Sepehr Shirani <sepehrshirani@gmail.com>, <s.shirani@ucl.ac.uk>
+#          Muzhi Wang
 # License: BSD-3-Clause
 
 # %%

@@ -5,6 +5,8 @@ abstract: "Advanced minimum-variance beamformers for MEG/EEG source reconstructi
 authors:
   - family-names: "Shirani"
     given-names: "Sepehr"
+    email: "s.shirani@ucl.ac.uk"
+    affiliation: "University College London"
   - family-names: "Wang"
     given-names: "Muzhi"
 version: 0.1.0.dev0

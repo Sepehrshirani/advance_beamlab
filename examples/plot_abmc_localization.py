@@ -35,7 +35,8 @@ a spherical model it always peaks at the most superficial grid point regardless 
 the data. Comparing against that would flatter ABMC for the wrong reason.
 """
 
-# Authors: Sepehr Shirani and Muzhi Wang <sepehrshirani@gmail.com>
+# Authors: Sepehr Shirani <sepehrshirani@gmail.com>, <s.shirani@ucl.ac.uk>
+#          Muzhi Wang
 # License: BSD-3-Clause
 
 # %%

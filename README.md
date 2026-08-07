@@ -826,7 +826,7 @@ for the matrix under test, plus its `sfreq`.
 
 # Maintainers and contributors
 
-- **Sepehr Shirani** — maintainer and contributor (<sepehrshirani@gmail.com>)
+- **Sepehr Shirani** — maintainer and contributor (<sepehrshirani@gmail.com>, <s.shirani@ucl.ac.uk>)
 - **Muzhi Wang** — contributor
 
 Contributions are welcome — please open an issue or pull request.
