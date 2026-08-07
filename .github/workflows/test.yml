@@ -111,11 +111,11 @@ jobs:
             -D plot_gallery=0 -j auto
 
   doc-gallery:
-    # Full build: actually runs every example and captures its figures, including
-    # the cortical-surface plots. Those are the only images in the gallery that
-    # show a source estimate on a brain, so the build is run under xvfb with
-    # BEAMLAB_REQUIRE_3D set -- which makes a missing or broken 3-D backend a
-    # build error instead of a gallery that silently lost its brain figures.
+    # Full build: runs every example and captures its figures, including the
+    # cortical-surface plots. Those are the only images in the gallery that show
+    # a source estimate on a brain, and this job fails if they go missing --
+    # they disappeared once already when the headless display was misconfigured,
+    # and a gallery that quietly loses them looks fine until someone opens it.
     name: docs (full gallery)
     # Pull requests only: pushes to main are covered by the docs-deploy workflow,
     # which performs the same build and then publishes it.
@@ -127,14 +127,15 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install the system libraries PyVista/Qt need
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            xvfb libgl1 libglx-mesa0 libgl1-mesa-dri libosmesa6 libxrender1 \
-            libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
-            libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
-            libxcb-shape0
+      - name: Set up a headless display for PyVista/Qt
+        # The maintained action from the PyVista organisation, which is what
+        # MNE-Python itself uses to build its documentation. It configures Xvfb,
+        # Mesa and the Qt environment together; a hand-rolled apt list plus
+        # ``xvfb-run`` did not give VTK a usable GLX visual and every
+        # cortical-surface figure failed with RenderWindowUnavailable.
+        uses: pyvista/setup-headless-display-action@v4
+        with:
+          qt: true
       - name: Install package with doc extras
         run: |
           python -m pip install --upgrade pip
@@ -148,7 +149,7 @@ jobs:
         run: python -c "import mne; mne.datasets.sample.data_path()"
       - name: Build the documentation with the gallery
         env:
-          BEAMLAB_NO_3D: "1"
+          MNE_3D_OPTION_ANTIALIAS: "false"
           # Software rendering: the runners have no GPU, and the llvmpipe
           # driver needs to be told which GL version to advertise or VTK
           # refuses to create a context.
@@ -157,8 +158,21 @@ jobs:
           MESA_GL_VERSION_OVERRIDE: "3.3"
           PYVISTA_OFF_SCREEN: "true"
         run: |
-          xvfb-run -a --server-args="-screen 0 1920x1080x24 -ac +extension GLX +render -noreset" \
-            python -m sphinx -b html doc doc/_build/html --keep-going
+          python -m sphinx -b html doc doc/_build/html --keep-going
+      - name: Require the cortical-surface figures
+        run: |
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+          imgs = sorted(Path("doc/_build/html/_images").glob("sphx_glr_*.png"))
+          big = [p for p in imgs if p.stat().st_size > 90_000]
+          print(f"gallery images: {len(imgs)}; cortical-surface renders: {len(big)}")
+          if not big:
+              sys.exit(
+                  "no cortical-surface figures were captured -- the 3-D backend "
+                  "did not render. Check the headless display setup."
+              )
+          PY
       - name: Upload the built documentation
         uses: actions/upload-artifact@v4
         with:

@@ -26,14 +26,15 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install the system libraries PyVista/Qt need
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            xvfb libgl1 libglx-mesa0 libgl1-mesa-dri libosmesa6 libxrender1 \
-            libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
-            libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
-            libxcb-shape0
+      - name: Set up a headless display for PyVista/Qt
+        # The maintained action from the PyVista organisation, which is what
+        # MNE-Python itself uses to build its documentation. It configures Xvfb,
+        # Mesa and the Qt environment together; a hand-rolled apt list plus
+        # ``xvfb-run`` did not give VTK a usable GLX visual and every
+        # cortical-surface figure failed with RenderWindowUnavailable.
+        uses: pyvista/setup-headless-display-action@v4
+        with:
+          qt: true
 
       - name: Install the package with doc extras
         run: |
@@ -53,10 +54,7 @@ jobs:
         # BEAMLAB_REQUIRE_3D makes a missing or broken 3-D backend fail the build
         # rather than silently publishing a gallery with its brain figures gone.
         env:
-          # The hosted runners have no working OpenGL stack, so the
-          # cortical-surface figures are skipped here rather than failing the
-          # build. The reporting step below records their absence.
-          BEAMLAB_NO_3D: "1"
+          MNE_3D_OPTION_ANTIALIAS: "false"
           # Software rendering: the runners have no GPU, and the llvmpipe
           # driver needs to be told which GL version to advertise or VTK
           # refuses to create a context.
@@ -65,13 +63,14 @@ jobs:
           MESA_GL_VERSION_OVERRIDE: "3.3"
           PYVISTA_OFF_SCREEN: "true"
         run: |
-          xvfb-run -a --server-args="-screen 0 1920x1080x24 -ac +extension GLX +render -noreset" \
-            python -m sphinx -b html doc doc/_build/html --keep-going
+          python -m sphinx -b html doc doc/_build/html --keep-going
 
       - name: Report what the gallery captured
         # The cortical-surface figures are the only images showing a source
-        # estimate on a brain. Print the count so their absence is visible in
-        # the log rather than discovered later on the live site.
+        # estimate on a brain. This job warns rather than fails: a publish that
+        # is merely missing them still beats a site that is weeks behind the
+        # code. The pull-request gallery job fails on the same condition, so a
+        # regression is caught before it reaches main.
         run: |
           python - <<'PY'
           from pathlib import Path
