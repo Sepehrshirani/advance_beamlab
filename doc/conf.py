@@ -4,6 +4,7 @@
 # License: BSD-3-Clause
 
 import os
+import sys
 
 import advance_beamlab
 
@@ -85,6 +86,11 @@ try:
 
     pyvista.OFF_SCREEN = True
     pyvista.BUILDING_GALLERY = True
+    # On a headless Linux runner start the framebuffer through PyVista itself:
+    # it configures the server the way VTK expects, which a bare ``xvfb-run``
+    # does not.
+    if sys.platform.startswith("linux") and not os.environ.get("DISPLAY"):
+        pyvista.start_xvfb()
 
     import mne
 
