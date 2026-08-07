@@ -86,11 +86,13 @@ try:
 
     pyvista.OFF_SCREEN = True
     pyvista.BUILDING_GALLERY = True
-    # On a headless Linux runner start the framebuffer through PyVista itself:
-    # it configures the server the way VTK expects, which a bare ``xvfb-run``
-    # does not.
+    # On a headless Linux runner bring up a framebuffer if the environment has
+    # not already provided one. ``start_xvfb`` was removed in PyVista 0.48, so
+    # this is best effort -- CI also wraps the build in ``xvfb-run``.
     if sys.platform.startswith("linux") and not os.environ.get("DISPLAY"):
-        pyvista.start_xvfb()
+        _start_xvfb = getattr(pyvista, "start_xvfb", None)
+        if _start_xvfb is not None:
+            _start_xvfb()
 
     import mne
 
