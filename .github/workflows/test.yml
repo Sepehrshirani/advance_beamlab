@@ -150,13 +150,6 @@ jobs:
       - name: Build the documentation with the gallery
         env:
           MNE_3D_OPTION_ANTIALIAS: "false"
-          # Software rendering: the runners have no GPU, and the llvmpipe
-          # driver needs to be told which GL version to advertise or VTK
-          # refuses to create a context.
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          GALLIUM_DRIVER: "llvmpipe"
-          MESA_GL_VERSION_OVERRIDE: "3.3"
-          PYVISTA_OFF_SCREEN: "true"
         run: |
           python -m sphinx -b html doc doc/_build/html --keep-going
       - name: Require the cortical-surface figures

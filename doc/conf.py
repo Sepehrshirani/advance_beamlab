@@ -5,7 +5,6 @@
 # License: BSD-3-Clause
 
 import os
-import sys
 
 import advance_beamlab
 
@@ -96,14 +95,15 @@ if _no_3d:
 else:
     import pyvista
 
-    pyvista.OFF_SCREEN = True
+    # Render into a real display when one exists, and only fall back to
+    # off-screen when there is none. This is what MNE-Python's own documentation
+    # build does, and the distinction matters: with ``OFF_SCREEN = True`` VTK
+    # takes an OSMesa path that the hosted runners do not provide, and every
+    # cortical-surface figure fails with ``RenderWindowUnavailable``. CI supplies
+    # a virtual display via ``pyvista/setup-headless-display-action``; a
+    # developer machine with native OpenGL has none, and renders off-screen.
+    pyvista.OFF_SCREEN = not bool(os.environ.get("DISPLAY"))
     pyvista.BUILDING_GALLERY = True
-    if sys.platform.startswith("linux") and not os.environ.get("DISPLAY"):
-        # ``start_xvfb`` was removed in PyVista 0.48; builds are also wrapped in
-        # ``xvfb-run``, so this is best effort.
-        starter = getattr(pyvista, "start_xvfb", None)
-        if starter is not None:
-            starter()
 
     import mne
 
