@@ -53,10 +53,10 @@ jobs:
         # BEAMLAB_REQUIRE_3D makes a missing or broken 3-D backend fail the build
         # rather than silently publishing a gallery with its brain figures gone.
         env:
-          # Deliberately not requiring 3-D here: a runner that cannot render
-          # should still publish an otherwise-correct site, and the reporting
-          # step below makes the missing figures visible.
-          MNE_3D_OPTION_ANTIALIAS: "false"
+          # The hosted runners have no working OpenGL stack, so the
+          # cortical-surface figures are skipped here rather than failing the
+          # build. The reporting step below records their absence.
+          BEAMLAB_NO_3D: "1"
           # Software rendering: the runners have no GPU, and the llvmpipe
           # driver needs to be told which GL version to advertise or VTK
           # refuses to create a context.
