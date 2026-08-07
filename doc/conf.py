@@ -81,34 +81,60 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 # with the brain figures missing and nobody noticing.
 image_scrapers = ["matplotlib"]
 _require_3d = os.environ.get("BEAMLAB_REQUIRE_3D", "") not in ("", "0", "false")
-try:
+
+
+def _try_enable_3d():
+    """Enable the PyVista scraper only if this machine can actually render.
+
+    Importing the backend is not enough: a headless runner will import PyVista
+    and Qt happily and then fail at draw time with ``RenderWindowUnavailable``,
+    which sphinx-gallery reports as a failed example and which aborts the whole
+    build. So render a throwaway scene first and only enable the scraper if it
+    succeeds. The alternative -- discovering this once per cortical-surface
+    figure -- costs the entire documentation build.
+    """
     import pyvista
 
     pyvista.OFF_SCREEN = True
     pyvista.BUILDING_GALLERY = True
-    # On a headless Linux runner bring up a framebuffer if the environment has
-    # not already provided one. ``start_xvfb`` was removed in PyVista 0.48, so
-    # this is best effort -- CI also wraps the build in ``xvfb-run``.
     if sys.platform.startswith("linux") and not os.environ.get("DISPLAY"):
-        _start_xvfb = getattr(pyvista, "start_xvfb", None)
-        if _start_xvfb is not None:
-            _start_xvfb()
+        # ``start_xvfb`` was removed in PyVista 0.48; CI also wraps the build in
+        # ``xvfb-run``, so this is best effort.
+        starter = getattr(pyvista, "start_xvfb", None)
+        if starter is not None:
+            starter()
 
     import mne
 
     mne.viz.set_3d_backend("pyvistaqt")
-    # Antialiasing is unreliable on headless software renderers and is not worth
-    # a failed build; the captured images are unaffected in any way that matters.
+    # Antialiasing is unreliable on software renderers and does not change the
+    # captured images in any way that matters.
     mne.viz.set_3d_options(antialias=False, depth_peeling=False)
+
+    plotter = pyvista.Plotter(off_screen=True)
+    try:
+        plotter.add_mesh(pyvista.Sphere())
+        plotter.show(auto_close=False)
+        plotter.screenshot(None)
+    finally:
+        plotter.close()
+
+
+try:
+    _try_enable_3d()
     image_scrapers.append("pyvista")
 except Exception as exc:  # pragma: no cover - depends on the local 3-D stack
+    message = (
+        f"3-D rendering is unavailable ({type(exc).__name__}: {exc}); the "
+        "cortical-surface figures will be missing from the gallery."
+    )
     if _require_3d:
         raise RuntimeError(
-            f"BEAMLAB_REQUIRE_3D is set but the 3-D backend is unavailable: {exc}. "
-            "Install the doc extras (pyvista, pyvistaqt) and, on a headless "
-            "machine, run the build under xvfb."
+            f"BEAMLAB_REQUIRE_3D is set but {message} Install the doc extras "
+            "(pyvista, pyvistaqt, a Qt binding) and, on a headless machine, run "
+            "the build under xvfb with a GLX-capable screen."
         ) from exc
-    print(f"conf.py: 3-D backend unavailable, brain figures will be missing ({exc})")
+    print(f"conf.py: {message}")
 
 
 def _reset_mpl_style(gallery_conf, fname):
