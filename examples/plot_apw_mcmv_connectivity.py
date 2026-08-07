@@ -58,9 +58,11 @@ from mne.beamformer import apply_lcmv, make_lcmv
 from scipy.signal import hilbert
 
 from advance_beamlab import (
+    ar1_surrogate_significance,
     augmented_pairwise_mcmv_connectivity,
     make_mcmv,
     pairwise_mcmv_connectivity,
+    reconstruct_pairwise_mcmv,
 )
 
 # %%
@@ -197,14 +199,71 @@ conn_pw = pairwise_mcmv_connectivity(
 )
 
 # %%
-# **APW-MCMV connectivity**: treat the (spuriously significant) A-B edge and the
-# genuine C-B edge as significant, then re-estimate every significant pair with
-# neighbour augmentation. For the A-B pair the conductor ``C`` -- within 4 cm of
-# ``A`` and carrying a significant edge -- is added to the beamformer.
+# **Which edges are worth re-estimating?** APW-MCMV is more expensive than
+# PW-MCMV -- a higher-order beamformer per pair -- so the paper applies it only
+# to edges that survive a significance test. That test is
+# :func:`~advance_beamlab.ar1_surrogate_significance`: it fits an AR(1) model to
+# each region's reconstructed time course, builds surrogates with the same
+# temporal smoothness but no coupling, and thresholds the Fisher-transformed
+# connectivity against that null with Benjamini-Hochberg FDR control.
+#
+# It needs one representative time course per region.
+# :func:`~advance_beamlab.reconstruct_pairwise_mcmv` gives them directly: it is
+# the primitive underneath ``pairwise_mcmv_connectivity`` and returns the
+# leakage-corrected reconstruction of every pair.
 
-significance = np.zeros((3, 3), dtype=bool)
-significance[0, 1] = significance[1, 0] = True  # A-B (spurious)
-significance[1, 2] = significance[2, 1] = True  # C-B (genuine) -> makes C a conductor
+pairs, pair_tcs = reconstruct_pairwise_mcmv(
+    evoked, evoked.info, fwd, data_cov, rois, noise_cov=noise_cov
+)
+reference = np.empty((len(rois), evoked.data.shape[1]))
+for i in range(len(rois)):
+    k, row = next(
+        (k, r)
+        for k, pr in enumerate(pairs)
+        for r, member in enumerate(pr)
+        if member == i
+    )
+    reference[i] = pair_tcs[k][row]
+
+screen = ar1_surrogate_significance(
+    conn_pw,
+    reference,
+    method="envelope",
+    sfreq=evoked.info["sfreq"],
+    n_surrogates=200,
+    random_state=0,
+)
+labels = ("A", "B", "C")
+for i in range(3):
+    for j in range(i + 1, 3):
+        verdict = "retained" if screen[i, j] else "rejected"
+        print(f"{labels[i]}-{labels[j]}: r = {conn_pw[i, j]:+.3f}   {verdict}")
+
+# %%
+# The screen keeps the genuine ``B``--``C`` coupling, keeps ``A``--``C``, and
+# **rejects** ``A``--``B``. Two things are worth drawing out.
+#
+# The rejection of ``A``--``B`` is the test working. By this point PW-MCMV has
+# already pulled that edge down to -0.093, and a screen calibrated against an
+# AR(1) null is designed to discard exactly such a small residual -- so on this
+# simulation the spurious edge would never reach APW-MCMV at all. The two
+# corrections are complementary rather than redundant.
+#
+# ``A``--``C`` being retained is the harder case, and it is not a failure of the
+# estimator: PW-MCMV puts it at -0.143 against a realised truth of -0.151, so the
+# *estimate* is accurate. What the screen is asking is whether a correlation that
+# size could have arisen by chance from two independent slow envelopes, and over
+# a finite recording that judgement is genuinely marginal. It is a reminder that
+# the screen tests the observed statistic, not the generative model.
+#
+# **APW-MCMV connectivity.** To exercise the augmentation on the edge whose
+# correction this example is about, we hand it a mask that includes ``A``--``B``
+# as well, rather than the screen's own output. In a real analysis you would pass
+# ``screen`` straight through. For the A-B pair the conductor ``C`` -- within
+# 4 cm of ``A`` and carrying a significant edge -- is added to the beamformer.
+
+significance = np.array(screen)
+significance[0, 1] = significance[1, 0] = True  # force the A-B pair through
 conn_apw = augmented_pairwise_mcmv_connectivity(
     evoked,
     evoked.info,
@@ -317,3 +376,5 @@ fig2.tight_layout()
 # adaptive inverse already suppresses most of ``C``; in realistic multi-source
 # resting-state data the indirect leakage accumulates across many conductors,
 # which is where APW-MCMV's advantage is largest (Nunes et al., 2020).
+
+# sphinx_gallery_thumbnail_number = 1

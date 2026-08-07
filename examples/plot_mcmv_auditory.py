@@ -31,6 +31,7 @@ import matplotlib.pyplot as plt
 import mne
 import numpy as np
 from mne.beamformer import apply_lcmv, apply_lcmv_cov, make_lcmv
+from mne.minimum_norm import apply_inverse, make_inverse_operator
 
 from advance_beamlab import apply_mcmv, apply_mcmv_cov, make_mcmv
 
@@ -188,3 +189,61 @@ for a in range(2):
     for b in range(2):
         ax.text(b, a, f"{src_corr[a, b]:.2f}", ha="center", va="center", color="k")
 fig.colorbar(im, ax=ax, label="correlation")
+
+# %%
+# **Where does this sit next to the inverse methods you already use?** dSPM and
+# eLORETA answer a different question from a beamformer, and it is worth being
+# concrete rather than declaring a winner.
+#
+# The minimum-norm family is **linear**: the operator is built from the forward
+# and the noise covariance alone and never sees the data covariance. That makes it
+# immune to the correlated-source cancellation this whole example is about --
+# there is no adaptive null to place, so there is nothing to cancel with. A
+# beamformer buys its selectivity by adapting to the data, and inherits the
+# cancellation problem in exchange. MCMV's contribution is to keep the adaptive
+# filter while removing the cancellation, for sources you can name in advance.
+#
+# It is tempting to add "and the beamformer is sharper", and on this recording
+# that is simply not true. Measured like for like -- the fraction of cortex left
+# above half the peak, for the absolute source amplitude at the same instant --
+# the three are comparable, with dSPM the most compact of them. Resolution is not
+# what separates these methods here; their behaviour under correlated sources is.
+
+inv = make_inverse_operator(
+    evoked.info, fwd, noise_cov, loose=0.0, depth=None, verbose=False
+)
+peak_time = 0.1
+extent = {}
+for method in ("dSPM", "eLORETA"):
+    stc = apply_inverse(evoked, inv, lambda2=1.0 / 9.0, method=method, verbose=False)
+    amp = np.abs(stc.data[:, np.argmin(np.abs(stc.times - peak_time))])
+    extent[method] = float((amp > 0.5 * amp.max()).mean())
+stc_lcmv = apply_lcmv(evoked, lcmv)
+amp = np.abs(stc_lcmv.data[:, np.argmin(np.abs(stc_lcmv.times - peak_time))])
+extent["LCMV"] = float((amp > 0.5 * amp.max()).mean())
+
+for name in ("dSPM", "eLORETA", "LCMV"):
+    print(f"{name:8s}: {extent[name]:6.1%} of vertices above half maximum")
+
+fig, ax = plt.subplots(figsize=(6, 3.4), constrained_layout=True)
+names = ["dSPM", "eLORETA", "LCMV"]
+bars = ax.bar(names, [extent[n] * 100 for n in names], color=["C0", "C0", "C3"])
+ax.bar_label(bars, fmt="%.1f%%", padding=3)
+ax.set(ylabel="cortex above half maximum (%)", ylim=(0, max(extent.values()) * 130))
+ax.set_title(
+    "Comparable spatial extent at the N100 -- resolution is not the difference",
+    loc="left",
+    fontsize=10,
+)
+ax.grid(axis="x", visible=False)
+
+# %%
+# So the choice is not about resolution on this dataset. It is about what you
+# need. If you want a map with no assumption about how many sources there are,
+# and no risk of correlated-source cancellation, a linear method remains the
+# safer default. If you have specific, named locations whose time courses you
+# need recovered without them cancelling each other -- the bilateral auditory
+# pair here -- that is what the joint constraint is for. They are complementary
+# tools, and this example is about the second case.
+
+# sphinx_gallery_thumbnail_number = 1

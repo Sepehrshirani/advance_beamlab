@@ -45,7 +45,7 @@ import mne
 import numpy as np
 from mne.beamformer import apply_lcmv_cov, make_lcmv
 
-from advance_beamlab import make_abmc, make_abmc_dictionary
+from advance_beamlab import make_abmc, make_abmc_dictionary, sbl_covariance
 
 mne.set_log_level("ERROR")
 
@@ -150,6 +150,69 @@ for i_src in locations:
         )
 
 print(f"mean error  ABMC {np.mean(abmc_err):.1f} cm   LCMV {np.mean(lcmv_err):.1f} cm")
+
+# %%
+# **What Stage 1 actually does.** ABMC has two stages, and ``make_abmc`` runs the
+# first internally, so it is easy to miss. Stage 1 is
+# :func:`~advance_beamlab.sbl_covariance`: a Champagne-style type-II maximum
+# likelihood fit of per-source prior variances :math:`\alpha` and a diagonal
+# sensor noise :math:`\Lambda`, giving a *model* covariance
+# :math:`R = G\alpha G^\mathsf{T} + \Lambda`.
+#
+# The point is not that :math:`R` is a better estimate of the sample covariance.
+# It is that :math:`R` is a **generative model** with a diagonal :math:`\alpha`, so
+# it carries no cross-source correlation structure -- which is exactly what an
+# LCMV beamformer exploits when it cancels correlated sources.
+#
+# The left panel is the fitted source power. It is informative: it puts the true
+# source in the top handful of a 301-point grid. But it is *not* a localiser --
+# its own peak can sit several centimetres away. Stage 1 supplies a covariance
+# that will not cancel correlated sources; the template constraint of Stage 2 is
+# what turns that into a location. That division of labour is the method.
+#
+# The right panel is why the model matters numerically. The empirical covariance
+# is rank deficient -- the average-reference projector alone costs it a dimension,
+# and a short segment costs more -- so its condition number is astronomical and it
+# cannot be inverted directly. The fitted :math:`R` is full rank by construction.
+
+emp_cov = mne.Covariance(
+    worst["data"] @ worst["data"].T / n_times,
+    list(info["ch_names"]),
+    [],
+    [],
+    nfree=n_times,
+    verbose=False,
+)
+sbl_cov, alpha = sbl_covariance(info, fwd, emp_cov, return_source_power=True)
+true_src = worst["i_src"]
+alpha_rank = int((alpha > alpha[true_src]).sum()) + 1
+alpha_peak_cm = np.linalg.norm(rr[int(np.argmax(alpha))] - rr[true_src]) * 100
+ev_emp = np.linalg.eigvalsh(emp_cov.data)[::-1]
+ev_sbl = np.linalg.eigvalsh(sbl_cov.data)[::-1]
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 3.8))
+ax1.fill_between(
+    np.arange(len(alpha)), alpha / alpha.max(), color=C_ABMC, alpha=0.25, lw=0
+)
+ax1.plot(alpha / alpha.max(), color=C_ABMC, lw=1.0)
+ax1.axvline(true_src, color=C_TRUE, ls=(0, (5, 3)), lw=1.5, label="true source")
+ax1.set(xlabel="source grid index", ylabel=r"normalised $\alpha$", ylim=(0, 1.25))
+ax1.set_title(f"Stage 1 source power (true source ranked {alpha_rank})", loc="left")
+ax1.legend(loc="upper right")
+ax1.grid(axis="x", visible=False)
+
+ax2.semilogy(ev_emp / ev_emp.max(), color=C_LCMV, label="empirical")
+ax2.semilogy(ev_sbl / ev_sbl.max(), color=C_ABMC, label="SBL model")
+ax2.set(xlabel="eigenvalue index", ylabel="normalised eigenvalue")
+ax2.set_title(
+    f"condition number {ev_emp[0] / ev_emp[-1]:.0e} vs {ev_sbl[0] / ev_sbl[-1]:.1f}",
+    loc="left",
+)
+ax2.legend(loc="lower left")
+fig.tight_layout()
+
+print(f"alpha ranks the true source {alpha_rank} of {len(alpha)}")
+print(f"but its own peak is {alpha_peak_cm:.1f} cm away -- Stage 1 is not a localiser")
 
 # %%
 # **Localisation maps**, shown at the single source where the power map does
@@ -280,3 +343,5 @@ for name, r in results.items():
     peak = int(np.argmax(r.template_match))
     err = np.linalg.norm(rr[peak] - rr[i_src]) * 100
     print(f"{name:>8}: error {err:.1f} cm, lag {int(r.lag[peak])} samples")
+
+# sphinx_gallery_thumbnail_number = 3

@@ -23,7 +23,9 @@ high-correlation effect that regularisation suppresses. What this example does
 show is the whole real-data pipeline working: the rank curve and its 45-degree
 criterion, the projector, the noise whitening across magnetometers and
 gradiometers, and the virtual-sensor reduction. For the regime where the
-cancellation is dramatic, see :ref:`ex-mcmv-simulation`.
+cancellation is dramatic -- and where this method demonstrably repairs it --
+see :ref:`ex-recipsiicos-simulation`, which runs the same comparison on
+simulated sources placed on this same realistic forward.
 
 Two practical points, both important on real data. The projector is built from
 the forward and must span where the data covariance's energy lives, so we use a
@@ -75,14 +77,14 @@ data_cov = mne.compute_covariance(epochs, tmin=0.08, tmax=0.13, method="shrunk")
 noise_cov = mne.compute_covariance(epochs, tmin=None, tmax=0.0, method="shrunk")
 
 # %%
-# Load the real BEM forward and decimate it to a coarse whole-brain grid (every
-# 16th vertex per hemisphere), keeping both hemispheres so it still spans the
-# head while the whitened Gram stays small.
+# Load the real BEM forward and decimate it to a coarse whole-brain grid,
+# keeping both hemispheres so it still spans the head while the whitened Gram --
+# which is quadratic in the number of sources -- stays tractable.
 
 fwd = mne.read_forward_solution(meg / "sample_audvis-meg-eeg-oct-6-fwd.fif")
 fwd = mne.pick_types_forward(fwd, meg=True, eeg=False)
 labels = [
-    Label(fwd["src"][h]["vertno"][::24], hemi=hemi, subject="sample")
+    Label(fwd["src"][h]["vertno"][::44], hemi=hemi, subject="sample")
     for h, hemi in enumerate(("lh", "rh"))
 ]
 fwd = restrict_forward_to_label(fwd, labels)
@@ -156,8 +158,8 @@ stc_recip = apply_lcmv_cov(data_cov, recip)
 # projection, which necessarily discards part of the covariance, comes at a small
 # cost on this particular metric. Signal cancellation is an idealised, high-SNR,
 # high-correlation effect: regularisation and sensor noise both push the
-# recovered amplitudes back up. :ref:`ex-mcmv-simulation` shows the regime where
-# the effect is dramatic, with the correlation dialled directly.
+# recovered amplitudes back up. :ref:`ex-recipsiicos-simulation` dials the
+# correlation directly and shows this method holding the amplitude LCMV loses.
 #
 # The honest summary is that this dataset demonstrates that ReciPSIICOS *runs
 # correctly end to end on real, mixed-sensor MEG* -- the rank curve, the
@@ -231,3 +233,5 @@ for ax, idx, hemi in zip(axes, peaks, ("Left", "Right"), strict=True):
     )
     ax.legend(loc="upper right")
 axes[-1].set_xlabel("time (ms)")
+
+# sphinx_gallery_thumbnail_number = 1

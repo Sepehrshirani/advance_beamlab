@@ -308,3 +308,5 @@ ax.set(
     title=f"Recovery of the true source (peak 1.0) at $\\rho = {rho_demo}$",
 )
 ax.legend(loc="upper right")
+
+# sphinx_gallery_thumbnail_number = 1
