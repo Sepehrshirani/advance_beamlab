@@ -88,6 +88,7 @@ from mne.utils import _check_option, _validate_type, logger, verbose
 # channel space and whiten identically to MNE's make_lcmv.
 from ._mcmv import (
     _align_channels,
+    _check_eeg_reference,
     _check_noise_cov_required,
     _intersect_noise_cov,
     _make_whitener,
@@ -566,6 +567,7 @@ def _recipsiicos_working(
     # noise covariance exactly as make_lcmv does.
     common_ch, cov = _intersect_noise_cov(common_ch, cov, noise_cov)
     _check_noise_cov_required(info, common_ch, noise_cov)
+    _check_eeg_reference(info, common_ch)
     b_op, q, r = _reduction_operator(
         info,
         forward,
@@ -1146,6 +1148,7 @@ def recipsiicos_rank_curve(
     n_ch = len(common_ch)
     common_ch, _ = _intersect_noise_cov(common_ch, np.empty((n_ch, n_ch)), noise_cov)
     _check_noise_cov_required(info, common_ch, noise_cov)
+    _check_eeg_reference(info, common_ch)
 
     b_op, _, _ = _reduction_operator(
         info,

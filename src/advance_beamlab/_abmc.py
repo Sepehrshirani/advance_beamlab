@@ -90,6 +90,7 @@ from scipy.linalg import cho_factor, cho_solve
 # ``info['bads']``, which ``mne.compute_covariance`` has already dropped.
 from ._mcmv import (
     _align_channels,
+    _check_eeg_reference,
     _check_noise_cov_required,
     _cov_as_matrix,
     _intersect_noise_cov,
@@ -279,6 +280,8 @@ def sbl_covariance(
     leadfield, cov, ch_names = _aligned_leadfield_and_cov(
         info, forward, data_cov, noise_cov
     )
+    _check_noise_cov_required(info, ch_names, noise_cov)
+    _check_eeg_reference(info, ch_names)
     if not np.all(np.isfinite(cov)):
         raise ValueError("data_cov contains non-finite values.")
 
@@ -651,6 +654,7 @@ def make_abmc(
     leadfield, x, ch_names, cov_mat = _restrict_to_cov(cov, leadfield, x, ch_names)
     n_channels, n_columns = leadfield.shape
     _check_noise_cov_required(info, ch_names, noise_cov)
+    _check_eeg_reference(info, ch_names)
 
     # Stage 2 runs in the noise-scaled space, for the same reason Stage 1 does.
     # In recorded units a magnetometer/gradiometer/EEG covariance spans ~16

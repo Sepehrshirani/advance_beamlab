@@ -19,6 +19,16 @@ from advance_beamlab import (
 
 mne.set_log_level("ERROR")
 
+
+def _avg_ref(info):
+    """Add the average EEG reference projector MNE requires for inverse modelling."""
+    return (
+        mne.io.RawArray(np.zeros((len(info["ch_names"]), 2)), info, verbose=False)
+        .set_eeg_reference("average", projection=True, verbose=False)
+        .info
+    )
+
+
 # A realistic scalp-EEG amplitude (volts). The SI scale is the whole point of
 # several tests below: the leadfield of a sphere model is O(100) V/(A m) while
 # the data covariance is O(1e-10) V^2, and a hyperparameter initialisation that
@@ -42,7 +52,7 @@ def sphere_fwd():
     """A fixed-orientation EEG sphere forward + Info (scalar leadfield, Eqs 1-13)."""
     montage = mne.channels.make_standard_montage("standard_1020")
     ch = list(dict.fromkeys(montage.ch_names))
-    info = mne.create_info(ch, 250.0, "eeg")
+    info = _avg_ref(mne.create_info(ch, 250.0, "eeg"))
     info.set_montage(montage)
     sphere = mne.make_sphere_model("auto", "auto", info)
     src = mne.setup_volume_source_space(sphere=sphere, pos=20.0)
@@ -529,7 +539,7 @@ def test_abmc_free_orientation():
     """make_abmc handles a free-orientation forward and recovers the orientation."""
     montage = mne.channels.make_standard_montage("standard_1020")
     ch = list(dict.fromkeys(montage.ch_names))
-    info = mne.create_info(ch, 250.0, "eeg")
+    info = _avg_ref(mne.create_info(ch, 250.0, "eeg"))
     info.set_montage(montage)
     sphere = mne.make_sphere_model("auto", "auto", info)
     src = mne.setup_volume_source_space(sphere=sphere, pos=20.0)

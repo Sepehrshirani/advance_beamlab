@@ -34,6 +34,15 @@ from advance_beamlab._recipsiicos import (
 mne.set_log_level("ERROR")
 
 
+def _avg_ref(info):
+    """Add the average EEG reference projector MNE requires for inverse modelling."""
+    return (
+        mne.io.RawArray(np.zeros((len(info["ch_names"]), 2)), info, verbose=False)
+        .set_eeg_reference("average", projection=True, verbose=False)
+        .info
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Fixtures.
 # --------------------------------------------------------------------------- #
@@ -41,7 +50,7 @@ mne.set_log_level("ERROR")
 def fwd_info():
     """A small free-orientation EEG sphere forward and its Info (M = 8)."""
     montage = mne.channels.make_standard_montage("standard_1020")
-    info = mne.create_info(montage.ch_names[:8], 200.0, "eeg")
+    info = _avg_ref(mne.create_info(montage.ch_names[:8], 200.0, "eeg"))
     info.set_montage("standard_1020")
     sphere = mne.make_sphere_model("auto", "auto", info)
     src = mne.setup_volume_source_space(sphere=sphere, pos=35.0)
@@ -67,7 +76,7 @@ def fwd_rich():
     crossing to be meaningful.
     """
     montage = mne.channels.make_standard_montage("standard_1020")
-    info = mne.create_info(montage.ch_names[:32], 200.0, "eeg")
+    info = _avg_ref(mne.create_info(montage.ch_names[:32], 200.0, "eeg"))
     info.set_montage("standard_1020")
     sphere = mne.make_sphere_model("auto", "auto", info)
     src = mne.setup_volume_source_space(sphere=sphere, pos=20.0)
@@ -82,13 +91,21 @@ def _cov_from_sources(forward, idx, rho, noise=0.01):
     c_ss = np.array([[1.0, rho], [rho, 1.0]])
     r = g @ c_ss @ g.T + noise * np.eye(gain.shape[0])
     ch = forward["sol"]["row_names"]
-    return mne.Covariance(r, ch, [], [], nfree=1)
+    # Carry the average-reference projector, as mne.compute_covariance does: a
+    # beamformer records the projectors it was built under and checks that the
+    # data it is applied to carries the same ones.
+    return mne.Covariance(r, ch, [], _eeg_projs(ch), nfree=1)
+
+
+def _eeg_projs(ch_names):
+    """The average-reference projector for ``ch_names``, as MNE would attach it."""
+    return list(_avg_ref(mne.create_info(list(ch_names), 200.0, "eeg"))["projs"])
 
 
 def _ident_noise_cov(forward, scale=1.0):
     """An identity noise covariance over the forward's channels."""
     ch = forward["sol"]["row_names"]
-    return mne.Covariance(scale * np.eye(len(ch)), ch, [], [], nfree=1)
+    return mne.Covariance(scale * np.eye(len(ch)), ch, [], _eeg_projs(ch), nfree=1)
 
 
 def _orthogonal_topographies(n_channels, n_loc, seed=0):
@@ -252,7 +269,7 @@ def test_reduction_operator_shapes_and_variance(fwd_info):
         fwd,
         ch,
         noise_cov=None,
-        whitener_rank="full",
+        whitener_rank=None,
         pct_var=1.0,
         n_virtual=None,
     )
@@ -264,7 +281,7 @@ def test_reduction_operator_shapes_and_variance(fwd_info):
         fwd,
         ch,
         noise_cov=None,
-        whitener_rank="full",
+        whitener_rank=None,
         pct_var=0.90,
         n_virtual=None,
     )
@@ -275,7 +292,7 @@ def test_reduction_operator_shapes_and_variance(fwd_info):
         fwd,
         ch,
         noise_cov=None,
-        whitener_rank="full",
+        whitener_rank=None,
         pct_var=1.0,
         n_virtual=3,
     )
@@ -292,7 +309,7 @@ def test_reduction_whitens_noise_to_identity(fwd_info):
         fwd,
         ch,
         noise_cov=noise,
-        whitener_rank="full",
+        whitener_rank=None,
         pct_var=1.0,
         n_virtual=None,
     )
@@ -306,7 +323,7 @@ def test_reduction_whitens_noise_to_identity(fwd_info):
 def test_make_recipsiicos_cov_is_valid_covariance(fwd_fixed):
     """The modified covariance is a symmetric PSD mne.Covariance over the channels."""
     data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.9)
-    info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
+    info = _avg_ref(mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg"))
     info.set_montage("standard_1020")
     cov = make_recipsiicos_cov(
         data_cov,
@@ -331,7 +348,7 @@ def test_make_recipsiicos_cov_whitened_runs(fwd_fixed):
     expected here and filtered.
     """
     data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.9)
-    info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
+    info = _avg_ref(mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg"))
     info.set_montage("standard_1020")
     cov = make_recipsiicos_cov(
         data_cov,
@@ -351,7 +368,7 @@ def test_make_recipsiicos_cov_whitened_runs(fwd_fixed):
 def test_make_recipsiicos_lcmv_returns_usable_beamformer(fwd_fixed):
     """The returned filters are a Beamformer usable by MNE's apply functions."""
     data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.9)
-    info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
+    info = _avg_ref(mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg"))
     info.set_montage("standard_1020")
     n_src = fwd_fixed["nsource"]
     filters = make_recipsiicos_lcmv(
@@ -375,7 +392,7 @@ def test_make_recipsiicos_lcmv_returns_usable_beamformer(fwd_fixed):
 def test_beamformer_whitener_folding_matches_manual(fwd_fixed):
     """apply_lcmv_cov applies B then the working weights, as folded in."""
     data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.9)
-    info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
+    info = _avg_ref(mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg"))
     info.set_montage("standard_1020")
     filters = make_recipsiicos_lcmv(
         info,
@@ -417,7 +434,7 @@ def test_free_orientation_beamformer_and_pick_ori(fwd_info):
 # --------------------------------------------------------------------------- #
 def test_rank_curve_shapes_and_bounds(fwd_fixed):
     """The rank curve spans 1..q^2 with fractions in [0, 1] and reaches 1."""
-    info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
+    info = _avg_ref(mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg"))
     info.set_montage("standard_1020")
     ranks, p_pwr, p_cor = recipsiicos_rank_curve(
         fwd_fixed,
@@ -436,7 +453,7 @@ def test_rank_curve_shapes_and_bounds(fwd_fixed):
 
 def test_rank_curve_returns_optimal(fwd_fixed):
     """With return_optimal the curve also yields a valid rank K*."""
-    info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
+    info = _avg_ref(mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg"))
     info.set_montage("standard_1020")
     ranks, p_pwr, p_cor, kstar = recipsiicos_rank_curve(
         fwd_fixed,
@@ -459,7 +476,7 @@ def test_rank_curve_matches_bruteforce(fwd_fixed):
         _whitened_projector,
     )
 
-    info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
+    info = _avg_ref(mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg"))
     info.set_montage("standard_1020")
     ch = fwd_fixed["sol"]["row_names"]
     b_op, _, _ = _reduction_operator(
@@ -467,7 +484,7 @@ def test_rank_curve_matches_bruteforce(fwd_fixed):
         fwd_fixed,
         ch,
         noise_cov=None,
-        whitener_rank="full",
+        whitener_rank=None,
         pct_var=1.0,
         n_virtual=None,
     )
@@ -543,7 +560,7 @@ def test_optimal_rank_direction_aware(fwd_rich):
 def test_invalid_method_raises(fwd_fixed):
     """An unknown method name is rejected."""
     data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.5)
-    info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
+    info = _avg_ref(mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg"))
     info.set_montage("standard_1020")
     with pytest.raises(ValueError, match="method"):
         make_recipsiicos_cov(data_cov, fwd_fixed, info, rank=5, method="nope")
@@ -552,7 +569,7 @@ def test_invalid_method_raises(fwd_fixed):
 def test_rank_too_small_raises(fwd_fixed):
     """A non-positive projection rank is rejected."""
     data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.5)
-    info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
+    info = _avg_ref(mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg"))
     info.set_montage("standard_1020")
     with pytest.raises(ValueError, match="positive"):
         make_recipsiicos_cov(data_cov, fwd_fixed, info, rank=0, pct_var=1.0)
@@ -561,7 +578,7 @@ def test_rank_too_small_raises(fwd_fixed):
 def test_rank_too_large_raises(fwd_fixed):
     """A projection rank above q^2 is rejected."""
     data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.5)
-    info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
+    info = _avg_ref(mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg"))
     info.set_montage("standard_1020")
     # pct_var=1.0 -> q = 8 -> q^2 = 64.
     with pytest.raises(ValueError, match="exceeds"):
@@ -570,7 +587,7 @@ def test_rank_too_large_raises(fwd_fixed):
 
 def test_non_covariance_input_raises(fwd_fixed):
     """A plain array in place of a Covariance is rejected."""
-    info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
+    info = _avg_ref(mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg"))
     info.set_montage("standard_1020")
     with pytest.raises(TypeError):
         make_recipsiicos_cov(np.eye(8), fwd_fixed, info, rank=5)
@@ -579,7 +596,7 @@ def test_non_covariance_input_raises(fwd_fixed):
 def test_pick_ori_requires_free_orientation(fwd_fixed):
     """pick_ori is rejected for a fixed-orientation forward, in MNE's words."""
     data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.5)
-    info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
+    info = _avg_ref(mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg"))
     info.set_montage("standard_1020")
     with pytest.raises(ValueError, match="forward operator with free orientation"):
         make_recipsiicos_lcmv(
@@ -692,7 +709,7 @@ def test_no_common_channels_raises(fwd_fixed):
         [],
         nfree=1,
     )
-    info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
+    info = _avg_ref(mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg"))
     info.set_montage("standard_1020")
     with pytest.raises(ValueError, match="common"):
         make_recipsiicos_cov(bad, fwd_fixed, info, rank=5)
@@ -713,7 +730,7 @@ def test_noise_cov_may_cover_a_channel_subset(fwd_fixed):
     subset = all_ch[:6]
     data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.9)
     noise = mne.Covariance(np.eye(len(subset)), subset, [], [], nfree=1)
-    info = mne.create_info(all_ch, 200.0, "eeg")
+    info = _avg_ref(mne.create_info(all_ch, 200.0, "eeg"))
     info.set_montage("standard_1020")
 
     cov = make_recipsiicos_cov(
@@ -740,7 +757,7 @@ def test_noise_cov_sharing_no_channels_raises(fwd_fixed):
     all_ch = list(fwd_fixed["sol"]["row_names"])
     data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.5)
     noise = mne.Covariance(np.eye(2), ["Z1", "Z2"], [], [], nfree=1)
-    info = mne.create_info(all_ch, 200.0, "eeg")
+    info = _avg_ref(mne.create_info(all_ch, 200.0, "eeg"))
     info.set_montage("standard_1020")
     with pytest.raises(ValueError, match="shares no channels"):
         make_recipsiicos_cov(
@@ -791,7 +808,7 @@ def test_whitened_rank_annihilating_covariance_warns(fwd_fixed):
     guard.
     """
     data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.9)
-    info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
+    info = _avg_ref(mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg"))
     info.set_montage("standard_1020")
     q = len(fwd_fixed["sol"]["row_names"])  # pct_var=1.0 keeps every direction
     n_sym = q * (q + 1) // 2
@@ -946,7 +963,7 @@ def test_beamformer_records_projectors(fwd_fixed):
     from mne.beamformer._compute_beamformer import _proj_whiten_data
 
     data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.9)
-    info = mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg")
+    info = _avg_ref(mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg"))
     info.set_montage("standard_1020")
     info = (
         mne.io.RawArray(np.zeros((len(info["ch_names"]), 2)), info, verbose=False)
