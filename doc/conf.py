@@ -109,11 +109,21 @@ else:
     pyvista.BUILDING_GALLERY = True
 
     import mne
+    import mne.viz._brain
 
     mne.viz.set_3d_backend("pyvistaqt")
     # Antialiasing is unreliable on software renderers and does not change the
     # captured images in any way that matters.
     mne.viz.set_3d_options(antialias=False, depth_peeling=False)
+    # Two scrapers, because there are two kinds of 3-D figure here and the
+    # generic one does not handle both. ``mne.viz.Brain`` (what
+    # ``stc.plot()`` returns) needs MNE's own scraper -- this is what
+    # MNE-Python's documentation build uses, and with only the PyVista scraper
+    # every ``stc.plot()`` was written out as a blank 300x300 placeholder rather
+    # than failing, so the gallery looked complete while showing nothing. The
+    # PyVista scraper is still needed for the plain ``pyvista.Plotter`` the
+    # finite-element example builds directly.
+    image_scrapers.append(mne.viz._brain._BrainScraper())
     image_scrapers.append("pyvista")
 
 
@@ -180,6 +190,7 @@ class _PedagogicalOrder:
         "plot_recipsiicos_auditory.py",
         "plot_apw_mcmv_connectivity.py",
         "plot_abmc_localization.py",
+        "plot_fem_head_model.py",
     ]
 
     def __init__(self, src_dir):

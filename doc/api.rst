@@ -62,6 +62,23 @@ ABMC (adaptive Bayesian beamformer with multiple constraints)
    abmc_stability_curve
    ABMCResult
 
+Head modelling (finite element, EEG)
+------------------------------------
+
+MNE-Python computes forward solutions with the boundary element method. These
+functions supply a *finite element* alternative for EEG by wrapping the
+precomputed New York Head lead field as an ordinary :class:`mne.Forward`, which
+every beamformer here and in :mod:`mne.beamformer` accepts unchanged. The model
+is downloaded on demand and is not redistributed with this package.
+
+.. autosummary::
+   :toctree: generated/
+
+   fetch_ny_head
+   read_ny_head_forward
+   ny_head_montage
+   make_ny_head_info
+
 References
 ----------
 

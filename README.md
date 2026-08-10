@@ -39,6 +39,15 @@ understand and tune each method without reading the papers.
   correlated-source structure with a template-constrained beamformer
   that locks the output onto the known spike morphology. After Shirani et al.
   (2024).
+- **A finite-element head model for EEG** — MNE-Python computes forward
+  solutions with the boundary element method only, which cannot represent the
+  cerebrospinal fluid, the layered skull, or the openings at the orbits and the
+  auditory meatus; for EEG those omissions bias the forward field.
+  `read_ny_head_forward` wraps the precomputed six-tissue FEM lead field of the
+  New York Head (Huang, Parra & Haufe, 2016) as an ordinary `mne.Forward`, so
+  `mne.beamformer.make_lcmv` and every method above run on a FEM forward
+  unchanged. EEG only — see the caveat below. The model is downloaded on demand
+  and is **not** redistributed with this package (its licence is GPL v3).
 
 ## Installation
 
@@ -48,7 +57,30 @@ pip install -e ".[dev]"     # from a clone, for development (tests + docs + lint
 pip install -e .
 ```
 
-Requires Python ≥ 3.10 and MNE-Python ≥ 1.10.
+Requires Python ≥ 3.10 and MNE-Python ≥ 1.10. The FEM head model additionally
+needs `h5py` (`pip install -e ".[fem]"`), because the model ships as a MATLAB
+v7.3/HDF5 file; everything else works without it.
+
+### The FEM head model
+
+```python
+from advance_beamlab import read_ny_head_forward, make_ny_head_info
+
+fwd = read_ny_head_forward(resolution="10K")   # fetches 678 MB on first use
+info = make_ny_head_info(sfreq=250.0)          # 231 electrodes, average reference
+```
+
+`fwd` is an ordinary `mne.Forward`: pass it to `make_lcmv`, `make_mcmv`,
+`make_recipsiicos_lcmv` or `make_abmc` exactly as you would a BEM forward. Two
+things are worth knowing. The lead field is supplied in **common average
+reference**, so it is rank deficient by exactly one (230 of 231) and the data
+must carry an average-reference projector — `make_ny_head_info` builds an info
+that does. And the approach is **EEG-only**, not by omission: EEG electrodes
+follow a standardised layout, so a template head can be solved once and reused,
+whereas MEG sensor positions relative to the brain differ every session
+(`info['dev_head_t']`), so no template MEG array exists to solve for. This costs
+little, because the tissues a BEM misrepresents are the ones MEG is least
+sensitive to — BEM is a reasonable model for MEG, and the weak link for EEG.
 
 ## Quick start
 

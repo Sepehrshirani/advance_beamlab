@@ -43,7 +43,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8.0", "pytest-cov"]
+# The New York Head finite element model is a MATLAB v7.3 (HDF5) file, which
+# scipy.io.loadmat cannot read, and it is fetched on demand rather than shipped
+# (its licence forbids redistribution). Both dependencies are therefore optional
+# and imported lazily: everything except ``read_ny_head_forward`` works without
+# them. ``pooch`` already comes with MNE, so in practice only h5py is extra.
+fem = ["h5py>=3.0", "pooch>=1.5"]
+test = ["pytest>=8.0", "pytest-cov", "advance_beamlab[fem]"]
 doc = [
     "sphinx",
     "sphinx-gallery",

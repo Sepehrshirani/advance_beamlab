@@ -78,15 +78,29 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[test]"
-      - name: Cache the MNE sample dataset
+      - name: Cache the head models and datasets
         uses: actions/cache@v4
         with:
-          path: ~/mne_data
-          key: mne-sample-${{ runner.os }}-v1
-      - name: Fetch the sample dataset
-        run: python -c "import mne; mne.datasets.sample.data_path()"
+          # The MNE sample dataset, fsaverage, and the 678 MB New York Head FEM
+          # model. All three live under the MNE data roots and are fetched once;
+          # without this the gallery would re-download about 1.5 GB per build.
+          path: |
+            ~/mne_data
+            ~/freesurfer/subjects
+          key: mne-data-${{ runner.os }}-v2
+      - name: Fetch the datasets and head models
+        run: |
+          python -c "import mne; mne.datasets.sample.data_path()"
+          python -c "import mne; mne.datasets.fetch_fsaverage()"
+          python -c "from advance_beamlab import fetch_ny_head; fetch_ny_head()"
       - name: Run the integration tests
-        run: pytest -q src/advance_beamlab/tests/test_integration_sample.py
+        # Both suites skip themselves when their data is absent, which on a bare
+        # runner means neither runs at all; this is the job that has the data, so
+        # it is the only place they are genuinely exercised.
+        run: |
+          pytest -q \
+            src/advance_beamlab/tests/test_integration_sample.py \
+            src/advance_beamlab/tests/test_fem.py
 
   doc:
     # Fast pass: no gallery execution, so this fails quickly on a broken
@@ -140,32 +154,32 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[doc]"
-      - name: Cache the MNE sample dataset
+      - name: Cache the head models and datasets
         uses: actions/cache@v4
         with:
-          path: ~/mne_data
-          key: mne-sample-${{ runner.os }}-v1
-      - name: Fetch the sample dataset
-        run: python -c "import mne; mne.datasets.sample.data_path()"
+          # The MNE sample dataset, fsaverage, and the 678 MB New York Head FEM
+          # model. All three live under the MNE data roots and are fetched once;
+          # without this the gallery would re-download about 1.5 GB per build.
+          path: |
+            ~/mne_data
+            ~/freesurfer/subjects
+          key: mne-data-${{ runner.os }}-v2
+      - name: Fetch the datasets and head models
+        run: |
+          python -c "import mne; mne.datasets.sample.data_path()"
+          python -c "import mne; mne.datasets.fetch_fsaverage()"
+          python -c "from advance_beamlab import fetch_ny_head; fetch_ny_head()"
       - name: Build the documentation with the gallery
         env:
           MNE_3D_OPTION_ANTIALIAS: "false"
         run: |
           python -m sphinx -b html doc doc/_build/html --keep-going
-      - name: Require the cortical-surface figures
-        run: |
-          python - <<'PY'
-          import sys
-          from pathlib import Path
-          imgs = sorted(Path("doc/_build/html/_images").glob("sphx_glr_*.png"))
-          big = [p for p in imgs if p.stat().st_size > 90_000]
-          print(f"gallery images: {len(imgs)}; cortical-surface renders: {len(big)}")
-          if not big:
-              sys.exit(
-                  "no cortical-surface figures were captured -- the 3-D backend "
-                  "did not render. Check the headless display setup."
-              )
-          PY
+      - name: Require the cortical-surface figures to have rendered
+        # Not a size check: a detailed matplotlib figure is bigger than a brain
+        # screenshot, so "there are large images" proves nothing. This fails if
+        # any figure is a blank canvas, which is how a misconfigured 3-D backend
+        # actually manifests -- it does not raise, it publishes an empty PNG.
+        run: python tools/check_gallery_images.py doc/_build/html
       - name: Upload the built documentation
         uses: actions/upload-artifact@v4
         with:

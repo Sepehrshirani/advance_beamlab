@@ -19,6 +19,10 @@ Currently implemented:
   low-power spike-like transients such as epileptic IEDs and delayed responses
   (:func:`~advance_beamlab.make_abmc`, with the sparse Bayesian learning
   covariance :func:`~advance_beamlab.sbl_covariance`), after Shirani et al. (2024).
+- A finite-element head model for EEG (:func:`~advance_beamlab.read_ny_head_forward`),
+  wrapping the precomputed New York Head lead field of Huang et al. (2016) as an
+  :class:`mne.Forward` so that any beamformer here or in :mod:`mne.beamformer` can
+  be run on a FEM forward, which MNE-Python cannot otherwise compute.
 """
 
 # Authors: Sepehr Shirani <sepehrshirani@gmail.com>, <s.shirani@ucl.ac.uk>
@@ -37,6 +41,12 @@ from ._connectivity import (
     augmented_pairwise_mcmv_connectivity,
     pairwise_mcmv_connectivity,
     reconstruct_pairwise_mcmv,
+)
+from ._fem import (
+    fetch_ny_head,
+    make_ny_head_info,
+    ny_head_montage,
+    read_ny_head_forward,
 )
 from ._localizers import (
     MCMVScanResult,
@@ -77,6 +87,10 @@ __all__ = [
     "make_abmc_dictionary",
     "abmc_stability_curve",
     "ABMCResult",
+    "fetch_ny_head",
+    "read_ny_head_forward",
+    "ny_head_montage",
+    "make_ny_head_info",
 ]
 
 __version__ = "0.1.0.dev0"

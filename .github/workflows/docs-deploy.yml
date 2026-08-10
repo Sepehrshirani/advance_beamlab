@@ -41,14 +41,22 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[doc]"
 
-      - name: Cache the MNE sample dataset
+      - name: Cache the head models and datasets
         uses: actions/cache@v4
         with:
-          path: ~/mne_data
-          key: mne-sample-${{ runner.os }}-v1
+          # The MNE sample dataset, fsaverage, and the 678 MB New York Head FEM
+          # model. All three live under the MNE data roots and are fetched once;
+          # without this the gallery would re-download about 1.5 GB per build.
+          path: |
+            ~/mne_data
+            ~/freesurfer/subjects
+          key: mne-data-${{ runner.os }}-v2
 
-      - name: Fetch the sample dataset
-        run: python -c "import mne; mne.datasets.sample.data_path()"
+      - name: Fetch the datasets and head models
+        run: |
+          python -c "import mne; mne.datasets.sample.data_path()"
+          python -c "import mne; mne.datasets.fetch_fsaverage()"
+          python -c "from advance_beamlab import fetch_ny_head; fetch_ny_head()"
 
       - name: Build the documentation
         # BEAMLAB_REQUIRE_3D makes a missing or broken 3-D backend fail the build
@@ -59,22 +67,13 @@ jobs:
           python -m sphinx -b html doc doc/_build/html --keep-going
 
       - name: Report what the gallery captured
-        # The cortical-surface figures are the only images showing a source
-        # estimate on a brain. This job warns rather than fails: a publish that
-        # is merely missing them still beats a site that is weeks behind the
-        # code. The pull-request gallery job fails on the same condition, so a
-        # regression is caught before it reaches main.
+        # This job warns rather than fails: a publish that is merely missing a
+        # figure still beats a site that is weeks behind the code. The
+        # pull-request gallery job fails on the same condition, so a regression
+        # is caught before it reaches main.
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          imgs = sorted(Path("doc/_build/html/_images").glob("sphx_glr_*.png"))
-          big = [p for p in imgs if p.stat().st_size > 90_000]
-          print(f"gallery images captured: {len(imgs)}")
-          print(f"large (cortical-surface) images: {len(big)}")
-          if not big:
-              print("::warning::no cortical-surface figures were captured; "
-                    "the 3-D backend did not render on this runner")
-          PY
+          python tools/check_gallery_images.py doc/_build/html || \
+            echo "::warning::some gallery figures are blank or missing; the 3-D backend did not render on this runner"
 
       - name: Strip the Sphinx build cache
         # ``.doctrees`` is the incremental-build cache, not part of the site. It
