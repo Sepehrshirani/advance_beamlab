@@ -8,13 +8,13 @@ ReciPSIICOS beamforming of bilateral auditory responses
 Correlated bilateral sources are the classic failure mode of the LCMV
 beamformer: it minimises output power under a unit-gain constraint, so two
 synchronous sources let it place a null that cancels them. ReciPSIICOS repairs
-the *data covariance* -- projecting out the cross-product (coupling) subspace --
+the *data covariance* by projecting out the cross-product (coupling) subspace,
 so that an ordinary LCMV no longer cancels them.
 
-This example runs ReciPSIICOS end to end on real, mixed-sensor MEG -- the
-auditory response of the MNE sample dataset, whose left- and right-hemisphere
-sources are correlated across the N100 (r = +0.55) -- and contrasts it with a
-standard LCMV.
+This example runs ReciPSIICOS end to end on real, mixed-sensor MEG and contrasts
+it with a standard LCMV. The recording is the auditory response of the MNE sample
+dataset, whose left- and right-hemisphere sources are correlated across the N100
+(r = +0.55).
 
 A caveat stated up front, because the example reports it honestly below: on this
 recording a plain LCMV already recovers both hemispheres, so ReciPSIICOS does
@@ -23,13 +23,13 @@ high-correlation effect that regularisation suppresses. What this example does
 show is the whole real-data pipeline working: the rank curve and its 45-degree
 criterion, the projector, the noise whitening across magnetometers and
 gradiometers, and the virtual-sensor reduction. For the regime where the
-cancellation is dramatic -- and where this method demonstrably repairs it --
-see :ref:`ex-recipsiicos-simulation`, which runs the same comparison on
-simulated sources placed on this same realistic forward.
+cancellation is dramatic, and where this method demonstrably repairs it, see
+:ref:`ex-recipsiicos-simulation`, which runs the same comparison on simulated
+sources placed on this same realistic forward.
 
 Two practical points, both important on real data. The projector is built from
 the forward and must span where the data covariance's energy lives, so we use a
-*whole-brain* grid, not a region -- but the ``whitened`` correlation Gram is
+*whole-brain* grid, not a region. But the ``whitened`` correlation Gram is
 :math:`O(N^2)`, so we decimate that grid to keep it tractable. And the
 covariances are shrinkage-regularised, the correct estimator across the
 magnetometer/gradiometer unit scales.
@@ -78,9 +78,9 @@ data_cov = mne.compute_covariance(epochs, tmin=0.08, tmax=0.13, method="shrunk")
 noise_cov = mne.compute_covariance(epochs, tmin=None, tmax=0.0, method="shrunk")
 
 # %%
-# Load the real BEM forward and decimate it to a coarse whole-brain grid,
-# keeping both hemispheres so it still spans the head while the whitened Gram --
-# which is quadratic in the number of sources -- stays tractable.
+# Load the real BEM forward and decimate it to a coarse whole-brain grid, keeping
+# both hemispheres so it still spans the head while the whitened Gram stays
+# tractable. That Gram is quadratic in the number of sources.
 
 fwd = mne.read_forward_solution(meg / "sample_audvis-meg-eeg-oct-6-fwd.fif")
 fwd = mne.pick_types_forward(fwd, meg=True, eeg=False)
@@ -111,8 +111,8 @@ ax.set(
 ax.legend()
 
 # Both curves are flat at zero once the rank passes the power cliff, so zoom the
-# x-axis to the range where power and correlation actually change -- otherwise
-# the informative part is squeezed into a small fraction of a q^2-wide axis.
+# x-axis to the range where power and correlation actually change. Otherwise the
+# informative part is squeezed into a small fraction of a q^2-wide axis.
 informative = (p_pwr > 0.01).nonzero()[0]
 xmax = int(ranks[informative[-1]]) if informative.size else int(ranks[-1])
 ax.set_xlim(0, min(int(ranks[-1]), int(1.15 * xmax)))
@@ -148,14 +148,14 @@ stc_lcmv = apply_lcmv_cov(data_cov, lcmv)
 stc_recip = apply_lcmv_cov(data_cov, recip)
 
 # %%
-# Compare the hemispheric balance -- the ratio of the weaker to the stronger
+# Compare the hemispheric balance: the ratio of the weaker to the stronger
 # hemisphere peak. The textbook expectation is that a plain LCMV suppresses one
 # side of a correlated pair while ReciPSIICOS retains both.
 #
 # **That is not what happens on this recording, and it is worth being explicit
 # about it.** On the ``sample`` auditory data, at this SNR and with the usual
 # ``reg=0.05``, a plain LCMV already recovers both hemispheres almost equally, so
-# there is essentially no imbalance left for ReciPSIICOS to repair -- and the
+# there is essentially no imbalance left for ReciPSIICOS to repair. The
 # projection, which necessarily discards part of the covariance, comes at a small
 # cost on this particular metric. Signal cancellation is an idealised, high-SNR,
 # high-correlation effect: regularisation and sensor noise both push the
@@ -163,9 +163,9 @@ stc_recip = apply_lcmv_cov(data_cov, recip)
 # correlation directly and shows this method holding the amplitude LCMV loses.
 #
 # The honest summary is that this dataset demonstrates that ReciPSIICOS *runs
-# correctly end to end on real, mixed-sensor MEG* -- the rank curve, the
-# projector, the whitening and the virtual-sensor reduction -- rather than that
-# it beats LCMV here.
+# correctly end to end on real, mixed-sensor MEG* (the rank curve, the projector,
+# the whitening and the virtual-sensor reduction) rather than that it beats LCMV
+# here.
 
 
 def hemi_peaks(stc):
@@ -207,8 +207,8 @@ if brain is not None:
     ax.set_axis_off()
 
 # %%
-# Finally, the reconstructed time courses at the two hemispheric peaks -- the
-# same comparison as the power map, now as a waveform. The ratio in each panel
+# Finally, the reconstructed time courses at the two hemispheric peaks: the same
+# comparison as the power map, now as a waveform. The ratio in each panel
 # title is the ReciPSIICOS peak over the LCMV peak. Consistent with the balance
 # figures above, the two filters largely agree on this dataset; the point of the
 # panel is that the repaired covariance yields a sane, well-formed time course on

@@ -4,9 +4,9 @@ This module implements the multi-source MCMV spatial filter for MEG/EEG source
 reconstruction, exactly following the formulation derived by
 Moiseev et al. (2011) :footcite:`Moiseev2011`. The MCMV beamformer generalises
 the single-source Linearly Constrained Minimum Variance (LCMV) beamformer
-:footcite:`VanVeenEtAl1997` -- itself rooted in the linearly constrained
-adaptive array of Frost (1972) :footcite:`Frost1972` -- to ``n`` sources that
-are constrained *jointly*. By imposing unit gain on each source's own forward
+:footcite:`VanVeenEtAl1997` to ``n`` sources that are constrained *jointly*.
+LCMV is itself rooted in the linearly constrained adaptive array of Frost
+(1972) :footcite:`Frost1972`. By imposing unit gain on each source's own forward
 field and *zero* gain on every other constrained source's field, the MCMV
 filter is insensitive to correlations between the constrained sources and
 therefore suppresses the source leakage and signal cancellation that bias
@@ -37,13 +37,13 @@ from mne import Covariance
 # level and are reliably catchable by ``pytest.warns``. When upstreaming into
 # MNE-Python these can be swapped for ``mne.utils.warn``, whose test harness
 # handles the stack-rewriting behaviour.
-# MNE's regularised (pseudo-)inverse of a covariance matrix. Re-using it -- with
-# the ``reg`` rescaling applied in ``make_mcmv`` to compensate for our ``pca=True``
-# whitener -- means the data-covariance inversion, including the diagonal-loading
-# convention and rank handling, is numerically identical to that performed by
-# ``mne.beamformer.make_lcmv``, so the n == 1 MCMV filter reduces *exactly* to
-# the corresponding LCMV filter (including on rank-deficient data) and every
-# covariance estimator/shrinkage method available through
+# MNE's regularised (pseudo-)inverse of a covariance matrix. We re-use it, with the
+# ``reg`` rescaling applied in ``make_mcmv`` to compensate for our ``pca=True``
+# whitener. The data-covariance inversion, including the diagonal-loading
+# convention and rank handling, is therefore numerically identical to that
+# performed by ``mne.beamformer.make_lcmv``, so the n == 1 MCMV filter reduces
+# *exactly* to the corresponding LCMV filter (including on rank-deficient data)
+# and every covariance estimator/shrinkage method available through
 # ``mne.compute_covariance`` is inherited unchanged.
 from mne.beamformer._compute_beamformer import _reg_pinv
 from mne.forward import is_fixed_orient
@@ -56,7 +56,7 @@ def _cov_as_matrix(cov, ch_names):
     """Return the dense covariance over ``ch_names`` as a square ndarray.
 
     A :class:`mne.Covariance` may store a *diagonal* covariance as a 1-D array
-    (``cov['diag'] is True``) -- this is what :func:`mne.make_ad_hoc_cov` returns
+    (``cov['diag'] is True``). This is what :func:`mne.make_ad_hoc_cov` returns
     and what MNE writes for diagonal covariance files. ``Covariance._get_square``
     is the same accessor :func:`mne.beamformer.make_lcmv` uses, so diagonal and
     full covariances are handled identically here and in MNE.
@@ -94,16 +94,16 @@ class MCMVBeamformer(dict):
     :class:`mne.beamformer.Beamformer` so that, when the algorithm is upstreamed
     into MNE-Python, the native container can be substituted with no change to
     calling code. It stores, among other metadata, the spatial-filter weight
-    matrix under the key ``'weights'`` with shape ``(n_sources, n_channels)``
-    (one filter -- one row -- per constrained source).
+    matrix under the key ``'weights'`` with shape ``(n_sources, n_channels)``,
+    one row holding the filter for one constrained source.
     """
 
     def copy(self):
         """Return a deep copy of the beamformer.
 
         Overrides ``dict.copy`` (which is shallow) so that the semantics match
-        :meth:`mne.beamformer.Beamformer.copy`: mutating the copy's arrays -- e.g.
-        ``filters.copy()['weights'] *= 2`` -- must not corrupt the original.
+        :meth:`mne.beamformer.Beamformer.copy`: mutating the copy's arrays
+        (e.g. ``filters.copy()['weights'] *= 2``) must not corrupt the original.
 
         Returns
         -------
@@ -119,7 +119,7 @@ class MCMVBeamformer(dict):
 
 
 # --------------------------------------------------------------------------- #
-# Numerical core (pure NumPy, no MNE objects) -- unit-testable in isolation.
+# Numerical core (pure NumPy, no MNE objects). Unit-testable in isolation.
 # --------------------------------------------------------------------------- #
 def _compute_mcmv_weights(leadfield, cov_inv, *, cond_warn=1e8):
     r"""Compute the unit-gain MCMV weight matrix from the linear algebra inputs.
@@ -153,17 +153,17 @@ def _compute_mcmv_weights(leadfield, cov_inv, *, cond_warn=1e8):
     Raises
     ------
     RuntimeError
-        If :math:`\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\mathbf{H}` is singular,
-        which happens when the constrained sources are (numerically) collinear
-        -- e.g. coincident locations with identical orientation -- or when the
-        beamformer order exceeds the rank of the data.
+        If :math:`\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\mathbf{H}` is singular.
+        This happens when the constrained sources are (numerically) collinear,
+        for instance at coincident locations with identical orientation, or when
+        the beamformer order exceeds the rank of the data.
     """
     H = np.asarray(leadfield, dtype=np.float64)
     Rinv = np.asarray(cov_inv, dtype=np.float64)
 
     # A = R^-1 H  (n_channels x n_sources)
     A = Rinv @ H
-    # B = H^T R^-1 H  (n_sources x n_sources) -- the matrix that is inverted in
+    # B = H^T R^-1 H  (n_sources x n_sources), the matrix that is inverted in
     # Eq. (5); also equals S of Table 2 when R is the data covariance.
     B = H.T @ A
 
@@ -230,8 +230,8 @@ def _get_leadfield(forward, common_ch, sources, orientations):
     directions and the normal) rather than in head x/y/z, so the orientation is
     rotated into the local frame before it is applied. Without this the same
     ``orientations`` array would mean two different physical dipoles depending on
-    which representation of the same forward the caller happened to pass -- and
-    the most natural user action, taking the cortical normal from
+    which representation of the same forward the caller happened to pass. The
+    most natural user action, taking the cortical normal from
     ``forward['source_nn']`` (which is in head coordinates), would be the one
     that breaks.
     """
@@ -293,7 +293,7 @@ def _check_eeg_reference(info, common_ch):
     model is computed against an average reference, so a differently referenced
     recording is modelled with the wrong topographies.
     :func:`mne.beamformer.make_lcmv` raises for this (via ``_check_reference``),
-    and so do we -- the messages below are MNE's verbatim, so the contract is
+    and so do we: the messages below are MNE's verbatim, so the contract is
     identical.
     """
     from mne import pick_info
@@ -354,8 +354,8 @@ def _make_whitener(info, noise_cov, common_ch, rank):
     SSS/Maxwell filtering or ICA) and returns a possibly rectangular
     ``(n_white, n_channels)`` matrix. Crucially, the rank is resolved
     *per sensor type*: a single global eigenvalue threshold would discard the
-    smaller-unit sensor type as if it were null, so MNE's per-type handling is
-    required for genuinely mixed arrays -- not merely preferable.
+    smaller-unit sensor type as if it were null, so for genuinely mixed arrays
+    MNE's per-type handling is not merely preferable but required.
 
     Parameters
     ----------
@@ -463,8 +463,8 @@ def make_mcmv(
         Diagonal-loading regularisation of ``data_cov`` as a fraction of the
         mean eigenvalue, applied via the same :mod:`mne.beamformer` inversion
         machinery. ``reg=0`` uses the unregularised inverse of Eq. (5). This is
-        a deliberate, documented departure from the bare equation -- never a
-        silent fix -- and defaults to ``0.05`` to match ``make_lcmv``.
+        a deliberate, documented departure from the bare equation, never a
+        silent fix. It defaults to ``0.05`` to match ``make_lcmv``.
     orientations : ndarray, shape (n_sources, 3) | None
         Source orientation unit vectors **in head coordinates**, required when
         ``forward`` has free orientation and ignored (must be ``None``) when it is
@@ -493,7 +493,7 @@ def make_mcmv(
         Rank handling, applied to both the noise-covariance whitener
         (:func:`mne.cov.compute_whitener`) and the data-covariance inverse, using
         MNE's own convention. The default ``None`` auto-detects the rank per
-        sensor type and drops the null space -- the correct choice for
+        sensor type and drops the null space. That is the correct choice for
         rank-deficient data (e.g. after SSP/ICA), where ``'full'`` would instead
         invert the near-null directions and give an unstable whitener. Use a dict
         such as ``{'meg': 60}`` to set the rank of a sensor type explicitly; a
@@ -636,7 +636,7 @@ def make_mcmv(
     # ``_reg_pinv`` loads by ``reg * mean(singular values of the matrix it is
     # given``. ``make_lcmv`` whitens with ``pca=False``, so its whitened
     # covariance is ``n_channels x n_channels`` of rank ``n_white`` and the mean
-    # is taken over ``n_channels`` values -- including the ``n_channels -
+    # is taken over ``n_channels`` values, including the ``n_channels -
     # n_white`` structural zeros. We whiten with ``pca=True`` (which is what lets
     # a rank-deficient noise covariance be handled per sensor type), so our
     # matrix is ``n_white x n_white`` and the mean is over ``n_white`` values.
@@ -667,7 +667,7 @@ def make_mcmv(
     # -- weight normalisation ----------------------------------------------- #
     # In whitened space the noise covariance is the identity, so unit-noise-gain
     # is exactly unit Euclidean norm of each whitened filter
-    # :footcite:`SekiharaNagarajan2008` -- this matches MNE's definition.
+    # :footcite:`SekiharaNagarajan2008`. This matches MNE's definition.
     if weight_norm == "unit-noise-gain":
         if adhoc_noise:
             warnings.warn(

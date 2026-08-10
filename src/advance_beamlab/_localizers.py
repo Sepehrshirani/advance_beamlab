@@ -1,11 +1,11 @@
 r"""MCMV source localizers and data-driven orientation.
 
 This module implements the four MCMV-based scanning localizers of Moiseev et
-al. (2011) -- multi-source activity index (MAI), multi-source pseudo-Z (MPZ),
-multi-source event-related (MER) and its reduced form (rMER) -- together with
-the closed-form optimal source orientation derived in the same paper. These are
-the ingredients of the iterative source-search that turns MCMV from a filter
-for *known* sources into a tool that *discovers* correlated sources.
+al. (2011), together with the closed-form optimal source orientation derived in
+the same paper. The four are multi-source activity index (MAI), multi-source
+pseudo-Z (MPZ), multi-source event-related (MER) and its reduced form (rMER).
+These are the ingredients of the iterative source-search that turns MCMV from a
+filter for *known* sources into a tool that *discovers* correlated sources.
 
 The localizers are given by Table 1 and the matrix definitions by Table 2 of
 :footcite:`Moiseev2011`; the orientation solution is Eqs. (13)-(14)
@@ -95,8 +95,8 @@ def _metric_matrices(R, N, evoked_cov=None, *, metrics=None):
     The matrices depend only on the covariances, never on the leadfields, so a
     scan over a source grid computes them once and passes them back in through
     ``metrics``, which is then returned unchanged. That turns the two dense
-    inversions below -- otherwise repeated at every grid point of every
-    iteration -- into a single one per scan.
+    inversions below into a single one per scan. Otherwise they would be
+    repeated at every grid point of every iteration.
     """
     if metrics is not None:
         return metrics
@@ -256,8 +256,8 @@ def optimal_orientation(name, H_ref, H_loc, R, N, *, evoked_cov=None, metrics=No
     u = u / np.linalg.norm(u)
     # An eigenvector is defined only up to sign, and every localizer is even in
     # ``u``, so fix a deterministic convention: the largest-magnitude component
-    # is positive. Without it the returned orientation -- and hence the sign of
-    # the reconstructed time course -- flips arbitrarily between LAPACK builds.
+    # is positive. Without it the returned orientation (and hence the sign of
+    # the reconstructed time course) flips arbitrarily between LAPACK builds.
     return u if u[np.argmax(np.abs(u))] >= 0 else -u
 
 
@@ -280,7 +280,7 @@ class MCMVScanResult(dict):
         Pseudo-Z :math:`\bar z_k = (\mathbf{w}_k^{\mathsf T}\mathbf{R}
         \mathbf{w}_k)/(\mathbf{w}_k^{\mathsf T}\mathbf{N}\mathbf{w}_k)` of the
         source added at iteration ``k``, evaluated on **that source's row of the
-        joint ``k``-source MCMV filter** -- not on a single-source (LCMV) filter
+        joint ``k``-source MCMV filter**, not on a single-source (LCMV) filter
         at the same location. It is computed in the whitened space the scan works
         in, where :math:`\mathbf{N}=\mathbf{I}`, so the denominator is the squared
         Euclidean norm of the whitened filter; for a single sensor type that
@@ -386,10 +386,11 @@ def scan_mcmv(
 
     Notes
     -----
-    Already-found grid locations are excluded from subsequent scans, and
-    locations that cannot be evaluated -- a (numerically) collinear constraint
-    making the localizer singular, or a non-finite leadfield -- are skipped
-    rather than raising; they appear as NaN in ``maps``.
+    Already-found grid locations are excluded from subsequent scans. Locations
+    that cannot be evaluated are skipped rather than raising; they appear as NaN
+    in ``maps``. Such a location is one where a (numerically) collinear
+    constraint makes the localizer singular, or where the leadfield is
+    non-finite.
 
     The sources are returned in the order the greedy search found them, which is
     not necessarily the order of decreasing strength (see
@@ -406,7 +407,7 @@ def scan_mcmv(
     if n_sources < 1:
         raise ValueError(f"n_sources must be >= 1, got {n_sources}.")
     # Validate ``reg`` here rather than letting make_mcmv reject it at the very
-    # end -- by then the whole grid scan has already been paid for.
+    # end: by then the whole grid scan has already been paid for.
     if not (0.0 <= float(reg) <= 1.0):
         raise ValueError(f"reg must be in [0, 1], got {reg}.")
     fixed = is_fixed_orient(forward)
@@ -552,10 +553,11 @@ def scan_mcmv(
         ori_out = np.array(orientations)
         # The orientations were estimated against the forward's gain columns,
         # which for a ``surf_ori=True`` forward are expressed in each source's
-        # local surface frame. Rotate them back into head coordinates -- the
-        # frame ``forward['source_nn']`` uses and the one make_mcmv documents for
-        # its ``orientations`` argument -- so that the returned array means the
-        # same physical dipole whichever representation of a forward was scanned.
+        # local surface frame. Rotate them back into head coordinates so that
+        # the returned array means the same physical dipole whichever
+        # representation of a forward was scanned. Head coordinates are the
+        # frame ``forward['source_nn']`` uses and the one make_mcmv documents
+        # for its ``orientations`` argument.
         if forward.get("surf_ori", False):
             nn = np.asarray(forward["source_nn"], dtype=np.float64)
             ori_out = np.array(

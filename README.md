@@ -14,39 +14,40 @@ understand and tune each method without reading the papers.
 
 ## Implemented algorithms
 
-- **Multiple Constrained Minimum Variance (MCMV)** — a multi-source beamformer
+- **Multiple Constrained Minimum Variance (MCMV)** is a multi-source beamformer
   that constrains several sources *jointly*, which removes the signal
   cancellation that biases single-source LCMV when sources are correlated. It
   comes with the four **scanning localizers** (MAI, MPZ, MER, rMER) and the
   **sequential source search** that turn it into a discovery tool. After
   Moiseev et al. (2011).
-- **ReciPSIICOS** — makes an *ordinary* LCMV beamformer robust to correlated
+- **ReciPSIICOS** makes an *ordinary* LCMV beamformer robust to correlated
   sources by cleaning the data covariance before the beamformer is built, with
   noise-whitening and virtual-sensor reduction so it applies to real,
   mixed-sensor MEG arrays. After Kuznetsova, Nurislamova & Ossadtchi (2021).
-- **Pairwise & Augmented Pairwise MCMV (PW-/APW-MCMV) connectivity** — leakage-
-  free functional connectivity built on MCMV: each region pair is reconstructed
-  with a 2-source MCMV (removing *direct* leakage between them), and every
-  statistically significant pair is re-estimated with neighbouring regions added
-  to the beamformer (suppressing *indirect* leakage through them). Coherence and
-  the phase measures are delegated to `mne-connectivity`; the amplitude-envelope
-  metric follows the paper's own definition, including the 0.5 Hz envelope
-  low-pass that `mne-connectivity` does not expose. After Nunes et al. (2020).
-- **Adaptive Bayesian beamformer with multiple constraints (ABMC)** — localises
+- **Pairwise & Augmented Pairwise MCMV (PW-/APW-MCMV) connectivity** provides
+  leakage-free functional connectivity built on MCMV: each region pair is
+  reconstructed with a 2-source MCMV (removing *direct* leakage between them),
+  and every statistically significant pair is re-estimated with neighbouring
+  regions added to the beamformer (suppressing *indirect* leakage through them).
+  Coherence and the phase measures are delegated to `mne-connectivity`; the
+  amplitude-envelope metric follows the paper's own definition, including the
+  0.5 Hz envelope low-pass that `mne-connectivity` does not expose. After
+  Nunes et al. (2020).
+- **Adaptive Bayesian beamformer with multiple constraints (ABMC)** localises
   low-power, spike-like transients (epileptic IEDs and delayed responses to
   single-pulse electrical stimulation) that ordinary LCMV localises poorly. It
   pairs a sparse Bayesian learning (Champagne) covariance that strips
   correlated-source structure with a template-constrained beamformer
   that locks the output onto the known spike morphology. After Shirani et al.
   (2024).
-- **A finite-element head model for EEG** — MNE-Python computes forward
+- **A finite-element head model for EEG**. MNE-Python computes forward
   solutions with the boundary element method only, which cannot represent the
   cerebrospinal fluid, the layered skull, or the openings at the orbits and the
   auditory meatus; for EEG those omissions bias the forward field.
   `read_ny_head_forward` wraps the precomputed six-tissue FEM lead field of the
   New York Head (Huang, Parra & Haufe, 2016) as an ordinary `mne.Forward`, so
   `mne.beamformer.make_lcmv` and every method above run on a FEM forward
-  unchanged. EEG only — see the caveat below. The model is downloaded on demand
+  unchanged. EEG only (see the caveat below). The model is downloaded on demand
   and is **not** redistributed with this package (its licence is GPL v3).
 
 ## Installation
@@ -74,13 +75,13 @@ info = make_ny_head_info(sfreq=250.0)  # 231 electrodes, average reference
 `make_recipsiicos_lcmv` or `make_abmc` exactly as you would a BEM forward. Two
 things are worth knowing. The lead field is supplied in **common average
 reference**, so it is rank deficient by exactly one (230 of 231) and the data
-must carry an average-reference projector — `make_ny_head_info` builds an info
+must carry an average-reference projector. `make_ny_head_info` builds an info
 that does. And the approach is **EEG-only**, not by omission: EEG electrodes
 follow a standardised layout, so a template head can be solved once and reused,
 whereas MEG sensor positions relative to the brain differ every session
 (`info['dev_head_t']`), so no template MEG array exists to solve for. This costs
 little, because the tissues a BEM misrepresents are the ones MEG is least
-sensitive to — BEM is a reasonable model for MEG, and the weak link for EEG.
+sensitive to. BEM is a reasonable model for MEG, and the weak link for EEG.
 
 ## Quick start
 
@@ -173,7 +174,7 @@ $$\mathbf{x}(t)=\sum_{i} \mathbf{g_i}\, s_i(t) + \mathbf{n}(t)=\mathbf{G}\,\math
 - $\mathbf{g_i}\in\mathbb{R}^{M}$ is the **forward field** (a.k.a. leadfield,
   topography) of source $i$: the pattern that source produces across the sensors
   when it has unit amplitude. It is computed once from the head model and sensor
-  geometry — it is *known*.
+  geometry, and is therefore *known*.
 - $\mathbf{n}(t)$ is additive noise with covariance
   $\mathbf{C_n}=\langle\mathbf{n}\mathbf{n}^{\mathsf T}\rangle$.
 
@@ -190,7 +191,7 @@ $$\mathbf{R}=\langle\mathbf{x}\,\mathbf{x}^{\mathsf T}\rangle .$$
 If the sources have covariance $\mathbf{C_s}=\langle\mathbf{s}\mathbf{s}^{\mathsf T}\rangle$
 and are uncorrelated with the noise, then
 $\mathbf{R}=\mathbf{G}\,\mathbf{C_s}\,\mathbf{G}^{\mathsf T}+\mathbf{C_n}$. Keep
-this identity in mind — it is the reason the localizers below peak at the true
+this identity in mind: it is the reason the localizers below peak at the true
 sources, and the reason the ReciPSIICOS decomposition works.
 
 ## 2. The beamformer, and LCMV
@@ -204,7 +205,7 @@ We want two things:
 2. **Minimum output power**: minimise
    $\langle\hat s^2\rangle=\mathbf{w}^{\mathsf T}\mathbf{R}\,\mathbf{w}$. Since
    the target is pinned by the constraint, minimising *total* output power
-   forces the filter to suppress everything else — other sources and noise.
+   forces the filter to suppress everything else: other sources and noise.
 
 This is the Linearly Constrained Minimum Variance (LCMV) problem. Minimising
 $\mathbf{w}^{\mathsf T}\mathbf{R}\mathbf{w}$ subject to
@@ -227,7 +228,7 @@ Suppose two sources with fields $\mathbf{g_1},\mathbf{g_2}$ have correlation
 $\rho$. The LCMV filter for source 1 is free to place a null anywhere except
 along $\mathbf{g_1}$. Because source 2 is correlated with source 1, the filter
 can *lower its own output power* by passing a scaled, sign-flipped copy of
-source 2 that partially cancels source 1 in the average — the constraint on
+source 2 that partially cancels source 1 in the average. The constraint on
 $\mathbf{g_1}$ is still satisfied instant by instant, but the variance is
 reduced by exploiting the correlation. The result is **signal cancellation**:
 the reconstructed power of source 1 is suppressed by roughly a factor
@@ -248,7 +249,7 @@ constraint is
 $$\mathbf{W}^{\mathsf T}\mathbf{H}=\mathbf{I_n},\qquad\text{i.e.}\qquad \mathbf{w_i}^{\mathsf T}\mathbf{g_j}=\delta_{ij}.$$
 
 The diagonal ($i=j$) is the familiar **unit-gain** condition; the off-diagonal
-($i\ne j$) **zero-gain** conditions are the new ingredient — filter $i$ is forced
+($i\ne j$) **zero-gain** conditions are the new ingredient. Filter $i$ is forced
 to be *blind* to every other constrained source. A blind filter cannot exploit a
 correlation it cannot see, so the cancellation of Section 3 disappears.
 
@@ -270,7 +271,7 @@ Reading it line by line: $\mathbf{R}^{-1}\mathbf{H}$ is the stack of ordinary
 inverse-covariance filters; multiplying by
 $(\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\mathbf{H})^{-1}$ mixes them just enough to
 enforce all $n^2$ gain conditions simultaneously. For $n=1$ the bracket is a
-scalar and this is *exactly* the LCMV filter of Section 2 — MCMV is a strict
+scalar and this is *exactly* the LCMV filter of Section 2. MCMV is a strict
 generalisation. The matrix $\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\mathbf{H}$ is
 invertible as long as the constrained fields are linearly independent; it
 becomes singular if two sources coincide in both location and orientation (then
@@ -282,11 +283,11 @@ filters on `Raw`/`Epochs`/`Evoked`/arrays.
 
 ## 5. Whitening, and why it is mandatory for mixed sensors
 
-The data covariance mixes sensor types with *different physical units* —
+The data covariance mixes sensor types with *different physical units*:
 magnetometers in tesla ($\sim10^{-13}$), gradiometers in T/m, EEG in volts.
 The scalar $\mathbf{w}^{\mathsf T}\mathbf{R}\mathbf{w}$ then sums
-$\mathrm{T}^2$, $(\mathrm{T/m})^2$ and cross terms — literally adding
-incommensurable quantities — and $\mathbf{R}^{-1}$ is numerically dominated by
+$\mathrm{T}^2$, $(\mathrm{T/m})^2$ and cross terms (literally adding
+incommensurable quantities), and $\mathbf{R}^{-1}$ is numerically dominated by
 whichever block is largest, making the filter effectively blind to the
 smaller-scale sensor type. This is a *correctness* problem, not just
 conditioning.
@@ -296,7 +297,7 @@ the noise covariance so that $\mathbf{W_n}\mathbf{C_n}\mathbf{W_n}^{\mathsf T}=\
 from the eigendecomposition
 $\mathbf{C_n}=\mathbf{U}\mathbf{\Lambda}\mathbf{U}^{\mathsf T}$,
 $\mathbf{W_n}=\mathbf{\Lambda_r}^{-1/2}\mathbf{U_r}^{\mathsf T}$ (keeping only
-the $r$ non-negligible eigenpairs — the numerical rank, which drops below $M$
+the $r$ non-negligible eigenpairs, i.e. the numerical rank, which drops below $M$
 after SSS/Maxwell filtering or ICA). Then whiten leadfield and covariance,
 
 $$\tilde{\mathbf{H}}=\mathbf{W_n}\mathbf{H},\qquad \tilde{\mathbf{R}}=\mathbf{W_n}\mathbf{R}\,\mathbf{W_n}^{\mathsf T},$$
@@ -315,7 +316,7 @@ Two consequences worth internalising:
   because the `reg` diagonal loading is applied in the whitened space it is not
   equivariant under whitening: at `reg=0` the unit-gain filter is exactly
   invariant to the choice of noise covariance (verified to 1e-13), but at the
-  default `reg=0.05` the weights change materially — about 30% on the MNE
+  default `reg=0.05` the weights change materially, by about 30% on the MNE
   `sample` gradiometer array. Whitening never mixes incommensurable units, but it
   is not a no-op for a single sensor type once `reg > 0`.
   Note also that MNE counts magnetometers and gradiometers as *two* types, so a
@@ -336,7 +337,7 @@ Two consequences worth internalising:
 - **`unit-noise-gain`**: rescale each filter so that
   $\mathbf{w_i}^{\mathsf T}\mathbf{C_n}\mathbf{w_i}=1$, i.e. unit output noise.
   Because the solve is in whitened space this is exactly unit Euclidean norm of
-  the whitened filter — MNE's definition. It equalises the noise floor across
+  the whitened filter (MNE's definition). It equalises the noise floor across
   locations, which is what you want for *maps* (so deep, low-SNR locations are
   not penalised) at the cost of no longer preserving physical amplitude.
 
@@ -361,8 +362,9 @@ is the covariance of the epoch-**averaged** (evoked) field. The four localizers
 | **MER** (evoked) | $\mathrm{Tr}(\mathbf{E}\mathbf{T}^{-1})$ | evoked pseudo-Z | phase-locked responses |
 | **rMER** (reduced evoked) | $\mathrm{Tr}(\mathbf{E}\mathbf{S}^{-1})$ | reduced evoked pseudo-Z | evoked, no clean $\mathbf{C_n}$ |
 
-Intuition: $\zeta$ is a *(signal+noise)/noise* ratio — $(\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{g})^{-1}$
-is the total reconstructed power (signal + leaked noise) and
+Intuition: $\zeta$ is a *(signal+noise)/noise* ratio. Here
+$(\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{g})^{-1}$ is the total
+reconstructed power (signal + leaked noise) and
 $(\mathbf{g}^{\mathsf T}\mathbf{C_n}^{-1}\mathbf{g})^{-1}$ is the noise-only power,
 so subtracting $1$ gives a *pure* signal-to-noise ratio that is zero where there
 is no source. The multi-source versions generalise this to the whole
@@ -385,16 +387,16 @@ pick the orientation $\mathbf{u_k}$ (so that $\mathbf{g_k}=\mathbf{H_k}\mathbf{u
 that maximises the localizer, *given* the sources already found (their fields
 form the reference block $\mathbf{H_R}$). Moiseev et al. show the maximiser is
 the top eigenvector of a $3\times 3$ generalized eigenproblem
-$\mathbf{D}\,\mathbf{u_k}=\lambda\,\mathbf{F}\,\mathbf{u_k}$ — no scan over angles
-is needed:
+$\mathbf{D}\,\mathbf{u_k}=\lambda\,\mathbf{F}\,\mathbf{u_k}$ (no scan over angles
+is needed):
 
 $$\mathbf{F}=\mathbf{A}_{kk}-\mathbf{A}_{kR}\mathbf{A}_{RR}^{-1}\mathbf{A}_{Rk},$$
 
 $$\mathbf{D}=\mathbf{A}_{kR}\mathbf{A}_{RR}^{-1}\mathbf{B}_{RR}\mathbf{A}_{RR}^{-1}\mathbf{A}_{Rk}-\mathbf{A}_{kR}\mathbf{A}_{RR}^{-1}\mathbf{B}_{Rk}-\mathbf{B}_{kR}\mathbf{A}_{RR}^{-1}\mathbf{A}_{Rk}+\mathbf{B}_{kk}.$$
 
-Here $(\mathbf{A},\mathbf{B})$ is the localizer's (denominator, numerator) pair —
+Here $(\mathbf{A},\mathbf{B})$ is the localizer's (denominator, numerator) pair:
 $(\mathbf{S},\mathbf{G})$ for MAI, $(\mathbf{T},\mathbf{S})$ for MPZ,
-$(\mathbf{T},\mathbf{E})$ for MER, $(\mathbf{S},\mathbf{E})$ for rMER — and the
+$(\mathbf{T},\mathbf{E})$ for MER, $(\mathbf{S},\mathbf{E})$ for rMER. The
 subscripted blocks are the Table-2 matrices evaluated between $\mathbf{H_R}$ and
 $\mathbf{H_k}$. $\mathbf{F}$ is the Schur complement of the denominator (it
 "conditions out" the already-found sources); $\mathbf{D}$ is the corresponding
@@ -411,20 +413,20 @@ search is greedy and iterative (Moiseev et al. 2011):
 
 1. **Find source 1** by scanning the single-source localizer over the grid
    (with the optimal orientation at each location).
-2. **Fix** it as a reference and scan the **multi-source** localizer for source
-   2 — now every candidate is evaluated *jointly* with source 1.
+2. **Fix** it as a reference and scan the **multi-source** localizer for
+   source 2. Every candidate is now evaluated *jointly* with source 1.
 3. Repeat, adding one source per iteration. Each new source is added to the
    joint constraint, so the cancellation that hid correlated activity is
    progressively removed and previously masked sources emerge.
 
 **Knowing when to stop.** After adding source $k$, monitor its pseudo-Z
 $\bar z_k=(\mathbf{w_k}^{\mathsf T}\mathbf{R}\mathbf{w_k})/(\mathbf{w_k}^{\mathsf T}\mathbf{C_n}\mathbf{w_k})$,
-where $\mathbf{w_k}$ is that source's **row of the joint $k$-source MCMV filter**
-— not a single-source (LCMV) filter at the same location, which would still
-suffer the cancellation the joint constraint has just removed.
+where $\mathbf{w_k}$ is that source's **row of the joint $k$-source MCMV
+filter**, not a single-source (LCMV) filter at the same location, which would
+still suffer the cancellation the joint constraint has just removed.
 Genuine sources have large $\bar z_k$; once you start adding noise, $\bar z_k$
 drops to a baseline and fluctuates. The baseline is generally **not** $1$ and
-must be judged from the data — so `scan_mcmv` runs a requested `n_sources` and
+must be judged from the data, so `scan_mcmv` runs a requested `n_sources` and
 returns the whole `pseudo_z` sequence for you to read the elbow. Note the greedy
 search does not order the sources by strength: each step maximises the *joint*
 localizer given the sources already fixed, so a later source can carry the larger
@@ -446,14 +448,14 @@ $\mathrm{vec}(\mathbf{g_i}\mathbf{g_j}^{\mathsf T})=\mathbf{g_j}\otimes\mathbf{g
 $$\mathrm{vec}(\mathbf{R})=\sum_i [\mathbf{C_s}]_{ii}\,\mathrm{vec}(\mathbf{g_i}\mathbf{g_i}^{\mathsf T})+\sum_{i<j}[\mathbf{C_s}]_{ij}\,\mathrm{vec}(\mathbf{g_i}\mathbf{g_j}^{\mathsf T}+\mathbf{g_j}\mathbf{g_i}^{\mathsf T})+\mathrm{vec}(\mathbf{C_n}).$$
 
 The first sum collects the **auto-products** (the source powers); the second
-collects the symmetric **cross-products** (the source couplings) — and the
-couplings are *exactly* what an LCMV beamformer exploits to cancel correlated
-sources. Kill the cross-product part of the covariance and the cancellation has
-nothing to feed on.
+collects the symmetric **cross-products** (the source couplings). The couplings
+are *exactly* what an LCMV beamformer exploits to cancel correlated sources.
+Kill the cross-product part of the covariance and the cancellation has nothing
+to feed on.
 
 **A working space that makes it device-agnostic and tractable.** The original
 study used one MEG array of a single sensor type and built the projector in raw
-sensor space. Two changes are needed for general use — the first is ours, the
+sensor space. Two changes are needed for general use. The first is ours, the
 second follows the paper:
 
 - *Noise whitening.* Section 2.6 of the paper discusses whitening only to note
@@ -478,7 +480,7 @@ the whitened leadfield). Everything below lives in this working space: the
 leadfield $\mathbf{B}\mathbf{G}$, the covariance
 $\mathbf{B}\mathbf{R}\mathbf{B}^{\mathsf T}$, and the projector.
 
-**Building the projector — from the forward model alone.** Enumerate the
+**Building the projector, from the forward model alone.** Enumerate the
 (working-space) auto-product vectors over the source grid as the columns of $G_p$
 and the symmetric cross-product vectors as $G_c$.
 
@@ -487,14 +489,14 @@ and the symmetric cross-product vectors as $G_c$.
   subspace, $\mathbf{P}=\mathbf{U_K}\mathbf{U_K}^{\mathsf T}$. This retains
   power, and whatever of the correlation subspace is (near-)orthogonal to it is
   removed.
-- **`whitened`** (Eqs. 15–17): first *whiten by the power subspace* — form
-  $C_p=G_pG_p^{\mathsf T}$,
-  its range-restricted inverse square root
+- **`whitened`** (Eqs. 15–17): first *whiten by the power subspace*, forming
+  $C_p=G_pG_p^{\mathsf T}$
+  and its range-restricted inverse square root
   $W_p=\mathbf{E}\mathbf{\Lambda}^{-1/2}\mathbf{E}^{\mathsf T}$
   (the auto-products span at most the symmetric subspace of dimension
   $q(q{+}1)/2$, so $C_p$ is *never* full rank: its null space is dropped rather
   than ridge-filled, and only the retained eigenvalues are then stabilised by a
-  ridge of `reg` times their mean) — then, in that whitened space,
+  ridge of `reg` times their mean). Then, in that whitened space,
   project *away from* the top $K$ correlation directions and unwhiten. Because
   the power directions are flattened to unit scale first, this spares them far
   better than the plain variant. $W_p$ only spans that symmetric subspace, so a
@@ -517,8 +519,8 @@ and the method warns.
 virtual-sensor reduction both change the space, the cleaned covariance cannot be
 handed back to `make_lcmv` (which would whiten a second time and solve against
 the wrong leadfield). Instead the LCMV is solved *in the working space* by
-reusing MNE's own filter computation — its orientation selection, weight
-normalisation and rank handling — with an identity whitener there (the
+reusing MNE's own filter computation (its orientation selection, weight
+normalisation and rank handling) with an identity whitener there (the
 working-space noise is white by construction). The reduction operator
 $\mathbf{B}$ is then folded into the returned `Beamformer` as its whitener, so
 `apply_lcmv` applies the whole pipeline to sensor data unchanged.
@@ -531,18 +533,17 @@ correlation set to four columns per location pair.
 **The one knob is $K$.** The projector depends only on the forward model, so it
 is built once and reused across datasets sharing that forward.
 `recipsiicos_rank_curve(...)` returns the retained power/correlation energy
-versus $K$ (Eqs. 20–21) — computed in closed form over all ranks from a single
-decomposition rather than one per rank — and with `return_optimal=True` also the
-rank $K^*$ at the 45° point where the correlation subspace stops emptying faster
-than the power subspace (Section 2.4). The two methods traverse the rank axis in
-*opposite* directions — the identity is $K=q^2$ for `recipsiicos` and $K=0$ for
-`whitened`, which is why Fig. 19 of the paper puts the ReciPSIICOS scale in
-descending order — so both curves rise with $K$ for the former and fall with it
-for the latter, and $K^*$ is located accordingly. Note $K$ lives in the
-$q^2$-dimensional working covariance space. `make_recipsiicos_cov(...)` returns
-the cleaned
-`mne.Covariance` (for inspection); `make_recipsiicos_lcmv(...)` builds the
-beamformer end to end.
+versus $K$ (Eqs. 20–21), computed in closed form over all ranks from a single
+decomposition rather than one per rank. With `return_optimal=True` it also
+returns the rank $K^*$ at the 45° point where the correlation subspace stops
+emptying faster than the power subspace (Section 2.4). The two methods traverse
+the rank axis in *opposite* directions: the identity is $K=q^2$ for
+`recipsiicos` and $K=0$ for `whitened` (which is why Fig. 19 of the paper puts
+the ReciPSIICOS scale in descending order). Both curves therefore rise with $K$
+for the former and fall with it for the latter, and $K^*$ is located
+accordingly. Note $K$ lives in the $q^2$-dimensional working covariance space.
+`make_recipsiicos_cov(...)` returns the cleaned `mne.Covariance` (for
+inspection); `make_recipsiicos_lcmv(...)` builds the beamformer end to end.
 
 **Practical notes for real data.** Three things matter when moving from
 simulations to recordings:
@@ -550,30 +551,30 @@ simulations to recordings:
 - *Free-orientation MEG needs `reduce_rank=True`.* In a spherical conductor a
   radial source produces no external magnetic field, so a three-orientation MEG
   leadfield is effectively rank two per location and the working-space LCMV is
-  singular unless the per-source forward rank is reduced — exactly as in
+  singular unless the per-source forward rank is reduced, exactly as in
   `make_lcmv`. Pass `reduce_rank=True`, or use a fixed-orientation forward.
 - *The correlation Gram is $O(N^2)$ in the source count.* The `whitened`
   projector and both rank curves enumerate every source *pair*, so a
   full-resolution grid (tens of thousands of vertices) is impractical: build the
-  projector on a decimated source space — a few thousand vertices as in the
-  paper, or a cortical label — then reuse it across datasets sharing that
+  projector on a decimated source space (a few thousand vertices as in the
+  paper, or a cortical label), then reuse it across datasets sharing that
   forward. The `recipsiicos` projector uses only the auto-products and stays
-  linear in $N$. Runtime scales with $N^2$; *memory* does not — the cross-product
+  linear in $N$. Runtime scales with $N^2$; *memory* does not. The cross-product
   columns are accumulated into the Gram in blocks whose size is chosen from a
   64 MiB budget, so peak memory is set by the $q^2\times q^2$ Gram itself
   (99 MiB at $q=60$, 1.5 GiB at $q=120$). Keep $q$ modest: it, not $N$, is what
   can make the projector unaffordable.
 - *The rank curve needs a forward with rich leadfield structure.* On a
   single-shell sphere model the tangential leadfields are so low-rank that the
-  power subspace collapses to a handful of directions and the curve degenerates
-  — there is nothing to separate. A realistic BEM forward gives the smooth,
+  power subspace collapses to a handful of directions and the curve degenerates.
+  There is nothing to separate. A realistic BEM forward gives the smooth,
   separable curve the 45° criterion expects; on a degenerate curve $K^*$ falls
   back to a near-identity rank rather than one that empties the covariance.
 
 ## 11. Connectivity: pairwise and augmented-pairwise MCMV
 
-Functional connectivity asks whether two regions' time courses are coupled —
-through coherence, phase locking, or amplitude-envelope correlation. Any inverse
+Functional connectivity asks whether two regions' time courses are coupled,
+as measured by coherence, phase locking, or amplitude-envelope correlation. Any inverse
 operator that leaks one region into another manufactures coupling that is not
 there, and the correlated-source cancellation of Section 3 can equally *hide*
 real coupling. Connectivity is therefore exactly where a leakage-free filter
@@ -585,21 +586,21 @@ $\mathbf{w}_a^{\mathsf T}\mathbf{g}_b=0$ (Section 4) means $\hat s_a$ contains n
 copy of source $b$, and $\hat s_b$ none of $a$: the pair carries **no direct
 leakage**, so their connectivity is not biased by spatial spread or by the
 mutual cancellation that collapses correlated LCMV estimates. Doing this for
-every pair is *pairwise MCMV* (`pairwise_mcmv_connectivity`); note the
-reconstruction of a given region differs from pair to pair — intrinsic to the
-method, since each pair uses its own two-column constraint.
+every pair is *pairwise MCMV* (`pairwise_mcmv_connectivity`). Note that the
+reconstruction of a given region differs from pair to pair; that is intrinsic to
+the method, since each pair uses its own two-column constraint.
 
 **Indirect leakage, and APW-MCMV.** PW-MCMV nulls the *partner* but not third
 regions. If $a$ leaks into a neighbour $k$ that is genuinely coupled to $b$, that
 leaked copy of $k$ correlates with $\hat s_b$ and a spurious $a$–$b$ edge
 survives. The sharpest measure of the residual is the leakage coefficient
 $\alpha_k=\mathbf{w}_a^{\mathsf T}\mathbf{g}_k$: for a pairwise filter it is
-nonzero — the indirect path — and adding $k$ to the beamformer drives it to
+nonzero (the indirect path), and adding $k$ to the beamformer drives it to
 *machine zero* by construction (the new zero-gain row). This is **augmented
 pairwise MCMV**: for every statistically significant pair, add up to two
-neighbouring regions of *each* source — those within a 4 cm radius that
-themselves carry significant connections, ranked by their number of connections
-— giving a beamformer of order 2 to 6, and re-estimate the pair
+neighbouring regions of *each* source (those within a 4 cm radius that
+themselves carry significant connections, ranked by their number of
+connections), giving a beamformer of order 2 to 6, and re-estimate the pair
 (`augmented_pairwise_mcmv_connectivity`). The order is capped for a concrete
 reason: an $n$-source filter spends $n$ of its $M$ degrees of freedom on the
 constraints (≈ "losing $n$ sensors"), and sources sharing a lobe are seen by far
@@ -607,7 +608,7 @@ fewer than $M$ sensors, so the effective $n/M_\text{actual}$ degrades SNR well
 before $n=M$.
 
 **Two things the paper insists on.** (i) Tune the weights to the analysis band.
-For the resting-state envelope analyses — the setting APW-MCMV targets — the
+For the resting-state envelope analyses (the setting APW-MCMV targets), the
 sensor data are band-passed (8–12 Hz in the paper) before the covariance and the
 filters are built, so pass band-limited `data`/`data_cov`. The Discussion shows
 why: broadband weights stay near-optimal only where the power concentrates (the
@@ -615,7 +616,7 @@ low end), and for close source pairs they become suboptimal at higher
 frequencies and report spurious connectivity there, which a narrow-band
 covariance removes. (Task coherence/PLV analyses in the paper instead use
 broadband weights with a multitaper spectral estimate.) (ii) Use *plain*
-connectivity on the MCMV output — MCMV already removes leakage, so applying
+connectivity on the MCMV output. MCMV already removes leakage, so applying
 leakage-orthogonalisation as well (the symmetric-orthogonalisation baseline)
 would double-correct and discard the genuine zero-lag coupling MCMV is designed
 to preserve; hence `orthogonalize=False` and a *signed* envelope correlation
@@ -647,10 +648,10 @@ anticonservative if the envelopes still carry their fast sub-band ripple: over
 eight independent 9–11 Hz sources (a complete null) the test rejects 7.5 % of
 edges at $\alpha=0.05$ without the 0.5 Hz envelope low-pass, and 0.4 % with it.
 Use the same envelope settings for the null as for the matrix being tested. The
-test is defined for `method='envelope'` only — the paper prescribes this
+test is defined for `method='envelope'` only: the paper prescribes this
 source-level surrogate for the resting-state envelope correlations, and a
 single continuous surrogate segment carries no usable coherence or
-phase-locking estimate — and an edge whose null degenerates (zero or non-finite
+phase-locking estimate. An edge whose null degenerates (zero or non-finite
 spread) is reported as *not* significant, with a warning, never as an effect.
 
 ---
@@ -658,11 +659,11 @@ spread) is reported as *not* significant, with a warning, never as an effect.
 ## 12. ABMC: a Bayesian beamformer for spike-like sources
 
 LCMV localises by output *power*, which fails for the low-power, morphologically
-distinctive transients of interest in epilepsy — interictal epileptiform
+distinctive transients of interest in epilepsy: interictal epileptiform
 discharges (IEDs) and delayed responses (DRs) to single-pulse electrical
 stimulation. ABMC (Shirani et al., 2024) addresses this in two stages.
 
-**Stage 1 — sparse Bayesian learning covariance** (`sbl_covariance`). Model the
+**Stage 1: sparse Bayesian learning covariance** (`sbl_covariance`). Model the
 data as $x(t) = G s(t) + \varepsilon(t)$ with $x\sim\mathcal N(0,R)$ and
 
 $$ R = G\,\alpha\,G^\mathsf{T} + \Lambda, $$
@@ -670,15 +671,15 @@ $$ R = G\,\alpha\,G^\mathsf{T} + \Lambda, $$
 where $\alpha=\mathrm{diag}(\alpha_1,\dots)$ are per-source prior variances (one
 per leadfield column) and $\Lambda=\mathrm{diag}(\lambda_1,\dots,\lambda_M)$ is a
 diagonal sensor-noise covariance. Fitting $(\alpha,\Lambda)$ by type-II maximum
-likelihood — minimising $F=\mathrm{tr}(CR^{-1})+\log|R|$ over the data covariance
-$C$ — with the convex-bounding updates
+likelihood, minimising $F=\mathrm{tr}(CR^{-1})+\log|R|$ over the data covariance
+$C$, with the convex-bounding updates
 
 $$ \alpha_n \leftarrow \alpha_n\sqrt{\tfrac{g_n^\mathsf{T}R^{-1}CR^{-1}g_n}{g_n^\mathsf{T}R^{-1}g_n}}, \qquad \lambda_m \leftarrow \lambda_m\sqrt{\tfrac{(R^{-1}CR^{-1})_{mm}}{(R^{-1})_{mm}}}, $$
 
 yields a *model* covariance $R$ that, because the sources are modelled as mutually
 uncorrelated ($\alpha$ diagonal), does not carry the cross-source correlation that
 makes LCMV cancel correlated sources. The fit runs in a *noise-normalised* sensor
-space — every channel divided by its noise standard deviation, from `noise_cov`
+space: every channel is divided by its noise standard deviation, from `noise_cov`
 when given and otherwise from MNE's ad-hoc per-type model, with the scaling undone
 on the returned covariance. That is what makes the fit independent of the physical
 units of the data (the paper's equations are written for single-sensor-type
@@ -691,16 +692,16 @@ changes nothing. Note also that for a free-orientation forward the prior treats
 the x, y and z columns of a grid point as three independent scalar sources, so it
 is not covariant under a rotation of the source frame.
 
-**Stage 2 — template-constrained beamformer** (`make_abmc`). Per grid
+**Stage 2: template-constrained beamformer** (`make_abmc`). Per grid
 point and orientation, solve
 
 $$ \min_W \tfrac12 W^\mathsf{T} R W \quad\text{s.t.}\quad G^\mathsf{T}W=f \;\text{ and }\; \max_W (W^\mathsf{T}X\cdot u), $$
 
 a distortionless minimum-variance beamformer with an added
 maximum-cross-correlation-to-template constraint, where $u$ is the **caller-supplied
-template of the target waveform** — an expert-annotated IED or DR in the paper, but
-any known source morphology in general, passed via the `template` argument. The
-paper descends the Lagrangian,
+template of the target waveform**, passed via the `template` argument. In the
+paper it is an expert-annotated IED or DR, but in general it can be any known
+source morphology. The paper descends the Lagrangian,
 
 $$ W(n{+}1) = W(n) - \mu\big(R W(n) - \beta_1 G - \beta_2 X u^\mathsf{T}\big), $$
 
@@ -714,8 +715,8 @@ the consistency of the $\beta_1$ expression then forces $G^\mathsf{T}W=f$, so
 
 $$ \boxed{\;W^\ast = f\,\frac{R^{-1}\big(G + P\,Xu^\mathsf{T}\big)}{G^\mathsf{T}R^{-1}\big(G + P\,Xu^\mathsf{T}\big)}\;} $$
 
-This is the *same* estimator the iteration converges to — the descent's own relative
-step evaluated at $W^\ast$ is $\sim 2\times10^{-12}$ — but it removes the tuning.
+This is the *same* estimator the iteration converges to (the descent's own relative
+step evaluated at $W^\ast$ is $\sim 2\times10^{-12}$), but it removes the tuning.
 That matters in practice: on a real gradiometer covariance the descent needed
 several thousand steps, and its stopping rule (on the size of the *step*) reported
 convergence while the weights were still ~40% away from $W^\ast$, moving the
@@ -725,16 +726,16 @@ tolerance to set; `reg` regularises $R$ for this solve exactly as it does in
 
 **Read-out.** Following the paper, the source is localised by the **maximum
 cross-correlation between the beamformer output and the template**,
-$|\mathrm{corr}(W^\mathsf{T}X,\,u_{j^\ast})|$, maximised over orientation — the grid
+$|\mathrm{corr}(W^\mathsf{T}X,\,u_{j^\ast})|$, maximised over orientation: the grid
 location whose output best matches the desired morphology at the best lag (LCMV, by
 contrast, localises on output power). The same correlation also picks the
 orientation at each grid point. The output variance $\tfrac12 W^\mathsf{T}RW$ is the
 beamformer's minimisation objective, not the localiser; it is returned per grid point
 as a diagnostic only and nothing in the scan reads it.
 
-The ratio $P$ trades the two constraints — too small and the template term vanishes
+The ratio $P$ trades the two constraints: too small and the template term vanishes
 (→ plain LCMV); too large and the weights blow up (the paper's
-non-convergence regime) — and ABMC reports the blow-up fraction. For $P$ to mean
+non-convergence regime). ABMC reports the blow-up fraction. For $P$ to mean
 that, it has to be dimensionless: $g_n^\mathsf{T}g_n$ carries the units of the
 squared forward model while $g_n^\mathsf{T}c_n$, with $c_n = Xu_{j^\ast}^\mathsf{T}$,
 carries data × template units, so each $c_n$ is first rescaled to the norm of its
@@ -758,7 +759,7 @@ only on the data) and reusing it for every template.
 | Parameter | What it controls | Effect of changing it |
 |---|---|---|
 | `sources` (make_mcmv) | Which grid locations to constrain jointly | More sources → more nulls placed, better correlated-source separation, but the constraint uses more of the data rank; too many → ill-conditioning. |
-| `orientations` | Source orientations (free-ori forward) | If omitted, use `scan_mcmv`/`optimal_orientation` to estimate them from data — hand-set orientations that are off reduce SNR sharply. |
+| `orientations` | Source orientations (free-ori forward) | If omitted, use `scan_mcmv`/`optimal_orientation` to estimate them from data. Hand-set orientations that are off reduce SNR sharply. |
 | `n_sources` (scan_mcmv) | Beamformer order reached by the search | Increase until `pseudo_z` drops to baseline; extra sources past the real ones add noise-level components. |
 | `localizer` (scan_mcmv) | Which scanning statistic | `mai` = robust, broad; `mpz` = sharper but noisier; `mer`/`rmer` = phase-locked/evoked (need `evoked_cov`). |
 | `noise_cov` | Whitening model | A measured `noise_cov` is essential for **mixed sensor types** and for a meaningful `unit-noise-gain`; `None` uses an ad-hoc per-type model (fine for a single sensor type). |
@@ -776,7 +777,7 @@ only on the data) and reusing it for every template.
 | `noise_cov` | Whitening model | Whitens per sensor type; **essential for mixed sensor types**. `None` uses an ad-hoc per-type model (a global scaling for a single type, which leaves the projector subspaces unchanged). |
 | `whitener_rank` | Numerical rank of the whitener | Use an integer after SSP/ICA/SSS (data are rank-deficient); `'full'` assumes full rank. |
 | `reg` | Tikhonov loading of the working-space LCMV inverse (and the whitening ridge for `whitened`) | Same trade-off as MCMV's `reg`: stability vs resolution. Default `0.05`. |
-| `pick_ori`, `weight_norm`, `reduce_rank`, `inversion` | Orientation and normalisation of the working-space LCMV | Reuse MNE's own filter computation, so they behave exactly as in `make_lcmv` — including that **free-orientation MEG needs `reduce_rank=True`** (the radial-silent leadfield is rank-deficient). |
+| `pick_ori`, `weight_norm`, `reduce_rank`, `inversion` | Orientation and normalisation of the working-space LCMV | Reuse MNE's own filter computation, so they behave exactly as in `make_lcmv`, including that **free-orientation MEG needs `reduce_rank=True`** (the radial-silent leadfield is rank-deficient). |
 
 If a ReciPSIICOS run warns about negative-eigenvalue energy above the threshold,
 lower `rank`: too much of the covariance was projected away and the
@@ -790,9 +791,9 @@ table above. The connectivity-specific knobs:
 
 | Parameter | What it controls | Effect of changing it |
 |---|---|---|
-| `method` | Connectivity metric | `'envelope'` (signed amplitude-envelope correlation) for resting-state coupling; `'coh'`, `'plv'`, `'imcoh'`, … for task phase/spectral measures. The spectral metrics require `sfreq`, `fmin`, `fmax`. `'cohy'` is refused: coherency is complex and the returned matrix is real — use `'coh'` (magnitude) or `'imcoh'` (imaginary part). |
+| `method` | Connectivity metric | `'envelope'` (signed amplitude-envelope correlation) for resting-state coupling; `'coh'`, `'plv'`, `'imcoh'`, … for task phase/spectral measures. The spectral metrics require `sfreq`, `fmin`, `fmax`. `'cohy'` is refused: coherency is complex and the returned matrix is real. Use `'coh'` (magnitude) or `'imcoh'` (imaginary part). |
 | `radius` (APW) | Neighbour search radius for augmentation | Default 0.04 m (4 cm), from the paper's ~2 cm resolution rule. Larger admits more candidate conductors (higher order → better indirect-leakage suppression but lower SNR); smaller admits fewer. |
-| `max_neighbours` (APW) | Neighbours added per source of the pair | Default 2, capping beamformer order at 2 + 2·`max_neighbours` = 6. Raising it suppresses more indirect leakage but erodes SNR (an $n$-source filter spends $n$ degrees of freedom — see §11), so keep the total order ≲ 8. |
+| `max_neighbours` (APW) | Neighbours added per source of the pair | Default 2, capping beamformer order at 2 + 2·`max_neighbours` = 6. Raising it suppresses more indirect leakage but erodes SNR (an $n$-source filter spends $n$ degrees of freedom; see §11), so keep the total order ≲ 8. |
 | `orthogonalize` | Leakage-orthogonalisation of the envelopes | Default `False` (plain correlation). MCMV already removes leakage; enabling this is the competing symmetric-orthogonalisation baseline and discards genuine zero-lag coupling. |
 | `absolute` | Sign of the envelope correlation | Default `False` (signed Pearson of envelopes, as in the paper); `True` returns the magnitude. Honoured for both `orthogonalize` settings, unlike `mne_connectivity.envelope_correlation`, which ignores it unless `orthogonalize='pairwise'`. |
 | `envelope_lowpass` | Envelope low-pass before correlating (§11) | Default `0.5` Hz, per the paper. `None` correlates the unsmoothed envelopes (exactly `envelope_correlation`) and leaves the AR(1) null anticonservative. Needs `sfreq`, which defaults to `info['sfreq']`. |
@@ -810,11 +811,11 @@ for the matrix under test, plus its `sfreq`.
 
 | Parameter | What it controls | Effect of changing it |
 |---|---|---|
-| `cov` | The beamformer covariance $R$ | `None` (default) estimates the SBL covariance from the data — the intended ABMC pipeline. Pass a precomputed `sbl_covariance` result, or any `mne.Covariance`, to override. |
-| `P` | Ratio $\beta_2/\beta_1$ weighting the template constraint | The one genuinely free parameter. The paper states it "is empirically adjusted" and reports no value, because the useful setting depends on the recording — its own data is 20–32 subdural contacts. Pass **`P="auto"`** to have `abmc_stability_curve` choose it on your data (see below), or set it yourself: the constraint column is rescaled to its leadfield column so `P` is dimensionless, and 0.01–1 is typically the live range. Far below it the constraint is inert and ABMC reduces to a plain LCMV (a warning fires); far above it the weights blow up — watch `result.blowup_fraction` (a warning fires above ~5%). |
+| `cov` | The beamformer covariance $R$ | `None` (default) estimates the SBL covariance from the data, which is the intended ABMC pipeline. Pass a precomputed `sbl_covariance` result, or any `mne.Covariance`, to override. |
+| `P` | Ratio $\beta_2/\beta_1$ weighting the template constraint | The one genuinely free parameter. The paper states it "is empirically adjusted" and reports no value, because the useful setting depends on the recording (its own data is 20–32 subdural contacts). Pass **`P="auto"`** to have `abmc_stability_curve` choose it on your data (see below), or set it yourself: the constraint column is rescaled to its leadfield column so `P` is dimensionless, and 0.01–1 is typically the live range. Far below it the constraint is inert and ABMC reduces to a plain LCMV (a warning fires); far above it the weights blow up. Watch `result.blowup_fraction` (a warning fires above ~5%). |
 
-| `reg` | Diagonal loading of $R$ for the Stage-2 solve | **Default 0**, which is what the paper does. Its $R = G\alpha G^{\mathsf T} + \Lambda$ carries an *estimated* per-channel noise term and is positive definite by construction — condition number ~20 on the MNE `sample` data, against ~10¹⁵ for the empirical covariance of the same segment — so no loading is needed. Raise it only when you supply your own ill-conditioned `cov`. |
-| `method` | How Stage 2 is solved | `"closed-form"` (default) solves at the fixed point of the paper's Eqs. 17–19 directly. `"iterative"` runs the paper's gradient descent verbatim, for exact reproduction; `mu`, `max_iter` and `tol` apply only to that path. The two agree to ~1e-8 when the descent is run to convergence, and a test pins them together. Note the descent's step count grows with the condition number of $R$ — on an ill-conditioned covariance it can need 10⁵ steps, which is why it is not the default. |
+| `reg` | Diagonal loading of $R$ for the Stage-2 solve | **Default 0**, which is what the paper does. Its $R = G\alpha G^{\mathsf T} + \Lambda$ carries an *estimated* per-channel noise term and is positive definite by construction (condition number ~20 on the MNE `sample` data, against ~10¹⁵ for the empirical covariance of the same segment), so no loading is needed. Raise it only when you supply your own ill-conditioned `cov`. |
+| `method` | How Stage 2 is solved | `"closed-form"` (default) solves at the fixed point of the paper's Eqs. 17–19 directly. `"iterative"` runs the paper's gradient descent verbatim, for exact reproduction; `mu`, `max_iter` and `tol` apply only to that path. The two agree to ~1e-8 when the descent is run to convergence, and a test pins them together. Note the descent's step count grows with the condition number of $R$: on an ill-conditioned covariance it can need 10⁵ steps, which is why it is not the default. |
 | `mu` / `max_iter` / `tol` (`method="iterative"`) | Descent step size, budget and tolerance | `mu=None` uses $1/\lambda_{\max}(R)$. **`tol` is a distance to the fixed point, not a step size.** Those are not interchangeable: on an ill-conditioned $R$ the steps go small precisely because the descent is crawling along a shallow direction, so a step-size rule reports convergence while the weights are still far away. Because the fixed point is known in closed form, the honest test is available. |
 
 | `max_lag` | Template-lag search window (samples) | `None` searches all lags; restrict it when the true delay range is known, to avoid spurious matches. |
@@ -836,8 +837,8 @@ for the matrix under test, plus its `sfreq`.
 | `pairwise_mcmv_connectivity` | PW-MCMV connectivity matrix (direct-leakage-free) |
 | `augmented_pairwise_mcmv_connectivity` | APW-MCMV: re-estimate significant pairs with neighbour augmentation |
 | `ar1_surrogate_significance` | AR(1)-surrogate significance mask (Fisher-$z$ + FDR) |
-| `sbl_covariance` | Sparse Bayesian learning (Champagne) model covariance — ABMC Stage 1 |
-| `make_abmc` → `ABMCResult` | Template-constrained beamformer for spike-like sources — ABMC Stage 2 |
+| `sbl_covariance` | ABMC Stage 1: sparse Bayesian learning (Champagne) model covariance |
+| `make_abmc` → `ABMCResult` | ABMC Stage 2: template-constrained beamformer for spike-like sources |
 | `make_abmc_dictionary` | Run ABMC for a dictionary of desired templates, reusing one SBL covariance |
 | `abmc_stability_curve` | Explore and refine the template-constraint trade-off $P$ on your own data |
 
@@ -873,10 +874,10 @@ for the matrix under test, plus its `sfreq`.
 
 # Maintainers and contributors
 
-- **Sepehr Shirani** — maintainer and contributor (<sepehrshirani@gmail.com>, <s.shirani@ucl.ac.uk>)
-- **Muzhi Wang** — contributor
+- **Sepehr Shirani**, maintainer and contributor (<sepehrshirani@gmail.com>, <s.shirani@ucl.ac.uk>)
+- **Muzhi Wang**, contributor
 
-Contributions are welcome — please open an issue or pull request.
+Contributions are welcome. Please open an issue or pull request.
 
 # License
 

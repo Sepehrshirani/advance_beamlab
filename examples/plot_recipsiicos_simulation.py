@@ -15,7 +15,8 @@ built. From the forward model alone it constructs a projector that suppresses th
 cross-product (coupling) part of the sensor covariance while sparing the
 auto-product (power) part, and applies it to the data covariance. The result
 approximates the covariance that would have been measured had the same sources
-been *uncorrelated* -- so an ordinary LCMV built on it has nothing to cancel.
+been *uncorrelated*. An ordinary LCMV built on it therefore has nothing to
+cancel.
 
 This example dials the correlation from 0 to 0.99 and measures what each method
 recovers, then shows how to choose the method's single free parameter, the
@@ -25,7 +26,7 @@ The head model matters here and is worth stating up front. The sources are
 simulated, but they are simulated on the **real BEM forward** of the MNE
 ``sample`` dataset rather than on a sphere. ReciPSIICOS builds its projector from
 the forward, and a single-shell sphere has such low-rank tangential leadfields
-that the power and correlation subspaces barely separate -- the rank curve
+that the power and correlation subspaces barely separate: the rank curve
 degenerates and the automatic rank criterion has nothing to lock onto. On a
 realistic forward it behaves as the paper describes.
 
@@ -93,7 +94,7 @@ source_rr = fwd["source_rr"]
 print(f"{fwd['nsource']} sources, {gain.shape[0]} gradiometers")
 
 # %%
-# One source per hemisphere, about 12 cm apart -- the bilateral configuration
+# One source per hemisphere, about 12 cm apart: the bilateral configuration
 # where correlated-source cancellation is the classic failure.
 
 n_lh = len(fwd["src"][0]["vertno"])
@@ -130,7 +131,7 @@ fig.tight_layout()
 # %%
 # Simulate the pair at a given correlation and measure what each beamformer
 # recovers. Both read out with **unit gain**, so the recovered amplitude is
-# directly comparable with the injected one -- a noise-normalised readout would
+# directly comparable with the injected one. A noise-normalised readout would
 # rescale the axis and hide exactly the effect being measured.
 
 rng = np.random.default_rng(0)
@@ -229,7 +230,7 @@ fig.tight_layout()
 # %%
 # **How sensitive is this to the rank?** Much less than one might fear, which is
 # the useful practical finding. Sweeping the rank over more than an order of
-# magnitude around :math:`K^*` -- from :math:`K^*/8` to :math:`4K^*` -- moves the
+# magnitude around :math:`K^*` (from :math:`K^*/8` to :math:`4K^*`) moves the
 # recovered amplitude only between about 0.96 and 1.08, while LCMV on the same
 # data sits at 0.31. On this configuration the choice of rank is not what
 # separates the two methods; applying the projection at all is.

@@ -6,8 +6,8 @@ ABMC: localising spike-like sources
 ===================================
 
 The adaptive Bayesian beamformer with multiple constraints (ABMC) targets
-low-power, spike-like sources -- epileptic interictal discharges and delayed
-responses to stimulation -- that a power-based beamformer localises poorly.
+low-power, spike-like sources that a power-based beamformer localises poorly:
+epileptic interictal discharges and delayed responses to stimulation.
 
 The reason is that the two methods optimise different things. An LCMV beamformer
 scans for **output power**, so at low SNR its map is driven by whatever carries
@@ -19,12 +19,12 @@ that is a far more selective statistic than power.
 
 This example shows four things on a spherical EEG model:
 
-1. **Localisation maps** at a single source -- ABMC's template-match map versus a
+1. **Localisation maps** at a single source: ABMC's template-match map versus a
    noise-normalised LCMV power map across the whole grid.
-2. **Accuracy across the volume** -- the same spike placed at eight locations, with
+2. **Accuracy across the volume**: the same spike placed at eight locations, with
    the ABMC and LCMV localisation error at each.
-3. **Reconstructed source** -- the recovered time course from both filters.
-4. **A dictionary of templates** -- :func:`~advance_beamlab.make_abmc_dictionary`
+3. **Reconstructed source**: the recovered time course from both filters.
+4. **A dictionary of templates**: :func:`~advance_beamlab.make_abmc_dictionary`
    localising several desired waveforms in one call.
 
 The LCMV comparator throughout is :func:`mne.beamformer.make_lcmv` with
@@ -162,19 +162,20 @@ print(f"mean error  ABMC {np.mean(abmc_err):.1f} cm   LCMV {np.mean(lcmv_err):.1
 #
 # The point is not that :math:`R` is a better estimate of the sample covariance.
 # It is that :math:`R` is a **generative model** with a diagonal :math:`\alpha`, so
-# it carries no cross-source correlation structure -- which is exactly what an
-# LCMV beamformer exploits when it cancels correlated sources.
+# it carries no cross-source correlation structure. That structure is exactly what
+# an LCMV beamformer exploits when it cancels correlated sources.
 #
 # The left panel is the fitted source power. It is informative: it puts the true
-# source in the top handful of a 301-point grid. But it is *not* a localiser --
-# its own peak can sit several centimetres away. Stage 1 supplies a covariance
-# that will not cancel correlated sources; the template constraint of Stage 2 is
-# what turns that into a location. That division of labour is the method.
+# source in the top handful of a 301-point grid. But it is *not* a localiser. Its
+# own peak can sit several centimetres away. Stage 1 supplies a covariance that
+# will not cancel correlated sources; the template constraint of Stage 2 is what
+# turns that into a location. That division of labour is the method.
 #
 # The right panel is why the model matters numerically. The empirical covariance
-# is rank deficient -- the average-reference projector alone costs it a dimension,
-# and a short segment costs more -- so its condition number is astronomical and it
-# cannot be inverted directly. The fitted :math:`R` is full rank by construction.
+# is rank deficient: the average-reference projector alone costs it a dimension,
+# and a short segment costs more. Its condition number is therefore astronomical,
+# and it cannot be inverted directly. The fitted :math:`R` is full rank by
+# construction.
 
 emp_cov = mne.Covariance(
     worst["data"] @ worst["data"].T / n_times,
@@ -213,15 +214,15 @@ ax2.legend(loc="lower left")
 fig.tight_layout()
 
 print(f"alpha ranks the true source {alpha_rank} of {len(alpha)}")
-print(f"but its own peak is {alpha_peak_cm:.1f} cm away -- Stage 1 is not a localiser")
+print(f"but its own peak is {alpha_peak_cm:.1f} cm away; Stage 1 is not a localiser")
 
 # %%
 # **Localisation maps**, shown at the single source where the power map does
-# worst -- deliberately the least flattering case for both methods, not a typical
-# one. Two things are visible. The ABMC map has far more *contrast*: its median
-# value sits well below its peak, because a grid point only scores highly if its
-# reconstructed time course genuinely resembles the template. The LCMV map is
-# nearly flat, sitting in a narrow high band across the whole grid -- at this SNR
+# worst. That is deliberately the least flattering case for both methods, not a
+# typical one. Two things are visible. The ABMC map has far more *contrast*: its
+# median value sits well below its peak, because a grid point only scores highly
+# if its reconstructed time course genuinely resembles the template. The LCMV map
+# is nearly flat, sitting in a narrow high band across the whole grid. At this SNR
 # many locations reconstruct a similar amount of variance, so power alone barely
 # discriminates between them. Even here, where ABMC does not land exactly on the
 # true source, its peak is several centimetres closer than the power map's.
@@ -255,7 +256,7 @@ for ax, (name, m, pk, col) in zip(axes, panels, strict=True):
     ax.set(ylabel="normalised", ylim=(0, 1.42))
     # Median/peak is the contrast of the map: low means a well-isolated peak,
     # close to one means a flat map that barely discriminates.
-    ax.set_title(f"{name}  --  median/peak = {np.median(mm):.2f}", loc="left")
+    ax.set_title(f"{name}:  median/peak = {np.median(mm):.2f}", loc="left")
     ax.legend(loc="upper right", ncol=2)
     ax.margins(x=0.01)
     ax.grid(axis="x", visible=False)
@@ -298,7 +299,7 @@ fig.tight_layout()
 # **Reconstructed source** at that location. Both filters are unit-gain at the
 # source, so both recover the spike; ABMC's template constraint yields a modestly
 # cleaner trace (``r`` = correlation with the noiseless source). ABMC's decisive
-# edge is in *localisation* above -- the larger waveform gains in the paper come
+# edge is in *localisation* above. The larger waveform gains in the paper come
 # with realistic iEEG noise, not this idealised sphere.
 data = worst["data"]
 res = make_abmc(info, fwd, data, template, return_weights=True)

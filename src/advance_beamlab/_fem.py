@@ -2,7 +2,7 @@ r"""Finite-element head modelling for EEG beamforming, via the New York Head.
 
 MNE-Python computes forward solutions with the boundary element method (BEM):
 :func:`mne.make_bem_model` builds nested, closed, homogeneous and isotropic
-surfaces -- typically scalp, outer skull and inner skull -- and
+surfaces (typically scalp, outer skull and inner skull) and
 :func:`mne.make_forward_solution` solves the quasi-static problem on them. The
 BEM is fast and accurate when the assumptions hold, but by construction it
 cannot represent anything the surfaces cannot describe: the cerebrospinal fluid
@@ -261,12 +261,12 @@ def ny_head_montage(path=None, *, verbose=None):
     (``Nk1``-``Nk4``, reaching 155 mm below the head-coordinate origin) and a
     band of face and cheek positions (``Exx27``-``Exx34``), because the model
     was built for transcranial stimulation targeting as well as for EEG, and
-    those inferior positions matter there. They are genuine scalp positions --
+    those inferior positions matter there. They are genuine scalp positions:
     every electrode lies on the surface returned by :func:`ny_head_scalp` to
-    within its mesh resolution -- but a plot of the montage against the cortex
-    alone makes them look like stray points floating below the brain. Pass
-    ``picks`` to :func:`read_ny_head_forward` to restrict the forward to the
-    electrodes you actually recorded.
+    within its mesh resolution. A plot of the montage against the cortex alone
+    nevertheless makes them look like stray points floating below the brain.
+    Pass ``picks`` to :func:`read_ny_head_forward` to restrict the forward to
+    the electrodes you actually recorded.
 
     References
     ----------
@@ -312,8 +312,8 @@ def ny_head_scalp(path=None, *, verbose=None):
     Returns
     -------
     rr : ndarray, shape (1082, 3)
-        Vertex positions in metres, in MNE head coordinates -- the same frame as
-        :func:`ny_head_montage` and :func:`read_ny_head_forward`.
+        Vertex positions in metres, in MNE head coordinates. This is the same
+        frame as :func:`ny_head_montage` and :func:`read_ny_head_forward`.
     tris : ndarray, shape (2160, 3)
         Triangle definitions, zero-based.
 
@@ -342,11 +342,11 @@ def make_ny_head_info(sfreq=1000.0, path=None, *, verbose=None):
     """Build a measurement info matching the New York Head electrode array.
 
     The returned info carries the 231 electrodes in the model's own order, at
-    their head-coordinate positions, and -- importantly -- an average reference
-    *projector*. The lead field is supplied in common average reference, so
-    modelling data that is referenced differently would use the wrong
-    topographies; every inverse in MNE-Python (and every beamformer in this
-    package) refuses to run on EEG without that projector for exactly this
+    their head-coordinate positions. Importantly, it also carries an average
+    reference *projector*. The lead field is supplied in common average
+    reference, so modelling data that is referenced differently would use the
+    wrong topographies; every inverse in MNE-Python (and every beamformer in
+    this package) refuses to run on EEG without that projector for exactly this
     reason.
 
     Parameters
@@ -461,7 +461,7 @@ def read_ny_head_forward(
     -----
     **Average reference and rank.** The lead field is supplied in common average
     reference, so its rank is one less than the number of electrodes (230 of 231)
-    and the corresponding data must carry an average-reference projector --
+    and the corresponding data must carry an average-reference projector.
     :func:`make_ny_head_info` builds an info that does. Every beamformer here
     resolves the rank through :func:`mne.compute_rank` and MNE's regularised
     pseudoinverse, so the deficiency is handled rather than merely tolerated,
@@ -475,8 +475,8 @@ def read_ny_head_forward(
     approximation and not an identity.
 
     **Visualisation.** The source space is the model's own cortical mesh, not a
-    FreeSurfer subject, so ``stc.plot()`` -- which looks up a subject in a
-    ``subjects_dir`` -- does not apply. The mesh travels with the forward
+    FreeSurfer subject, so ``stc.plot()``, which looks up a subject in a
+    ``subjects_dir``, does not apply. The mesh travels with the forward
     (``fwd['src'][hemi]['rr']`` and ``['tris']``), so a
     :class:`~mne.SourceEstimate` can be rendered directly with PyVista; see
     :ref:`ex-fem-head-model` for the dozen lines that do it.
@@ -575,8 +575,8 @@ def read_ny_head_forward(
     info.set_montage(ny_head_montage(path=path, verbose=False), verbose=False)
     # A forward's info additionally records where the geometry came from. MNE
     # writes these fields verbatim in ``write_forward_solution``, so without
-    # them the forward is usable in memory but cannot be saved to FIF -- and
-    # saving it is how a user avoids re-reading a 412 MB lead field.
+    # them the forward is usable in memory but cannot be saved to FIF. Saving
+    # it is how a user avoids re-reading a 412 MB lead field.
     with info._unlock():
         info["mri_file"] = "ICBM-NY (New York Head)"
         info["mri_id"] = None

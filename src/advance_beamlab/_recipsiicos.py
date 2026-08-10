@@ -37,8 +37,8 @@ method device-agnostic. The first is ours; the second follows the paper:
   a chosen fraction of its variance (``pct_var``). At the default 0.99 a
   whole-head array reduces to roughly 30-80 virtual sensors (29 magnetometers,
   43 gradiometers and 76 for the two combined on the 306-channel ``sample``
-  array). Everything -- the :math:`M^2`-space projector, the data covariance and
-  the beamformer -- then lives in this small working space, which is what makes
+  array). The :math:`M^2`-space projector, the data covariance and the
+  beamformer then all live in this small working space, which is what makes
   the :math:`M^2 \times M^2` correlation Gram tractable (a 306-channel array
   would otherwise need a 93k x 93k matrix).
 
@@ -56,8 +56,8 @@ the reduction operator is folded into the returned
 Three public functions are provided: :func:`make_recipsiicos_lcmv`, which builds
 the beamformer end to end; :func:`make_recipsiicos_cov`, which returns the
 modified sensor-space :class:`mne.Covariance` (for inspection and interop); and
-:func:`recipsiicos_rank_curve`, which characterises -- and can automatically
-select -- the single free parameter, the projection rank.
+:func:`recipsiicos_rank_curve`, which characterises the single free parameter,
+the projection rank, and can also select it automatically.
 
 Notes
 -----
@@ -162,15 +162,16 @@ def _tangential_topographies(gain, fixed):
     the returned array has a trailing dimension of 1. For a free-orientation
     forward each location is reduced to the two dominant (tangential)
     topographies, obtained from the first two left singular vectors of the local
-    ``(n_channels, 3)`` block scaled by their singular values -- the reduction
-    of Kuznetsova et al. (2021), Section 2.5, which discards the poorly observed
-    radial direction (Ahlfors et al., 2010: the third direction carries a median
-    6% of the local source energy).
+    ``(n_channels, 3)`` block scaled by their singular values. This is the
+    reduction of Kuznetsova et al. (2021), Section 2.5, which discards the
+    poorly observed radial direction (Ahlfors et al., 2010: the third direction
+    carries a median 6% of the local source energy).
 
     Parameters
     ----------
     gain : ndarray, shape (n_channels, n_dipoles)
-        The leadfield (already in whatever -- e.g. working -- space is desired).
+        The leadfield, already in whatever space is desired (e.g. the working
+        space).
     fixed : bool
         Whether the forward has fixed source orientation.
 
@@ -224,7 +225,7 @@ def _correlation_blocks(topos, max_block_bytes=_CORR_BLOCK_BYTES):
     Fixed orientation: one column ``vec(g_i g_j^T + g_j g_i^T)`` per ordered
     pair ``i < j`` (Eq. 13). Free orientation: the four columns of Eq. (23) per
     pair. The columns are produced in blocks so that the (potentially very
-    large) matrix G_cor is never held in memory all at once -- the caller only
+    large) matrix G_cor is never held in memory all at once. The caller only
     needs the running Gram matrix ``G_cor G_cor^T``.
 
     Parameters
@@ -298,9 +299,10 @@ def _power_projector(g_pwr, rank):
 def _whitening_pair(c_pwr, reg, rtol=None):
     r"""Symmetric whitener for the power subspace and its inverse (Eq. 15).
 
-    ``C_pwr`` is rank-limited -- its rank cannot exceed the number of independent
+    ``C_pwr`` is rank-limited: its rank cannot exceed the number of independent
     source topographies, and never exceeds the symmetric dimension
-    :math:`q(q+1)/2` -- so the inverse square root is taken only on its range.
+    :math:`q(q+1)/2`. The inverse square root is therefore taken only on its
+    range.
 
     The cut is at machine precision by default, and that matters. Because the
     projector is :math:`P = \Pi - W^{-1}E_K E_K^{\mathsf T}W` with
@@ -316,8 +318,8 @@ def _whitening_pair(c_pwr, reg, rtol=None):
 
     Returns ``(W, W_inv, n_keep)`` with ``W = E Lambda^{-1/2} E^T`` and
     ``W_inv = E Lambda^{1/2} E^T`` over the range of ``C_pwr``, and ``n_keep`` the
-    retained rank -- the rank at which the whitened projector annihilates the
-    covariance entirely.
+    retained rank. That is the rank at which the whitened projector annihilates
+    the covariance entirely.
     """
     eigvals, eigvecs = np.linalg.eigh(c_pwr)
     eigvals = np.clip(eigvals, 0.0, None)
@@ -352,7 +354,7 @@ def _whitened_projector(g_pwr, c_cor, rank, reg):
 
 
 # --------------------------------------------------------------------------- #
-# Rank curves (Eqs. 20-21) -- closed-form over all ranks at once
+# Rank curves (Eqs. 20-21): closed-form over all ranks at once
 # --------------------------------------------------------------------------- #
 # The retained-energy fractions P_pwr(k) and P_cor(k) are needed for every rank
 # k = 1 .. q^2. Building and applying the projector separately at each rank costs
@@ -476,8 +478,8 @@ def _reduction_operator(
 
     ``B = U_q^T W`` where ``W`` whitens by the noise covariance (per-type rank,
     :func:`mne.cov.compute_whitener`) and ``U_q`` holds the ``q`` leading left
-    singular vectors of the *whitened* leadfield -- the virtual sensors of
-    Kuznetsova et al. (2021). Whitening makes the reduction device-agnostic
+    singular vectors of the *whitened* leadfield, which are the virtual sensors
+    of Kuznetsova et al. (2021). Whitening makes the reduction device-agnostic
     (commensurable units across sensor types); the SVD truncation makes the
     subsequent :math:`M^2`-space computations tractable.
 
@@ -518,10 +520,10 @@ def _build_projector(gain_work, fixed, method, rank, reg):
         # The whitened projector lives on the range of the power whitener, which
         # is contained in the q(q+1)/2-dimensional subspace of symmetric
         # matrices. Removing that many correlation directions removes all of it,
-        # so the projector -- and hence the modified covariance -- is exactly
-        # zero. The bound that actually bites is the retained rank of C_pwr,
-        # which for a rank-deficient forward is reached well before q(q+1)/2, so
-        # the warning is raised against that rather than against the symmetric
+        # so the projector is exactly zero, and so is the modified covariance.
+        # The bound that actually bites is the retained rank of C_pwr, which for
+        # a rank-deficient forward is reached well before q(q+1)/2, so the
+        # warning is raised against that rather than against the symmetric
         # dimension. Warn rather than raise, so a caller sweeping ranks is not
         # stopped part way.
         c_cor = _correlation_gram(topos)
@@ -609,8 +611,8 @@ def _check_pick_ori(forward, pick_ori):
     :func:`mne.beamformer.make_lcmv` runs these four checks inside
     :func:`mne.beamformer._compute_beamformer._prepare_beamformer_input`, which
     this module bypasses because it solves the beamformer in its own working
-    space. They are reproduced here -- in MNE's order and with MNE's wording --
-    so that the two entry points refuse the same inputs in the same way.
+    space. They are reproduced here in MNE's order and with MNE's wording, so
+    that the two entry points refuse the same inputs in the same way.
 
     Without them ``pick_ori='normal'`` silently reaches the filter computation,
     which takes the third orientation column of each source. On the
@@ -689,8 +691,8 @@ def make_recipsiicos_cov(
     whitener_rank : int | None | 'full'
         Rank handling passed to :func:`mne.cov.compute_whitener`. The
         default ``None`` auto-detects the covariance rank per sensor type
-        and drops the null space -- required when SSP/SSS projectors make the
-        covariance rank-deficient, since ``'full'`` would instead invert the
+        and drops the null space. This is required when SSP/SSS projectors make
+        the covariance rank-deficient, since ``'full'`` would instead invert the
         near-null directions and yield an unstable whitener.
     pct_var : float
         Fraction of whitened-leadfield variance kept by the virtual-sensor
@@ -825,8 +827,8 @@ def make_recipsiicos_lcmv(
     whitener_rank : int | None | 'full'
         Rank handling passed to :func:`mne.cov.compute_whitener`. The
         default ``None`` auto-detects the covariance rank per sensor type
-        and drops the null space -- required when SSP/SSS projectors make the
-        covariance rank-deficient, since ``'full'`` would instead invert the
+        and drops the null space. This is required when SSP/SSS projectors make
+        the covariance rank-deficient, since ``'full'`` would instead invert the
         near-null directions and yield an unstable whitener.
     pct_var : float
         Fraction of whitened-leadfield variance kept by the virtual-sensor
@@ -896,7 +898,7 @@ def make_recipsiicos_lcmv(
             f"The whitened, virtual-sensor-reduced forward has only q={q} working "
             f"dimensions, fewer than the n_orient={n_orient} source orientations, "
             f"so the working-space beamformer is underdetermined. This happens "
-            f"with a low-rank forward -- e.g. a single-shell sphere model, whose "
+            f"with a low-rank forward, e.g. a single-shell sphere model, whose "
             f"MEG leadfield is rank ~2 per location. Use a realistic BEM forward, "
             f"a fixed-orientation forward, or raise pct_var / n_virtual."
         )
@@ -950,7 +952,8 @@ def make_recipsiicos_lcmv(
     # attaches removed. That entry is a scikit-learn object, which h5io cannot
     # serialise, so leaving it in makes ``filters.save()`` raise part way through
     # and leave a truncated file that ``read_beamformer`` then loads without
-    # complaint -- surfacing much later as a KeyError inside apply_lcmv.
+    # complaint. The failure surfaces much later, as a KeyError inside
+    # apply_lcmv.
     data_cov = pick_channels_cov(data_cov, include=list(common_ch))
     data_cov.pop("estimator", None)
     if noise_cov is not None:
@@ -987,8 +990,8 @@ def _optimal_rank(p_pwr, p_cor, method, floor=0.1):
     """Rank ``K*`` at the 45-degree point of the power-vs-correlation curve.
 
     Kuznetsova et al. (2021), Section 2.4: the optimal rank is where the marginal
-    energy loss of the two subspaces balances -- the 45-degree tangent of the
-    ``(P_pwr, P_cor)`` curve, i.e. the sign change of
+    energy loss of the two subspaces balances. That is the 45-degree tangent of
+    the ``(P_pwr, P_cor)`` curve, i.e. the sign change of
     ``dP_cor/dk - dP_pwr/dk``.
 
     The two projectors traverse the rank axis in *opposite directions*, which is
@@ -1008,10 +1011,10 @@ def _optimal_rank(p_pwr, p_cor, method, floor=0.1):
       *downward* from there: ``K*`` is the last rank before the difference turns
       negative *as ``k`` decreases*, i.e. one past the final negative difference
       when read in ascending order. Scanning it upward instead would stop at the
-      first negative difference, which on any realistic forward occurs almost
-      immediately -- the difference *starts* negative, because the leading power
-      direction is also the direction the correlation subspace overlaps most --
-      and would return ``K* = 1`` or ``2``, discarding nearly all of the
+      first negative difference. On any realistic forward that occurs almost
+      immediately, because the difference *starts* negative: the leading power
+      direction is also the direction the correlation subspace overlaps most.
+      The result would be ``K* = 1`` or ``2``, discarding nearly all of the
       source-power subspace.
 
     In each case a ``floor`` on the retained power guards against a degenerate
@@ -1064,12 +1067,12 @@ def recipsiicos_rank_curve(
     ``p_cor`` against ``p_pwr`` makes this trade-off visible and its 45-degree
     point (Section 2.4) is the recommended rank.
 
-    Note that the two methods traverse the rank axis in opposite directions --
+    Note that the two methods traverse the rank axis in opposite directions:
     ``k = q^2`` is the identity for ``'recipsiicos'`` and ``k = 0`` is the
-    identity for ``'whitened'`` -- so ``p_pwr`` and ``p_cor`` rise with ``k`` for
-    the former and fall with it for the latter, and the returned ``K*`` is
-    located accordingly (Fig. 19 of the paper puts the ReciPSIICOS scale in
-    descending order for exactly this reason).
+    identity for ``'whitened'``. ``p_pwr`` and ``p_cor`` therefore rise with
+    ``k`` for the former and fall with it for the latter, and the returned
+    ``K*`` is located accordingly (Fig. 19 of the paper puts the ReciPSIICOS
+    scale in descending order for exactly this reason).
 
     Parameters
     ----------
@@ -1087,8 +1090,8 @@ def recipsiicos_rank_curve(
     whitener_rank : int | None | 'full'
         Rank handling passed to :func:`mne.cov.compute_whitener`. The
         default ``None`` auto-detects the covariance rank per sensor type
-        and drops the null space -- required when SSP/SSS projectors make the
-        covariance rank-deficient, since ``'full'`` would instead invert the
+        and drops the null space. This is required when SSP/SSS projectors make
+        the covariance rank-deficient, since ``'full'`` would instead invert the
         near-null directions and yield an unstable whitener.
     pct_var : float
         Fraction of whitened-leadfield variance kept by the virtual-sensor

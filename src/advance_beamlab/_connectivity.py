@@ -9,10 +9,10 @@ spread ("signal leakage") and coherent-source cancellation of the inverse
 operator. A single-source LCMV reconstructs each region with an independent
 filter, so the estimate :math:`\hat s_a` of region :math:`a` contains a linear
 mixture of every other active region; any region that is genuinely coupled to
-:math:`b` therefore injects a spurious :math:`a`--:math:`b` edge. An MCMV filter
-built jointly on a set of regions instead satisfies the zero-gain condition
-:math:`w_a^\mathsf{T} h_c = 0` for every *other* constrained region :math:`c`
-(Moiseev et al., 2011, Eq. 4), so those regions cannot leak into
+:math:`b` therefore injects a spurious edge between :math:`a` and :math:`b`. An
+MCMV filter built jointly on a set of regions instead satisfies the zero-gain
+condition :math:`w_a^\mathsf{T} h_c = 0` for every *other* constrained region
+:math:`c` (Moiseev et al., 2011, Eq. 4), so those regions cannot leak into
 :math:`\hat s_a` at all.
 
 Two estimators are provided:
@@ -22,19 +22,19 @@ Two estimators are provided:
   leakage between the pair. Connectivity is then computed between the two
   leakage-corrected time courses.
 - **APW-MCMV** (augmented pairwise MCMV, Nunes et al. 2020, Sec. 2.4): PW-MCMV
-  removes direct leakage but not *indirect* leakage -- if region :math:`a`
-  leaks into a neighbour :math:`k` that is coupled to :math:`b`, a spurious
-  :math:`a`--:math:`b` edge remains. APW-MCMV suppresses this by adding, for
-  every statistically significant pair, up to two neighbouring regions of each
-  source to the beamformer (order 2 to 6), which places explicit nulls on the
-  "conductor" regions.
+  removes direct leakage but not *indirect* leakage. If region :math:`a` leaks
+  into a neighbour :math:`k` that is coupled to :math:`b`, a spurious edge
+  between :math:`a` and :math:`b` remains. APW-MCMV suppresses this by adding,
+  for every statistically significant pair, up to two neighbouring regions of
+  each source to the beamformer (order 2 to 6), which places explicit nulls on
+  the "conductor" regions.
 
 The two design constraints stressed in the paper are honoured by the caller
-rather than hidden here: (i) beamformer weights should be built from a
-*band-limited* covariance matching the analysis band -- broadband weights
+rather than hidden here. (i) Beamformer weights should be built from a
+*band-limited* covariance matching the analysis band. Broadband weights
 become mis-tuned and manufacture spurious high-frequency connectivity (Nunes
-et al. 2020, Discussion), so ``data`` and ``data_cov`` should be band-filtered;
-(ii) beamformer order is kept small (APW-MCMV caps at 6) because an
+et al. 2020, Discussion), so ``data`` and ``data_cov`` should be band-filtered.
+(ii) Beamformer order is kept small (APW-MCMV caps at 6) because an
 :math:`n`-source filter spends :math:`n` of its :math:`M` degrees of freedom on
 the constraints, degrading SNR.
 
@@ -48,8 +48,8 @@ analytic Hilbert transform of the signals and then low-pass filtering to 0.5 Hz"
 downsampled envelopes. The low-pass cannot be applied from outside because
 ``envelope_correlation`` takes the Hilbert transform internally, and it is not
 cosmetic: it is what makes the AR(1) surrogate null of
-:func:`ar1_surrogate_significance` -- which gates APW-MCMV -- correctly sized.
-With ``envelope_lowpass=None`` the estimator reduces exactly to
+:func:`ar1_surrogate_significance` correctly sized, and that null is what gates
+APW-MCMV. With ``envelope_lowpass=None`` the estimator reduces exactly to
 ``envelope_correlation``.
 """
 # Authors: Sepehr Shirani <sepehrshirani@gmail.com>, <s.shirani@ucl.ac.uk>
@@ -300,8 +300,8 @@ def reconstruct_pairwise_mcmv(
     2-source MCMV beamformer constraining :math:`\{a, b\}` is built and applied
     to ``data``. Because the MCMV weights satisfy :math:`w_a^\mathsf{T} h_b = 0`
     exactly (Moiseev et al., 2011, Eq. 4), the two reconstructed time courses
-    carry no *direct* leakage of one source into the other -- the precondition
-    for unbiased pairwise connectivity (Nunes et al., 2020).
+    carry no *direct* leakage of one source into the other. That is the
+    precondition for unbiased pairwise connectivity (Nunes et al., 2020).
 
     Parameters
     ----------
@@ -354,7 +354,7 @@ def reconstruct_pairwise_mcmv(
     A separate 2-source beamformer is built for every pair, all sharing the same
     data covariance ``R`` but using the pair-specific leadfields ``H = [h_a,
     h_b]``. The reconstruction of a given source therefore differs from pair to
-    pair -- this is intrinsic to pairwise MCMV.
+    pair. This is intrinsic to pairwise MCMV.
     """
     sources = list(sources)
     pairs = _as_pairs(len(sources))
@@ -424,7 +424,7 @@ def pairwise_mcmv_connectivity(
         :func:`mne_connectivity.spectral_connectivity_epochs` (task coherence /
         phase measures) and requires ``sfreq``, ``fmin`` and ``fmax``.
         ``'cohy'`` is not accepted because coherency is complex and this
-        function returns a real matrix -- use ``'coh'`` or ``'imcoh'``.
+        function returns a real matrix. Use ``'coh'`` or ``'imcoh'``.
     sfreq : float | None
         Sampling frequency. Required for the spectral methods; for
         ``method='envelope'`` it is needed by ``envelope_lowpass`` /
@@ -826,8 +826,8 @@ def ar1_surrogate_significance(
        :math:`x_t = \varphi x_{t-1} + \varepsilon_t` to each region's
        ``reference_time_courses``, capturing its temporal smoothness.
     2. Generate ``n_surrogates`` sets of *independent* Gaussian AR(1) source
-       signals with those per-region coefficients -- surrogates with realistic
-       temporal structure but no genuine pairwise coupling.
+       signals with those per-region coefficients. These surrogates have
+       realistic temporal structure but no genuine pairwise coupling.
     3. Compute the same envelope connectivity for every surrogate pair, apply
        the Fisher :math:`z`-transform, and take the null mean and standard
        deviation.
@@ -892,7 +892,7 @@ def ar1_surrogate_significance(
     source signals, which by construction contain no leakage.
 
     An edge whose surrogate null degenerates (zero or non-finite standard
-    deviation -- for instance because the surrogates are too short for the
+    deviation, for instance because the surrogates are too short for the
     envelope filter) is reported as *not* significant, with a warning; a
     degenerate null must never read as evidence of an effect.
     """

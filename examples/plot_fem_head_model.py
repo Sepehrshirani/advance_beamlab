@@ -9,7 +9,7 @@ Every forward solution MNE-Python can compute uses the boundary element method:
 nested, closed, homogeneous surfaces for scalp, outer skull and inner skull.
 That model has no way to represent the cerebrospinal fluid, the split of the
 skull into compact and spongy bone, or the openings at the orbits and the
-auditory meatus -- and for EEG those omissions bias the forward field, because
+auditory meatus. For EEG those omissions bias the forward field, because
 current has to flow *through* all of it to reach the electrodes. The finite
 element method (FEM) discretises the whole head volume instead and gives every
 tetrahedron its own conductivity. MNE-Python has no FEM solver.
@@ -19,9 +19,9 @@ is a six-tissue FEM model of the ICBM152 template, solved once at high
 resolution and distributed as a lead field for 231 electrodes of the 10-05
 system at 74382 cortical nodes.
 :func:`~advance_beamlab.read_ny_head_forward` wraps it as an ordinary
-:class:`mne.Forward`, which is the only thing any beamformer needs -- so
+:class:`mne.Forward`, which is the only thing any beamformer needs.
 :func:`mne.beamformer.make_lcmv` and the multi-source methods in this package
-run on it unchanged.
+therefore run on it unchanged.
 
 Three things are shown: what the FEM forward differs from a BEM forward *by*,
 that the beamformers localise correctly on it, and where the approach stops
@@ -69,9 +69,9 @@ print(fwd)
 # %%
 # Note the rank. The lead field is supplied in common average reference, so it
 # is rank deficient by exactly one and any data generated from it will be too.
-# That is not a defect to be regularised away -- it is what average referencing
-# *means* -- and every beamformer here resolves it through
-# :func:`mne.compute_rank` rather than inverting a singular matrix.
+# That is not a defect to be regularised away: it is what average referencing
+# *means*. Every beamformer here resolves it through :func:`mne.compute_rank`
+# rather than inverting a singular matrix.
 
 gain = fwd["sol"]["data"]
 print(
@@ -151,9 +151,9 @@ ax2.set(
 # Both surfaces travel with the model, so they can be rendered directly. The
 # scalp is drawn here as well as the cortex, and it is worth doing: against the
 # cortex alone the montage looks like a cloud of points floating around and
-# through the brain. It is not. Every electrode lies on this scalp surface --
-# median 4.6 mm from the nearest vertex, on a mesh whose own spacing is about
-# 10 mm -- and the closest any electrode comes to the cortex is 11.2 mm, which
+# through the brain. It is not. Every electrode lies on this scalp surface
+# (median 4.6 mm from the nearest vertex, on a mesh whose own spacing is about
+# 10 mm), and the closest any electrode comes to the cortex is 11.2 mm, which
 # is scalp plus skull plus CSF, as it should be.
 #
 # The points reaching well below the brain are real too: the set includes four
@@ -163,7 +163,7 @@ ax2.set(
 #
 # This is also how a source estimate on this model is visualised: the source
 # space is the model's own mesh rather than a FreeSurfer subject, so
-# ``stc.plot()`` -- which looks a subject up in a ``subjects_dir`` -- does not
+# ``stc.plot()``, which looks a subject up in a ``subjects_dir``, does not
 # apply here.
 
 scalp_rr, scalp_tris = ny_head_scalp()
@@ -202,7 +202,8 @@ ax.set_axis_off()
 # -----------------
 # Nothing below is FEM-specific: this is the ordinary pipeline, with ``fwd``
 # supplied by the FEM reader. Two nearby, near-perfectly correlated sources are
-# simulated -- the regime in which a single-source LCMV is expected to cancel.
+# simulated. This is the regime in which a single-source LCMV is expected to
+# cancel.
 #
 # Read the result below carefully, because it does not go the textbook way: on
 # this array LCMV finds both sources exactly, and it is the greedy MCMV *search*
@@ -299,7 +300,7 @@ ax.set_axis_off()
 # A precomputed template lead field can exist for EEG and cannot exist for MEG,
 # and the reason is geometric. EEG electrodes are placed by a standardised
 # layout, so "Cz on the average head" is the same position for every recording
-# made with that montage -- solve once, reuse forever. MEG sensors sit in a
+# made with that montage. Solve once, reuse forever. MEG sensors sit in a
 # fixed helmet while the head sits wherever the participant put it, so the
 # sensor positions *relative to the brain* differ for every session and are
 # recorded per session in ``info['dev_head_t']``. There is no template MEG array

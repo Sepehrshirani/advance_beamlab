@@ -15,7 +15,7 @@ Where to go next
       :link-type: doc
 
       A decision guide keyed on the data you have, with what this package
-      actually demonstrates for each method -- including the cases where a
+      actually demonstrates for each method, including the cases where a
       plain LCMV is the better answer.
 
    .. grid-item-card:: Examples

@@ -17,7 +17,7 @@ The multi-source (MCMV) beamformer constrains both sources in one filter set, so
 each filter passes its own source with unit gain while placing an *exact* null
 on the other constrained source (Moiseev et al., 2011, Eq. 5). That exact null
 is what LCMV lacks, and it is imposed by construction rather than estimated from
-the data -- so MCMV recovers the full amplitude at any correlation.
+the data. MCMV therefore recovers the full amplitude at any correlation.
 
 Two points are worth stating because they are easy to get wrong. First, this
 cancellation does **not** require the sources to be spatially close: it is driven
@@ -55,7 +55,7 @@ from advance_beamlab import apply_mcmv, make_mcmv
 # %%
 # Build a self-contained EEG forward: a standard 10-20 montage on a
 # single-shell sphere, converted to fixed orientation. Fixing the orientation
-# keeps the comparison below clean -- the true orientation is then known and
+# keeps the comparison below clean. The true orientation is then known and
 # shared by both beamformers, so any difference between them is the constraint
 # and not an orientation search.
 #
@@ -63,7 +63,7 @@ from advance_beamlab import apply_mcmv, make_mcmv
 # assume: ``pick_ori="max-power"`` does not escape the cancellation. Measured on
 # this same fixture, the amplitude a free-orientation LCMV recovers with
 # ``max-power`` exceeds the fixed-orientation one by a factor of 1.00, 1.03,
-# 1.05 and 1.18 at r = 0.5, 0.9, 0.95 and 0.99 -- both collapse together as the
+# 1.05 and 1.18 at r = 0.5, 0.9, 0.95 and 0.99. Both collapse together as the
 # correlation rises. Re-optimising one source's orientation cannot undo a
 # cancellation that comes from the *other* source being in the same filter.
 
@@ -101,7 +101,7 @@ print(
 # The overlap is the cosine between the two topographies: 0 would be completely
 # distinguishable sensor patterns, 1 indistinguishable. The value printed above is
 # well short of 1, so the cancellation demonstrated below is not a consequence of
-# the two sources being hard to tell apart spatially -- it is driven entirely by
+# the two sources being hard to tell apart spatially. It is driven entirely by
 # the correlation of their time courses, which is what the sweep varies.
 
 # %%
@@ -268,7 +268,7 @@ ax.legend(loc="upper right")
 # beamformers use unit gain, their output is on the same scale as the injected
 # signal, so we can overlay the true source directly. We quantify recovery two
 # ways: peak amplitude (does the source keep its size?) and waveform fidelity
-# (the correlation with the true time course -- does it keep its shape?).
+# (the correlation with the true time course: does it keep its shape?).
 
 lcmv = make_lcmv(
     evoked.info,

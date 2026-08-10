@@ -20,16 +20,16 @@ download):
   while ``A`` carries an independent envelope.
 
 ``A`` and ``B`` therefore share no common drive. Their *realised* envelope
-correlation over a finite recording is not exactly zero -- an envelope is slowly
+correlation over a finite recording is not exactly zero: an envelope is slowly
 varying, so a recording holds only a limited number of independent envelope
-samples and their sample correlation scatters about zero -- but that realised
+samples and their sample correlation scatters about zero. Even so, that realised
 value is known exactly here, and it is the target a good estimator should
 reproduce. Yet two things can push an estimate away from it:
 
-1. **Direct leakage / cancellation** -- a single-source LCMV reconstructs each
+1. **Direct leakage / cancellation**: a single-source LCMV reconstructs each
    region with an independent filter, so :math:`\hat s_A` is a mixture of every
    active source and picks up ``B`` directly.
-2. **Indirect leakage** -- even after we forbid ``A`` and ``B`` from leaking into
+2. **Indirect leakage**: even after we forbid ``A`` and ``B`` from leaking into
    each other (a 2-source MCMV), :math:`\hat s_A` still contains a copy of the
    *conductor* ``C``; because ``C`` is coupled to ``B``, that copy correlates
    with :math:`\hat s_B` and a spurious edge survives.
@@ -43,8 +43,9 @@ the *indirect* path. The leakage coefficient
 nonzero for PW-MCMV, machine-zero for APW-MCMV.
 
 Two details follow the paper. Connectivity is amplitude-envelope correlation
-computed *plainly* (no orthogonalisation -- MCMV already removes leakage), and
-the weights are built from a band-limited covariance matching the analysis band.
+computed *plainly*, with no orthogonalisation, because MCMV already removes
+leakage. The weights are built from a band-limited covariance matching the
+analysis band.
 """
 # Authors: Sepehr Shirani <sepehrshirani@gmail.com>, <s.shirani@ucl.ac.uk>
 #          Muzhi Wang
@@ -201,8 +202,8 @@ conn_pw = pairwise_mcmv_connectivity(
 
 # %%
 # **Which edges are worth re-estimating?** APW-MCMV is more expensive than
-# PW-MCMV -- a higher-order beamformer per pair -- so the paper applies it only
-# to edges that survive a significance test. That test is
+# PW-MCMV (a higher-order beamformer per pair), so the paper applies it only to
+# edges that survive a significance test. That test is
 # :func:`~advance_beamlab.ar1_surrogate_significance`: it fits an AR(1) model to
 # each region's reconstructed time course, builds surrogates with the same
 # temporal smoothness but no coupling, and thresholds the Fisher-transformed
@@ -246,7 +247,7 @@ for i in range(3):
 #
 # The rejection of ``A``--``B`` is the test working. By this point PW-MCMV has
 # already pulled that edge down to -0.093, and a screen calibrated against an
-# AR(1) null is designed to discard exactly such a small residual -- so on this
+# AR(1) null is designed to discard exactly such a small residual. On this
 # simulation the spurious edge would never reach APW-MCMV at all. The two
 # corrections are complementary rather than redundant.
 #
@@ -260,8 +261,8 @@ for i in range(3):
 # **APW-MCMV connectivity.** To exercise the augmentation on the edge whose
 # correction this example is about, we hand it a mask that includes ``A``--``B``
 # as well, rather than the screen's own output. In a real analysis you would pass
-# ``screen`` straight through. For the A-B pair the conductor ``C`` -- within
-# 4 cm of ``A`` and carrying a significant edge -- is added to the beamformer.
+# ``screen`` straight through. For the A-B pair the conductor ``C`` is added to
+# the beamformer: it lies within 4 cm of ``A`` and carries a significant edge.
 
 significance = np.array(screen)
 significance[0, 1] = significance[1, 0] = True  # force the A-B pair through
@@ -319,8 +320,8 @@ print(f"\nleakage alpha_C:  PW-MCMV = {alpha_c_pw:.3f}   APW-MCMV = {alpha_c_apw
 # driven by independent envelopes, but an envelope is by construction slowly
 # varying, so a finite recording contains only a limited number of independent
 # envelope samples and their sample correlation lands a little away from zero by
-# chance. That realised value, not zero, is the target every method should hit --
-# and it is printed above.
+# chance. That realised value, not zero, is the target every method should hit.
+# It is printed above.
 #
 # LCMV is far off on the A-B edge and gets the sign wrong. PW-MCMV removes the
 # direct leakage and closes most of the gap. APW-MCMV, which additionally nulls
@@ -355,8 +356,8 @@ fig.tight_layout()
 # %%
 # **The leakage coefficient.** On a log scale, the conductor leakage
 # :math:`\alpha_C = \mathbf{w}_A^{\mathsf T}\mathbf{g}_C` drops from ~0.1 for
-# PW-MCMV to machine zero once ``C`` is added by APW-MCMV -- the exact null that
-# closes the indirect-leakage path.
+# PW-MCMV to machine zero once ``C`` is added by APW-MCMV. That is the exact null
+# that closes the indirect-leakage path.
 
 fig2, ax = plt.subplots(figsize=(5, 4.2))
 ax.bar(

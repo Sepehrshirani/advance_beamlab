@@ -10,14 +10,14 @@ because it is power-sensitive and collapses nearby correlated sources.
 
 ABMC has two stages:
 
-- **Stage 1 -- sparse Bayesian learning (SBL) covariance** (:func:`sbl_covariance`,
+- **Stage 1: sparse Bayesian learning (SBL) covariance** (:func:`sbl_covariance`,
   Eqs. 5-13). A Champagne-style type-II maximum-likelihood fit of per-source
   prior variances :math:`\alpha` and a diagonal sensor-noise covariance
   :math:`\Lambda` yields a *model* covariance :math:`R = G\alpha G^\mathsf{T} +
   \Lambda`. Because the sources are modelled as mutually uncorrelated
   (:math:`\alpha` diagonal), :math:`R` does not carry the cross-source
   correlation structure that makes an LCMV beamformer cancel correlated sources.
-- **Stage 2 -- template-constrained beamformer** (Eqs. 14-19). A
+- **Stage 2: template-constrained beamformer** (Eqs. 14-19). A
   minimum-variance beamformer with the usual distortionless constraint *plus* a
   maximum-cross-correlation-to-template constraint that locks the output onto the
   known DR/IED morphology. The paper reaches it by gradient descent; this
@@ -32,8 +32,8 @@ convergence rate" and reports no value for it, nor for the step size, iteration
 count or tolerance. That is not an omission: the useful setting depends on the
 recording, and the paper's own data is 20-32 subdural contacts, a different
 regime from a whole-head MEG array. :func:`abmc_stability_curve` performs that
-adjustment on the data at hand -- a coarse logarithmic sweep to find the range
-where the constraint is neither inert nor divergent, then a refinement around
+adjustment on the data at hand. It runs a coarse logarithmic sweep to find the
+range where the constraint is neither inert nor divergent, then refines around
 the widest run over which the localised peak does not move. ``P='auto'`` uses
 it. Selection is by stability rather than by template match, because the match
 rises with :math:`P` by construction and maximising it would be circular.
@@ -41,8 +41,8 @@ rises with :math:`P` by construction and maximising it would be circular.
 Localization follows the paper's criterion: the source is the grid location whose
 beamformer output has the **maximum cross-correlation with the desired template**
 :math:`u` at the best lag (not the output power, which is what LCMV maximizes).
-The template is supplied by the caller -- in the paper, expert-annotated IED or DR
-morphologies -- so ABMC can be steered to any known target waveform, not a fixed
+The template is supplied by the caller (in the paper, expert-annotated IED or DR
+morphologies), so ABMC can be steered to any known target waveform, not a fixed
 shape. Both stages are provided here: :func:`sbl_covariance` (Stage 1) and
 :func:`make_abmc` (Stage 2).
 
@@ -58,9 +58,9 @@ singular on the first iteration. Second, a *diagonal* :math:`\Lambda` is only
 meaningful when the channels share a unit, which magnetometers (T),
 gradiometers (T/m) and EEG (V) do not.
 
-Both are handled by rescaling every channel by its noise standard deviation --
-from ``noise_cov`` when one is supplied, otherwise from MNE's ad-hoc per-type
-model -- fitting there, and undoing the scaling on the returned covariance. A
+Both are handled by rescaling every channel by its noise standard deviation
+(from ``noise_cov`` when one is supplied, otherwise from MNE's ad-hoc per-type
+model), fitting there, and undoing the scaling on the returned covariance. A
 diagonal rescaling maps the model class onto itself (a diagonal :math:`\Lambda`
 stays diagonal), so this is a change of working units rather than a change of
 model, and for a single sensor type it is a global scalar that leaves the fit
@@ -101,7 +101,7 @@ from scipy.linalg import cho_factor, cho_solve
 # logging level and are reliably catchable by ``pytest.warns``.
 # Reuse the channel-selection helpers from the MCMV module so that every
 # algorithm in the package reads the forward, the data and the covariances in
-# the same channel space -- in particular, so that all of them drop
+# the same channel space. In particular, that makes all of them drop
 # ``info['bads']``, which ``mne.compute_covariance`` has already dropped.
 from ._mcmv import (
     _align_channels,
@@ -125,12 +125,12 @@ def _forward_rows(forward, ch_names):
 def _aligned_leadfield_and_cov(info, forward, data_cov, noise_cov=None):
     """Return leadfield ``G`` and covariance ``C`` on the common good channels.
 
-    ``G`` is ``(n_channels, n_columns)`` -- one column per source for a
+    ``G`` is ``(n_channels, n_columns)``: one column per source for a
     fixed-orientation forward, three per source (x, y, z) for a free-orientation
-    forward -- and ``C`` is the matching ``(n_channels, n_channels)`` block of
-    ``data_cov``, both ordered by the returned ``ch_names``. Bad channels are
-    excluded and, when a noise covariance is given, channels it does not cover
-    are dropped, exactly as in :func:`~advance_beamlab.make_mcmv`.
+    forward. ``C`` is the matching ``(n_channels, n_channels)`` block of
+    ``data_cov``, and both are ordered by the returned ``ch_names``. Bad channels
+    are excluded and, when a noise covariance is given, channels it does not
+    cover are dropped, exactly as in :func:`~advance_beamlab.make_mcmv`.
     """
     ch_names, cov = _align_channels(info, forward, data_cov)
     ch_names, cov = _intersect_noise_cov(ch_names, cov, noise_cov)
@@ -170,8 +170,8 @@ def _model_precision(leadfield, alpha, lam):
 
     Both come from a single Cholesky factorisation. Taking the log-determinant
     from the factor is exact and warning-free, whereas evaluating
-    ``slogdet(inv(R^-1))`` -- an inverse of an inverse -- loses accuracy and, for
-    a covariance in SI units, under- or overflows on the way.
+    ``slogdet(inv(R^-1))`` (an inverse of an inverse) loses accuracy and, for a
+    covariance in SI units, under- or overflows on the way.
     """
     model = (leadfield * alpha) @ leadfield.T
     model[np.diag_indices_from(model)] += lam
@@ -403,7 +403,7 @@ class ABMCResult:
     Parameters
     ----------
     stc : mne.SourceEstimate | mne.VolSourceEstimate | mne.MixedSourceEstimate
-        The localization map -- the per-grid-point template match (see
+        The localization map: the per-grid-point template match (see
         ``template_match``), as a single-time source estimate for plotting. Its
         class follows the source-space type of the forward, so it can be passed
         to :meth:`~mne.SourceEstimate.plot`, source morphing
@@ -415,9 +415,9 @@ class ABMCResult:
         estimated source.
     power : ndarray, shape (n_sources,)
         The beamformer output variance :math:`\tfrac12 W^\mathsf{T}RW` summed
-        over orientations -- the filter's minimisation objective, and what LCMV
-        would localise on. It is reported as a diagnostic only: neither the scan
-        nor the orientation choice uses it, both being driven by
+        over orientations. This is the filter's minimisation objective, and what
+        LCMV would localise on. It is reported as a diagnostic only: neither the
+        scan nor the orientation choice uses it, both being driven by
         ``template_match``.
     lag : ndarray, shape (n_sources,)
         Template lag :math:`j^*` (samples) fixed per grid point for the winning
@@ -433,9 +433,9 @@ class ABMCResult:
     converged : bool
         Whether the weight update met the tolerance before ``max_iter``.
     blowup_fraction : float
-        Fraction of grid columns whose weights grew anomalously large -- a signal
-        that ``P`` is too large for this segment (cf. the paper's non-convergence
-        regime). Above ~0.05, lower ``P``.
+        Fraction of grid columns whose weights grew anomalously large, which
+        signals that ``P`` is too large for this segment (cf. the paper's
+        non-convergence regime). Above ~0.05, lower ``P``.
 
     References
     ----------
@@ -764,8 +764,8 @@ def _plateau(peaks, viable):
 
     Returns ``(start, stop)`` inclusive, or ``None`` if nothing is viable. The
     plateau, not the best score, is the selection criterion: the template match
-    rises with ``P`` by construction -- the constraint pushes the output towards
-    the template -- so maximising it would be circular. A range of ``P`` over
+    rises with ``P`` by construction (the constraint pushes the output towards
+    the template), so maximising it would be circular. A range of ``P`` over
     which the *localised source does not move* is evidence that the answer is
     determined by the data rather than by the setting.
     """
@@ -829,17 +829,17 @@ def abmc_stability_curve(
     :math:`\Pi(I - \mu R)`, with :math:`\Pi = I - d g^\mathsf{T}/(g^\mathsf{T}d)`
     an *oblique* projector and :math:`d = g + Pc`. The obliquity, and hence the
     norm of :math:`\Pi`, grows as :math:`g^\mathsf{T}d = g^\mathsf{T}g +
-    P\,g^\mathsf{T}c` shrinks -- so wherever :math:`g^\mathsf{T}c < 0` there is a
-    :math:`P` beyond which the paper's descent is unstable. That is the
-    "threshold for each segment" the paper reports without deriving, and it is
-    why the viable range has to be found per dataset rather than assumed.
+    P\,g^\mathsf{T}c` shrinks. Consequently, wherever :math:`g^\mathsf{T}c < 0`
+    there is a :math:`P` beyond which the paper's descent is unstable. That is
+    the "threshold for each segment" the paper reports without deriving, and it
+    is why the viable range has to be found per dataset rather than assumed.
 
     Selection is by stability rather than by score, deliberately. The template
-    match increases with :math:`P` by construction -- a stronger constraint pulls
-    the output towards the template whether or not the location is right -- so
-    choosing the :math:`P` that maximises it would be circular. A plateau over
-    which the answer is unchanged is evidence about the data; a maximum of a
-    self-referential score is not.
+    match increases with :math:`P` by construction: a stronger constraint pulls
+    the output towards the template whether or not the location is right.
+    Choosing the :math:`P` that maximises it would therefore be circular. A
+    plateau over which the answer is unchanged is evidence about the data; a
+    maximum of a self-referential score is not.
 
     Parameters
     ----------
@@ -1026,11 +1026,12 @@ def make_abmc(
 
     Following the paper, the source is localised by the **maximum cross-correlation
     between the beamformer output and the template**,
-    :math:`|\mathrm{corr}(W^\mathsf{T}X, u_{j^*})|`, maximised over orientation --
-    the grid location whose output best matches the desired morphology at the best
-    lag. That same criterion picks the orientation at each grid point. The output
-    variance :math:`\tfrac12 W^\mathsf{T}RW` is the beamformer's minimisation
-    *objective*, not the localiser, and is returned only as a diagnostic.
+    :math:`|\mathrm{corr}(W^\mathsf{T}X, u_{j^*})|`, maximised over orientation:
+    the estimate is the grid location whose output best matches the desired
+    morphology at the best lag. That same criterion picks the orientation at each
+    grid point. The output variance :math:`\tfrac12 W^\mathsf{T}RW` is the
+    beamformer's minimisation *objective*, not the localiser, and is returned
+    only as a diagnostic.
 
     Parameters
     ----------
@@ -1044,11 +1045,11 @@ def make_abmc(
         The sensor data segment :math:`X` to localise. Epochs are not accepted;
         average or concatenate them first.
     template : ndarray, shape (n_times,)
-        The desired-source waveform :math:`u` to localise -- the morphology of the
-        target activity, supplied by the caller and the same length as ``data``. In
-        the paper these are expert-annotated IED or DR templates, but any known
-        target morphology may be passed; ABMC is steered to the location whose
-        output best matches this template (at the best lag). Only its shape
+        The desired-source waveform :math:`u` to localise. This is the morphology
+        of the target activity, supplied by the caller and the same length as
+        ``data``. In the paper these are expert-annotated IED or DR templates, but
+        any known target morphology may be passed; ABMC is steered to the location
+        whose output best matches this template (at the best lag). Only its shape
         matters: the readout is invariant to its amplitude.
     cov : mne.Covariance | None
         Covariance :math:`R` for the beamformer. If ``None``, it is estimated
@@ -1082,8 +1083,8 @@ def make_abmc(
     method : 'closed-form' | 'iterative'
         How Stage 2 is solved. ``'closed-form'`` (default) evaluates the fixed
         point of Eqs. 17-19 directly. ``'iterative'`` runs the paper's gradient
-        descent verbatim, which is slower -- its step count grows with the
-        condition number of :math:`R` -- and is provided for exact reproduction;
+        descent verbatim, which is slower (its step count grows with the
+        condition number of :math:`R`) and is provided for exact reproduction;
         the two agree once the descent has converged.
     mu : float | None
         Descent step size, used only when ``method='iterative'``. ``None`` uses
@@ -1195,7 +1196,7 @@ def make_abmc_dictionary(
 
     Shirani et al. (2024) :footcite:`Shirani2024` match several expert-annotated
     templates per case. Because the sparse Bayesian covariance :math:`R` depends
-    only on the data -- not on the template -- it is estimated **once** here and
+    only on the data and not on the template, it is estimated **once** here and
     reused for every template, so this is materially cheaper than calling
     :func:`make_abmc` once per template. Stage 2 (the template-constrained
     beamformer) is then run independently for each template, and the
@@ -1215,7 +1216,7 @@ def make_abmc_dictionary(
     templates : dict of {label: ndarray} | sequence of ndarray
         The desired-source waveforms :math:`u` to localise, each the same length
         as ``data``. A plain sequence is labelled by integer position. Each entry
-        is handled independently -- ABMC is run once per template.
+        is handled independently: ABMC is run once per template.
     cov : mne.Covariance | None
         Covariance :math:`R` for the beamformer, shared across all templates. If
         ``None`` (default) it is estimated once from ``data`` by
@@ -1239,8 +1240,8 @@ def make_abmc_dictionary(
     Returns
     -------
     results : dict
-        ``{label: ABMCResult}`` -- one ABMC scan per template, keyed by the
-        dictionary key (or by integer position for a sequence).
+        One ABMC scan per template, returned as ``{label: ABMCResult}`` and keyed
+        by the dictionary key (or by integer position for a sequence).
 
     See Also
     --------
@@ -1267,7 +1268,7 @@ def make_abmc_dictionary(
                 f"length {n_times}."
             )
 
-    # estimate the SBL covariance once -- it does not depend on the template
+    # estimate the SBL covariance once: it does not depend on the template
     if cov is None:
         data_cov = Covariance(
             x @ x.T / n_times, ch_names, bads=[], projs=[], nfree=n_times

@@ -15,8 +15,8 @@ cancels them against each other and the weaker one never rises above the
 background. Scanning harder does not help, because the map itself is wrong.
 
 The sequential search of :footcite:`Moiseev2011` breaks the deadlock by changing
-the map instead. It finds the strongest source, *constrains* it, and rescans --
-and because a constrained source is nulled exactly rather than suppressed
+the map instead. It finds the strongest source, *constrains* it, and rescans.
+Because a constrained source is nulled exactly rather than suppressed
 adaptively, the sources it was cancelling stop being cancelled. A source that was
 invisible in the first map can be the global maximum of the second.
 
@@ -98,7 +98,7 @@ times = np.arange(n_times) / info["sfreq"] - 0.2
 active = times >= 0.0
 
 # 10 Hz oscillations at equal phase steps, giving pairwise correlations of 0.95,
-# 0.95 and 0.80 -- the regime a single-source scan cannot resolve.
+# 0.95 and 0.80. That is the regime a single-source scan cannot resolve.
 rho = 0.95
 phi = np.arccos(rho)
 sources = np.zeros((3, n_times))
@@ -163,7 +163,7 @@ print(f"first three recover {sum(t in found[:3] for t in truth)} of the 3 true s
 # global maximum. The rank of each true location is printed in the panel titles.
 #
 # The x-axis is the grid index of a 3-D volume, so neighbouring indices are not
-# neighbouring locations -- the sawtooth is that ordering, not noise.
+# neighbouring locations. The sawtooth is that ordering, not noise.
 
 grid = np.arange(fwd["nsource"])
 fig, axes = plt.subplots(3, 1, figsize=(9, 7.2), sharex=True)
@@ -203,7 +203,7 @@ fig.tight_layout()
 # the iteration it was added. Genuine sources give large values; once the search
 # starts fitting noise it drops to a baseline and stays there. That baseline is
 # generally **not** one and has to be judged from the data, as Moiseev et al.
-# stress -- which is why ``scan_mcmv`` returns the whole sequence rather than
+# stress. That is why ``scan_mcmv`` returns the whole sequence rather than
 # stopping on a threshold of its own.
 #
 # Note the sequence is not monotone. The search is greedy, so the order in which
@@ -244,7 +244,7 @@ for localizer in ("mai", "mpz"):
 # %%
 # **Using the result.** ``result['filters']`` is the jointly-optimal MCMV
 # beamformer for the discovered set, ready for
-# :func:`~advance_beamlab.apply_mcmv` -- no second call needed. Because the three
+# :func:`~advance_beamlab.apply_mcmv`. No second call is needed. Because the three
 # sources were found together, each filter nulls the other two, so the recovered
 # time courses are not contaminated by the partners they were cancelled by.
 
@@ -273,13 +273,13 @@ fig.tight_layout()
 # your own. :func:`~advance_beamlab.localizer_value` evaluates a Table-1 localizer
 # for a given set of constrained sources, and
 # :func:`~advance_beamlab.optimal_orientation` returns, in closed form, the
-# orientation of a candidate source that maximises it -- no search over angles.
+# orientation of a candidate source that maximises it, with no search over angles.
 #
 # Both take the covariances explicitly, so they work in whatever space you hand
 # them. Use the **noise-whitened** space, as the scan does internally: there the
-# noise covariance is the identity, and -- more importantly -- an average
-# referenced EEG covariance is rank deficient, so inverting it raw would make the
-# localizer meaningless.
+# noise covariance is the identity. More importantly, an average referenced EEG
+# covariance is rank deficient, so inverting it raw would make the localizer
+# meaningless.
 
 whitener, _ = compute_whitener(noise_cov, epochs.info, pca=True, verbose=False)
 R_w = whitener @ data_cov.data @ whitener.T

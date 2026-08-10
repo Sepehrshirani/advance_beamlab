@@ -6,8 +6,8 @@ MCMV joint reconstruction of correlated MEG sources
 ===================================================
 
 A single-source LCMV reconstructs each location with its own filter. When two
-sources are temporally correlated -- as the left and right auditory cortices are
-during binaural stimulation -- each filter treats the other source as
+sources are temporally correlated (as the left and right auditory cortices are
+during binaural stimulation), each filter treats the other source as
 interference and partially nulls it, so the recovered time courses are
 attenuated and mutually contaminated.
 
@@ -19,7 +19,7 @@ the per-source LCMV time courses with the MCMV joint reconstruction.
 
 The covariances are shrinkage-regularised (the correct estimator across the
 magnetometer/gradiometer unit scales), and the forward is the full whole-brain
-BEM solution -- MCMV constrains only the two chosen sources, so no decimation is
+BEM solution. MCMV constrains only the two chosen sources, so no decimation is
 needed.
 """
 # Authors: Sepehr Shirani <sepehrshirani@gmail.com>, <s.shirani@ucl.ac.uk>
@@ -62,8 +62,8 @@ evoked = epochs.average()
 # This matters, and it is the main practical lesson of this example: a beamformer
 # is tuned by the covariance it is built from. Over 50-200 ms the bilateral N100
 # is diluted by later, hemisphere-specific activity, and the two auditory sources
-# come out essentially uncorrelated (r = -0.13) -- so there is no cancellation for
-# MCMV to undo and it gains nothing. Restricted to the N100 the same two sources
+# come out essentially uncorrelated (r = -0.13). There is then no cancellation for
+# MCMV to undo, and it gains nothing. Restricted to the N100 the same two sources
 # are strongly correlated (r = +0.55), which is the regime MCMV exists for.
 data_cov = mne.compute_covariance(epochs, tmin=0.08, tmax=0.13, method="shrunk")
 noise_cov = mne.compute_covariance(epochs, tmin=None, tmax=0.0, method="shrunk")
@@ -128,7 +128,7 @@ if brain is not None:
 # with *unit gain* so the recovered amplitudes are directly comparable. Unit gain
 # reads out the physical source amplitude, so the two beamformers agree exactly
 # when there is nothing to cancel and diverge only through correlated-source
-# cancellation -- unlike unit-noise-gain, which offsets the two even when the
+# cancellation. By contrast, unit-noise-gain offsets the two even when the
 # sources are independent.
 
 lcmv_ug = make_lcmv(
@@ -179,8 +179,8 @@ axes[-1].set_xlabel("time (ms)")
 # Unlike a set of independent LCMV filters, MCMV also returns the joint source
 # covariance directly (:func:`~advance_beamlab.apply_mcmv_cov`). Normalised to a
 # correlation matrix, its off-diagonal is the recovered coupling between the two
-# hemispheres -- a quantity the joint constraint estimates and per-source LCMV
-# cannot provide at all.
+# hemispheres. That is a quantity the joint constraint estimates and per-source
+# LCMV cannot provide at all.
 
 src_cov = apply_mcmv_cov(data_cov, mcmv)
 std = np.sqrt(np.diag(src_cov))
@@ -207,15 +207,15 @@ fig.colorbar(im, ax=ax, label="correlation")
 #
 # The minimum-norm family is **linear**: the operator is built from the forward
 # and the noise covariance alone and never sees the data covariance. That makes it
-# immune to the correlated-source cancellation this whole example is about --
-# there is no adaptive null to place, so there is nothing to cancel with. A
-# beamformer buys its selectivity by adapting to the data, and inherits the
-# cancellation problem in exchange. MCMV's contribution is to keep the adaptive
-# filter while removing the cancellation, for sources you can name in advance.
+# immune to the correlated-source cancellation this whole example is about. There
+# is no adaptive null to place, so there is nothing to cancel with. A beamformer
+# buys its selectivity by adapting to the data, and inherits the cancellation
+# problem in exchange. MCMV's contribution is to keep the adaptive filter while
+# removing the cancellation, for sources you can name in advance.
 #
 # It is tempting to add "and the beamformer is sharper", and on this recording
-# that is simply not true. Measured like for like -- the fraction of cortex left
-# above half the peak, for the absolute source amplitude at the same instant --
+# that is simply not true. Measured like for like (the fraction of cortex left
+# above half the peak, for the absolute source amplitude at the same instant),
 # the three are comparable, with dSPM the most compact of them. Resolution is not
 # what separates these methods here; their behaviour under correlated sources is.
 
@@ -241,7 +241,7 @@ bars = ax.bar(names, [extent[n] * 100 for n in names], color=["C0", "C0", "C3"])
 ax.bar_label(bars, fmt="%.1f%%", padding=3)
 ax.set(ylabel="cortex above half maximum (%)", ylim=(0, max(extent.values()) * 130))
 ax.set_title(
-    "Comparable spatial extent at the N100 -- resolution is not the difference",
+    "Comparable spatial extent at the N100: resolution is not the difference",
     loc="left",
     fontsize=10,
 )
@@ -252,8 +252,8 @@ ax.grid(axis="x", visible=False)
 # need. If you want a map with no assumption about how many sources there are,
 # and no risk of correlated-source cancellation, a linear method remains the
 # safer default. If you have specific, named locations whose time courses you
-# need recovered without them cancelling each other -- the bilateral auditory
-# pair here -- that is what the joint constraint is for. They are complementary
-# tools, and this example is about the second case.
+# need recovered without them cancelling each other (the bilateral auditory pair
+# here), that is what the joint constraint is for. They are complementary tools,
+# and this example is about the second case.
 
 # sphinx_gallery_thumbnail_number = 1
