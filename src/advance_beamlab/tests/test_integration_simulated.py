@@ -211,7 +211,14 @@ def test_mcmv_unit_gain_is_scale_invariant(sphere_setup):
         scaled_evoked,
         make_mcmv(info, fwd, scaled_data, sources, noise_cov=scaled_noise),
     )
-    np.testing.assert_allclose(b, a * s, rtol=1e-8)
+    # The invariance is exact in algebra and only round-off limited in practice:
+    # measured across scales from 1e1 to 1e6 the deviation stays between 3e-9 and
+    # 1.3e-8 and does *not* grow with ``s``, which is the signature of rounding
+    # inside the regularised pseudoinverse rather than of a scale dependence. At
+    # rtol=1e-8 the test sat exactly on that noise floor and went red or green
+    # with the runner's BLAS. A genuine scale-dependence bug would show up at
+    # order one, so 1e-6 loses nothing and stops the flapping.
+    np.testing.assert_allclose(b, a * s, rtol=1e-6)
 
 
 def test_apply_mcmv_cov_matches_time_domain(sphere_setup):

@@ -66,8 +66,8 @@ v7.3/HDF5 file; everything else works without it.
 ```python
 from advance_beamlab import read_ny_head_forward, make_ny_head_info
 
-fwd = read_ny_head_forward(resolution="10K")   # fetches 678 MB on first use
-info = make_ny_head_info(sfreq=250.0)          # 231 electrodes, average reference
+fwd = read_ny_head_forward(resolution="10K")  # fetches 678 MB on first use
+info = make_ny_head_info(sfreq=250.0)  # 231 electrodes, average reference
 ```
 
 `fwd` is an ordinary `mne.Forward`: pass it to `make_lcmv`, `make_mcmv`,
@@ -91,11 +91,12 @@ import mne
 from advance_beamlab import scan_mcmv, apply_mcmv
 
 # info, forward (free orientation), data_cov, noise_cov as usual in MNE
-result = scan_mcmv(info, forward, data_cov, noise_cov=noise_cov,
-                   localizer="mpz", n_sources=2)
+result = scan_mcmv(
+    info, forward, data_cov, noise_cov=noise_cov, localizer="mpz", n_sources=2
+)
 
-print(result["sources"])       # discovered grid indices
-print(result["pseudo_z"])      # per-source pseudo-Z (judge how many are real)
+print(result["sources"])  # discovered grid indices
+print(result["pseudo_z"])  # per-source pseudo-Z (judge how many are real)
 stc_time_courses = apply_mcmv(epochs, result["filters"])  # jointly-optimal filters
 ```
 
@@ -108,32 +109,46 @@ from mne.beamformer import apply_lcmv
 # The projector is built from the forward model alone; K lives in the
 # (whitened, reduced) virtual-sensor space. Let the 45-degree criterion pick it.
 ranks, p_pwr, p_cor, k_opt = recipsiicos_rank_curve(
-    forward, info, method="whitened", noise_cov=noise_cov, return_optimal=True)
+    forward, info, method="whitened", noise_cov=noise_cov, return_optimal=True
+)
 
-filters = make_recipsiicos_lcmv(info, forward, data_cov, rank=k_opt,
-                                method="whitened", noise_cov=noise_cov)
+filters = make_recipsiicos_lcmv(
+    info, forward, data_cov, rank=k_opt, method="whitened", noise_cov=noise_cov
+)
 stc = apply_lcmv(evoked, filters)
 ```
 
 **Estimate leakage-free connectivity with PW-/APW-MCMV** (resting-state alpha):
 
 ```python
-from advance_beamlab import (pairwise_mcmv_connectivity,
-                         augmented_pairwise_mcmv_connectivity,
-                         ar1_surrogate_significance)
+from advance_beamlab import (
+    pairwise_mcmv_connectivity,
+    augmented_pairwise_mcmv_connectivity,
+    ar1_surrogate_significance,
+)
 
 # rois: grid indices of the regions of interest. Band-pass the data to the
 # analysis band (e.g. 8-12 Hz) and estimate data_cov from the *same* band, so
 # the weights are tuned to it (broadband weights invent spurious connectivity).
-conn = pairwise_mcmv_connectivity(band_data, info, forward, data_cov, rois,
-                                  method="envelope", noise_cov=noise_cov)
+conn = pairwise_mcmv_connectivity(
+    band_data, info, forward, data_cov, rois, method="envelope", noise_cov=noise_cov
+)
 
 # keep the significant edges, then re-estimate them with neighbour augmentation
-sig = ar1_surrogate_significance(conn, reference_time_courses, method="envelope",
-                                 sfreq=info["sfreq"])
+sig = ar1_surrogate_significance(
+    conn, reference_time_courses, method="envelope", sfreq=info["sfreq"]
+)
 conn_apw = augmented_pairwise_mcmv_connectivity(
-    band_data, info, forward, data_cov, rois, conn, sig,
-    method="envelope", noise_cov=noise_cov)
+    band_data,
+    info,
+    forward,
+    data_cov,
+    rois,
+    conn,
+    sig,
+    method="envelope",
+    noise_cov=noise_cov,
+)
 ```
 
 ---
