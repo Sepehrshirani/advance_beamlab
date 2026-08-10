@@ -95,14 +95,17 @@ if _no_3d:
 else:
     import pyvista
 
-    # Render into a real display when one exists, and only fall back to
-    # off-screen when there is none. This is what MNE-Python's own documentation
-    # build does, and the distinction matters: with ``OFF_SCREEN = True`` VTK
-    # takes an OSMesa path that the hosted runners do not provide, and every
-    # cortical-surface figure fails with ``RenderWindowUnavailable``. CI supplies
-    # a virtual display via ``pyvista/setup-headless-display-action``; a
-    # developer machine with native OpenGL has none, and renders off-screen.
-    pyvista.OFF_SCREEN = not bool(os.environ.get("DISPLAY"))
+    # Render into a window on the display rather than off-screen, which is what
+    # MNE-Python's own documentation build does. The distinction is not cosmetic:
+    # ``OFF_SCREEN = True`` sends VTK down an OSMesa path that the hosted runners
+    # do not provide, and every cortical-surface figure then fails with
+    # ``RenderWindowUnavailable``. CI supplies a virtual display via
+    # ``pyvista/setup-headless-display-action``, so the window has somewhere to
+    # go; on a developer machine it goes to the real desktop. Do not make this
+    # conditional on ``DISPLAY``: macOS sets that variable from the XQuartz
+    # launchd socket while rendering actually goes through Cocoa, so it says
+    # nothing about which path works.
+    pyvista.OFF_SCREEN = False
     pyvista.BUILDING_GALLERY = True
 
     import mne
