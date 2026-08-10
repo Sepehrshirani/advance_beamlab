@@ -54,10 +54,18 @@ from advance_beamlab import apply_mcmv, make_mcmv
 
 # %%
 # Build a self-contained EEG forward: a standard 10-20 montage on a
-# single-shell sphere, converted to fixed orientation. A fixed-orientation
-# forward is essential here -- with free orientation the LCMV
-# ``pick_ori="max-power"`` re-optimises each source's orientation and steers
-# *around* the cancellation, hiding the very effect we want to show.
+# single-shell sphere, converted to fixed orientation. Fixing the orientation
+# keeps the comparison below clean -- the true orientation is then known and
+# shared by both beamformers, so any difference between them is the constraint
+# and not an orientation search.
+#
+# It is worth saying what this is *not* for, because the opposite is easy to
+# assume: ``pick_ori="max-power"`` does not escape the cancellation. Measured on
+# this same fixture, the amplitude a free-orientation LCMV recovers with
+# ``max-power`` exceeds the fixed-orientation one by a factor of 1.00, 1.03,
+# 1.05 and 1.18 at r = 0.5, 0.9, 0.95 and 0.99 -- both collapse together as the
+# correlation rises. Re-optimising one source's orientation cannot undo a
+# cancellation that comes from the *other* source being in the same filter.
 
 montage = mne.channels.make_standard_montage("standard_1020")
 ch_names = list(dict.fromkeys(montage.ch_names))

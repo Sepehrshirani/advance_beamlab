@@ -195,8 +195,14 @@ plotter.show()
 # Beamforming on it
 # -----------------
 # Nothing below is FEM-specific: this is the ordinary pipeline, with ``fwd``
-# supplied by the FEM reader. We simulate two nearby, strongly correlated
-# sources -- the regime that defeats a single-source LCMV and motivates MCMV.
+# supplied by the FEM reader. Two nearby, near-perfectly correlated sources are
+# simulated -- the regime in which a single-source LCMV is expected to cancel.
+#
+# Read the result below carefully, because it does not go the textbook way: on
+# this array LCMV finds both sources exactly, and it is the greedy MCMV *search*
+# that misses. That is worth showing rather than hiding. The cancellation costs
+# amplitude, not position, and these two topographies are distinguishable enough
+# (their correlation is negative) for the power map to separate them.
 
 rng = np.random.default_rng(0)
 rr = fwd["source_rr"]
@@ -221,7 +227,8 @@ data_cov = mne.compute_covariance(epochs, method="empirical")
 noise_cov = mne.compute_covariance(epochs_noise, method="empirical")
 print(
     f"separation {np.linalg.norm(rr[i1] - rr[i2]) * 1000:.0f} mm, "
-    f"source correlation 0.95, data rank {mne.compute_rank(data_cov, info=info)}"
+    f"source correlation r = {np.corrcoef(sources[0, i1], sources[0, i2])[0, 1]:.3f}, "
+    f"data rank {mne.compute_rank(data_cov, info=info)}"
 )
 
 # %%

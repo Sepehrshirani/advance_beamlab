@@ -10,6 +10,14 @@ Where to go next
 .. grid:: 1 2 2 2
    :gutter: 3
 
+   .. grid-item-card:: Which method should I use?
+      :link: choosing
+      :link-type: doc
+
+      A decision guide keyed on the data you have, with what this package
+      actually demonstrates for each method -- including the cases where a
+      plain LCMV is the better answer.
+
    .. grid-item-card:: Examples
       :link: auto_examples/index
       :link-type: doc
@@ -42,6 +50,7 @@ Where to go next
    :hidden:
    :maxdepth: 2
 
+   Which method should I use? <choosing>
    Examples <auto_examples/index>
    Mathematical background <background>
    Parameter tuning <tuning>
