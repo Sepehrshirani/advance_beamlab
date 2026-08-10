@@ -66,6 +66,11 @@ doc = [
     "pyvista>=0.44",
     "pyvistaqt",
     "PyQt6",
+    # The finite-element example reads the New York Head model, so the doc build
+    # needs the HDF5 reader too. Fetching it only needs pooch (which arrives with
+    # MNE), which is why the gallery got as far as downloading the model and then
+    # failed on the read.
+    "advance_beamlab[fem]",
 ]
 dev = ["advance_beamlab[test,doc]", "ruff>=0.6"]
 

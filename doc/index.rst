@@ -14,9 +14,9 @@ Where to go next
       :link: auto_examples/index
       :link-type: doc
 
-      Seven worked examples, from the correlated-source problem in isolation
-      through to real MEG recordings. Every figure is produced by the code on
-      the page.
+      Eight worked examples, from the correlated-source problem in isolation
+      through to real MEG recordings and a finite-element EEG head model. Every
+      figure is produced by the code on the page.
 
    .. grid-item-card:: Mathematical background
       :link: background
