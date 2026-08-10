@@ -175,7 +175,10 @@ def _mesh(rr, tris):
     return pv.PolyData(rr * 1000.0, faces)
 
 
-plotter = pv.Plotter(window_size=(900, 600))
+# ``off_screen`` per plotter, not globally: it lets ``screenshot`` render
+# without opening a window, while the global setting stays on-screen for the
+# ``stc.plot()`` figures elsewhere in the gallery, which need a display.
+plotter = pv.Plotter(window_size=(900, 600), off_screen=True)
 plotter.add_mesh(
     _mesh(scalp_rr, scalp_tris), color="#e8d5c4", opacity=0.25, smooth_shading=True
 )
@@ -189,7 +192,10 @@ plotter.add_points(
 plotter.camera_position = "yz"
 plotter.camera.azimuth = 210
 plotter.camera.elevation = 15
-plotter.show()
+img = plotter.screenshot()
+fig, ax = plt.subplots(figsize=(9, 6), constrained_layout=True)
+ax.imshow(img)
+ax.set_axis_off()
 
 # %%
 # Beamforming on it
@@ -267,7 +273,7 @@ n_lh = fwd["src"][0]["nuse"]
 scalars[0][fwd["src"][0]["vertno"]] = power[:n_lh]
 scalars[1][fwd["src"][1]["vertno"]] = power[n_lh:]
 
-plotter = pv.Plotter(window_size=(800, 500))
+plotter = pv.Plotter(window_size=(800, 500), off_screen=True)
 for hemi, values in zip(fwd["src"], scalars, strict=True):
     mesh = _mesh(hemi["rr"], hemi["tris"])
     mesh["power"] = values
@@ -282,7 +288,10 @@ plotter.add_points(
 )
 plotter.camera_position = "xy"
 plotter.camera.elevation = 65
-plotter.show()
+img = plotter.screenshot()
+fig, ax = plt.subplots(figsize=(9, 6), constrained_layout=True)
+ax.imshow(img)
+ax.set_axis_off()
 
 # %%
 # Why this is EEG-only

@@ -197,6 +197,15 @@ except Exception as exc:  # 3-D rendering is optional
     brain = None
     print(f"3-D brain plot skipped (no working 3-D backend): {exc}")
 
+# The rendered surface is screenshotted into a matplotlib axis rather than left
+# for a 3-D scraper to find. See doc/conf.py for why: it is what makes the
+# figure appear correctly in the built documentation, and it keeps the window
+# open, which the CI runner needs.
+if brain is not None:
+    fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
+    ax.imshow(brain.screenshot())
+    ax.set_axis_off()
+
 # %%
 # Finally, the reconstructed time courses at the two hemispheric peaks -- the
 # same comparison as the power map, now as a waveform. The ratio in each panel

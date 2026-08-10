@@ -73,17 +73,23 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 # whitened ReciPSIICOS example computes an O(N^2) correlation Gram). This is
 # intentional: the built docs show real results on real MEG data.
 #
-# Figure capture uses the matplotlib scraper, plus the PyVista scraper for the
-# cortical-surface plots -- the only images in the gallery that show a source
-# estimate on an actual brain.
+# Figure capture goes through the matplotlib scraper alone, and every 3-D figure
+# is screenshotted into a matplotlib axis by the example that draws it. That is
+# deliberate, and it is the third arrangement tried:
 #
-# The PyVista scraper is opt-out rather than probed. Probing is unreliable: a
-# machine can import PyVista and Qt, render a plain off-screen ``Plotter``
-# successfully, and still fail at draw time inside the scraper with
-# ``RenderWindowUnavailable`` -- and sphinx-gallery counts each such failure as a
-# failed example, which aborts the whole build. Rather than guess, set
-# ``BEAMLAB_NO_3D=1`` on machines without a working OpenGL stack (CI runners do
-# this); everywhere else the scraper stays on and the brain figures are captured.
+# * The PyVista scraper alone published every cortical surface as a blank
+#   placeholder. It does not know how to capture an ``mne.viz.Brain``, and it
+#   fails by writing an empty PNG rather than by raising, so the gallery looked
+#   complete while showing nothing.
+# * MNE's own ``_BrainScraper`` captures them correctly, but it calls
+#   ``brain.close()`` afterwards. On the CI runner that Qt teardown left the
+#   *next* example unable to reach the virtual display, and the build aborted
+#   with ``qt.qpa.xcb: could not connect to display``.
+#
+# Screenshotting explicitly sidesteps both: the capture is correct because
+# ``Brain.screenshot`` renders it, and no window is ever torn down mid-build.
+# It also means what appears in the docs is exactly what the example chose to
+# show, rather than whatever a scraper happened to find open.
 image_scrapers = ["matplotlib"]
 _no_3d = os.environ.get("BEAMLAB_NO_3D", "") not in ("", "0", "false")
 
@@ -95,36 +101,26 @@ if _no_3d:
 else:
     import pyvista
 
-    # Render into a window on the display rather than off-screen, which is what
-    # MNE-Python's own documentation build does. The distinction is not cosmetic:
+    # Render into a window on the display rather than off-screen.
     # ``OFF_SCREEN = True`` sends VTK down an OSMesa path that the hosted runners
-    # do not provide, and every cortical-surface figure then fails with
+    # do not provide, and the cortical-surface figures then fail with
     # ``RenderWindowUnavailable``. CI supplies a virtual display via
-    # ``pyvista/setup-headless-display-action``, so the window has somewhere to
-    # go; on a developer machine it goes to the real desktop. Do not make this
-    # conditional on ``DISPLAY``: macOS sets that variable from the XQuartz
-    # launchd socket while rendering actually goes through Cocoa, so it says
-    # nothing about which path works.
+    # ``pyvista/setup-headless-display-action``. Do not make this conditional on
+    # ``DISPLAY``: macOS sets that variable from the XQuartz launchd socket while
+    # rendering goes through Cocoa, so it says nothing about which path works.
+    # This is the global default, and it is what the ``stc.plot()`` figures need.
+    # Examples that build a plain ``pyvista.Plotter`` pass ``off_screen=True``
+    # themselves, which lets them screenshot without opening a window --
+    # ``Plotter.show`` blocks even with ``BUILDING_GALLERY`` set, which hung the
+    # build until it was timed out.
     pyvista.OFF_SCREEN = False
-    pyvista.BUILDING_GALLERY = True
 
     import mne
-    import mne.viz._brain
 
     mne.viz.set_3d_backend("pyvistaqt")
     # Antialiasing is unreliable on software renderers and does not change the
     # captured images in any way that matters.
     mne.viz.set_3d_options(antialias=False, depth_peeling=False)
-    # Two scrapers, because there are two kinds of 3-D figure here and the
-    # generic one does not handle both. ``mne.viz.Brain`` (what
-    # ``stc.plot()`` returns) needs MNE's own scraper -- this is what
-    # MNE-Python's documentation build uses, and with only the PyVista scraper
-    # every ``stc.plot()`` was written out as a blank 300x300 placeholder rather
-    # than failing, so the gallery looked complete while showing nothing. The
-    # PyVista scraper is still needed for the plain ``pyvista.Plotter`` the
-    # finite-element example builds directly.
-    image_scrapers.append(mne.viz._brain._BrainScraper())
-    image_scrapers.append("pyvista")
 
 
 def _reset_mpl_style(gallery_conf, fname):
