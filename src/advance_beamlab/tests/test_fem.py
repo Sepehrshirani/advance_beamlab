@@ -19,6 +19,7 @@ from advance_beamlab._fem import (  # noqa: E402
     _ny_head_dir,
     make_ny_head_info,
     ny_head_montage,
+    ny_head_scalp,
 )
 
 # The model is a 678 MB download under a licence that forbids redistribution, so
@@ -150,6 +151,44 @@ def test_geometry_is_anatomical(fwd, info):
     # Cortex sits inside the electrodes, separated by scalp, skull and CSF.
     d = np.linalg.norm(e[:, None] - fwd["source_rr"][None], axis=2).min()
     assert 0.005 < d < 0.030
+
+
+def test_electrodes_lie_on_the_scalp(info):
+    """Every electrode must sit on the model's own scalp surface.
+
+    This is the sharpest available check on the coordinate transform, because it
+    compares two things that came out of the file independently: the electrode
+    positions and the outer boundary of the volume mesh. Any error in the
+    MNI-to-head transform, in the millimetre-to-metre scaling, or in the
+    row/column order of the position array would separate them immediately,
+    whereas a comparison against an external montage only ever agrees to within
+    the difference between two template heads.
+    """
+    rr, tris = ny_head_scalp()
+    assert tris.min() >= 0 and tris.max() < len(rr)
+    elec = np.array([c["loc"][:3] for c in info["chs"]])
+    d = np.linalg.norm(elec[:, None] - rr[None], axis=2).min(1)
+    # The scalp mesh has only 1082 vertices, so its own spacing is about 10 mm;
+    # electrodes land within half of that.
+    assert np.median(d) < 0.006
+    assert d.max() < 0.012
+
+
+def test_montage_includes_neck_and_face_electrodes(info):
+    """The inferior electrodes are real, and documented as such.
+
+    They look like stray points when a montage is plotted against the cortex
+    alone, so this pins them down: they exist, they are far below the brain, and
+    they are nonetheless on the scalp.
+    """
+    names = info["ch_names"]
+    assert {"Nk1", "Nk2", "Nk3", "Nk4"} <= set(names)
+    elec = np.array([c["loc"][:3] for c in info["chs"]])
+    assert elec[names.index("Nk1"), 2] < -0.10  # well below the head origin
+    rr, _ = ny_head_scalp()
+    for nk in ("Nk1", "Nk2", "Nk3", "Nk4"):
+        d = np.linalg.norm(rr - elec[names.index(nk)], axis=1).min()
+        assert d < 0.010, f"{nk} is {d * 1000:.1f} mm off the scalp"
 
 
 @pytest.mark.parametrize("resolution", ["1K", "2K", "5K"])

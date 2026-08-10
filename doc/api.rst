@@ -78,6 +78,7 @@ is downloaded on demand and is not redistributed with this package.
    read_ny_head_forward
    ny_head_montage
    make_ny_head_info
+   ny_head_scalp
 
 References
 ----------

@@ -257,6 +257,17 @@ def ny_head_montage(path=None, *, verbose=None):
     64-channel cap is a subset of them and ``info.set_montage`` will match it
     by name.
 
+    Not all 231 are on the scalp vault. The set includes four neck electrodes
+    (``Nk1``-``Nk4``, reaching 155 mm below the head-coordinate origin) and a
+    band of face and cheek positions (``Exx27``-``Exx34``), because the model
+    was built for transcranial stimulation targeting as well as for EEG, and
+    those inferior positions matter there. They are genuine scalp positions --
+    every electrode lies on the surface returned by :func:`ny_head_scalp` to
+    within its mesh resolution -- but a plot of the montage against the cortex
+    alone makes them look like stray points floating below the brain. Pass
+    ``picks`` to :func:`read_ny_head_forward` to restrict the forward to the
+    electrodes you actually recorded.
+
     References
     ----------
     .. footbibliography::
@@ -279,6 +290,51 @@ def ny_head_montage(path=None, *, verbose=None):
         rpa=apply_trans(trans, rpa),
         coord_frame="head",
     )
+
+
+@verbose
+def ny_head_scalp(path=None, *, verbose=None):
+    """Return the scalp surface of the New York Head, in head coordinates.
+
+    The model ships the triangulated head surface its finite element mesh was
+    built on. It is supplied here because plotting the electrodes without it is
+    actively misleading: drawn against the cortex alone, the montage looks like
+    a cloud of points floating around and through the brain, when in fact every
+    electrode lies on this surface to within its mesh resolution.
+
+    Parameters
+    ----------
+    path : path-like | None
+        Path to ``sa_nyhead.mat``; downloaded via :func:`fetch_ny_head` if
+        ``None``.
+    %(verbose)s
+
+    Returns
+    -------
+    rr : ndarray, shape (1082, 3)
+        Vertex positions in metres, in MNE head coordinates -- the same frame as
+        :func:`ny_head_montage` and :func:`read_ny_head_forward`.
+    tris : ndarray, shape (2160, 3)
+        Triangle definitions, zero-based.
+
+    Notes
+    -----
+    The surface is coarse (1082 vertices, roughly 10 mm spacing) because it is
+    the outer boundary of the volume mesh rather than a rendering surface. It
+    extends well below the brain, down to the neck, because the montage does
+    too; see :func:`ny_head_montage`.
+
+    See Also
+    --------
+    ny_head_montage
+    read_ny_head_forward
+    """
+    with _open(path) as f:
+        sa = f["sa"]
+        trans, _ = _mni_to_head_trans(sa)
+        rr = np.asarray(sa["head"]["vc"]).T / 1000.0
+        tris = np.asarray(sa["head"]["tri"]).T.astype(np.int64) - 1
+    return apply_trans(trans, rr), tris
 
 
 @verbose

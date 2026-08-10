@@ -71,6 +71,12 @@ doc = [
     # MNE), which is why the gallery got as far as downloading the model and then
     # failed on the read.
     "advance_beamlab[fem]",
+    # MNE defers these: they are optional for it, but the gallery uses the parts
+    # that need them. nibabel reads the FreeSurfer surfaces behind
+    # ``make_bem_model``, ``setup_source_space`` and the cortical-surface plots;
+    # without it the examples fail only at run time, which is why the gallery
+    # and not the test suite is what caught it.
+    "nibabel",
 ]
 dev = ["advance_beamlab[test,doc]", "ruff>=0.6"]
 

@@ -49,6 +49,7 @@ from advance_beamlab import (
     make_mcmv,
     make_ny_head_info,
     ny_head_montage,
+    ny_head_scalp,
     read_ny_head_forward,
     scan_mcmv,
 )
@@ -147,22 +148,41 @@ ax2.set(
 # %%
 # The head model itself
 # ---------------------
-# The cortical mesh travels with the forward, so it can be rendered directly.
+# Both surfaces travel with the model, so they can be rendered directly. The
+# scalp is drawn here as well as the cortex, and it is worth doing: against the
+# cortex alone the montage looks like a cloud of points floating around and
+# through the brain. It is not. Every electrode lies on this scalp surface --
+# median 4.6 mm from the nearest vertex, on a mesh whose own spacing is about
+# 10 mm -- and the closest any electrode comes to the cortex is 11.2 mm, which
+# is scalp plus skull plus CSF, as it should be.
+#
+# The points reaching well below the brain are real too: the set includes four
+# neck electrodes and a band of face and cheek positions, because the model was
+# built for transcranial stimulation targeting as well as for EEG. Use ``picks``
+# to restrict the forward to the electrodes you actually recorded.
+#
 # This is also how a source estimate on this model is visualised: the source
 # space is the model's own mesh rather than a FreeSurfer subject, so
 # ``stc.plot()`` -- which looks a subject up in a ``subjects_dir`` -- does not
 # apply here.
 
-
-def _mesh(src):
-    """Assemble one hemisphere's triangulation as a PyVista mesh."""
-    faces = np.hstack([np.full((len(src["tris"]), 1), 3), src["tris"]]).ravel()
-    return pv.PolyData(src["rr"] * 1000.0, faces)
+scalp_rr, scalp_tris = ny_head_scalp()
 
 
-plotter = pv.Plotter(window_size=(800, 500))
+def _mesh(rr, tris):
+    """Assemble a triangulation as a PyVista mesh, in millimetres."""
+    faces = np.hstack([np.full((len(tris), 1), 3), tris]).ravel()
+    return pv.PolyData(rr * 1000.0, faces)
+
+
+plotter = pv.Plotter(window_size=(900, 600))
+plotter.add_mesh(
+    _mesh(scalp_rr, scalp_tris), color="#e8d5c4", opacity=0.25, smooth_shading=True
+)
 for hemi in fwd["src"]:
-    plotter.add_mesh(_mesh(hemi), color="#c8b7a6", smooth_shading=True)
+    plotter.add_mesh(
+        _mesh(hemi["rr"], hemi["tris"]), color="#c8b7a6", smooth_shading=True
+    )
 plotter.add_points(
     elec * 1000.0, color="#0072B2", point_size=9, render_points_as_spheres=True
 )
@@ -242,7 +262,7 @@ scalars[1][fwd["src"][1]["vertno"]] = power[n_lh:]
 
 plotter = pv.Plotter(window_size=(800, 500))
 for hemi, values in zip(fwd["src"], scalars, strict=True):
-    mesh = _mesh(hemi)
+    mesh = _mesh(hemi["rr"], hemi["tris"])
     mesh["power"] = values
     plotter.add_mesh(
         mesh, scalars="power", cmap="hot", smooth_shading=True, show_scalar_bar=False

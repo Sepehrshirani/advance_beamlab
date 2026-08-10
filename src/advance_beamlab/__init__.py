@@ -46,6 +46,7 @@ from ._fem import (
     fetch_ny_head,
     make_ny_head_info,
     ny_head_montage,
+    ny_head_scalp,
     read_ny_head_forward,
 )
 from ._localizers import (
@@ -91,6 +92,7 @@ __all__ = [
     "read_ny_head_forward",
     "ny_head_montage",
     "make_ny_head_info",
+    "ny_head_scalp",
 ]
 
 __version__ = "0.1.0.dev0"
