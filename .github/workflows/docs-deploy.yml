@@ -66,15 +66,6 @@ jobs:
         run: |
           python -m sphinx -b html doc doc/_build/html --keep-going
 
-      - name: Report what the gallery captured
-        # This job warns rather than fails: a publish that is merely missing a
-        # figure still beats a site that is weeks behind the code. The
-        # pull-request gallery job fails on the same condition, so a regression
-        # is caught before it reaches main.
-        run: |
-          python tools/check_gallery_images.py doc/_build/html || \
-            echo "::warning::some gallery figures are blank or missing; the 3-D backend did not render on this runner"
-
       - name: Strip the Sphinx build cache
         # ``.doctrees`` is the incremental-build cache, not part of the site. It
         # was previously committed and accounted for 15 MB of a 40 MB repository.
@@ -91,3 +82,13 @@ jobs:
           publish_dir: doc/_build/html
           force_orphan: true
           commit_message: "Documentation for ${{ github.sha }}"
+
+      - name: Require the gallery figures to have rendered
+        # Deliberately *after* publishing, and it fails rather than warns. Put
+        # before, a blank-figure regression would block the publish and leave the
+        # site stale; put after, the site is always current and the regression
+        # still turns the run red. This matters on main specifically: the strict
+        # gallery job in the test workflow only runs on pull requests, so without
+        # this a direct push could quietly republish blank figures -- which is
+        # exactly what happened once already.
+        run: python tools/check_gallery_images.py doc/_build/html
