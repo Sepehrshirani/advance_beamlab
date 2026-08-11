@@ -18,7 +18,7 @@ from advance_beamlab import (
     make_abmc_dictionary,
     sbl_covariance,
 )
-from advance_beamlab._abmc import _abmc_prepare
+from advance_beamlab._abmc import _abmc_prepare, _critical_p
 
 mne.set_log_level("ERROR")
 
@@ -539,26 +539,11 @@ def test_abmc_blowup_reported(sphere_fwd):
     assert 0.0 <= res.blowup_fraction < 0.05
 
 
-def test_abmc_critical_p_is_infinite_without_an_unstable_column(sphere_fwd):
-    """A grid whose columns all have ``g^T c > 0`` has no pole at any ``P``."""
-    fwd, info = sphere_fwd
-    (i,) = _shell_sources(fwd, 1)
-    local = _local_forward(fwd, i, 3)
-    x = _si_data(fwd, i, n=400, t0=250, seed=4)
-    template = _spike(400, 250)
-
-    # The premise of the test, not part of what is being asserted: on this local
-    # grid the constraint column of every source agrees in sign with its
-    # leadfield column, so Eq. 19's denominator only grows with ``P``.
-    prep = _abmc_prepare(info, local, x, template, None, None, 0.0, None)
-    assert (prep["gc"] > 0).all()
-
-    with warnings.catch_warnings(record=True) as records:
-        warnings.simplefilter("always")
-        res = make_abmc(info, local, x, template, P=1e4)
-    assert res.critical_p == np.inf
-    assert res.unstable_fraction == 0.0
-    assert [r for r in records if "critical value" in str(r.message)] == []
+def _forward_from_indices(fwd, indices):
+    """Restrict ``fwd`` to an explicit list of grid indices."""
+    vertno = np.sort(fwd["src"][0]["vertno"][np.asarray(indices)])
+    stc = mne.VolSourceEstimate(np.ones((len(vertno), 1)), [vertno], 0.0, 1.0)
+    return mne.forward.restrict_forward_to_stc(fwd, stc)
 
 
 def test_abmc_critical_p_is_the_smallest_pole_of_the_gain_denominator(sphere_fwd):
@@ -587,35 +572,6 @@ def test_abmc_critical_p_is_the_smallest_pole_of_the_gain_denominator(sphere_fwd
     cos = gc / np.sqrt(gg * np.einsum("mk,mk->k", prep["c"], prep["c"]))
     assert_allclose(res.critical_p, 1.0 / abs(cos.min()), rtol=1e-10)
     assert res.critical_p >= 1.0
-
-
-def test_abmc_warns_from_the_critical_p_upwards_and_not_below(sphere_fwd):
-    """The pre-solve warning fires at ``P >= critical_p`` and is silent below it."""
-    fwd, info = sphere_fwd
-    (i,) = _shell_sources(fwd, 1)
-    # Negating the data flips the sign of every ``g^T c``, which turns the local
-    # grid of the test above into one that is unstable throughout.
-    local = _local_forward(fwd, i, 3)
-    x = -_si_data(fwd, i, n=400, t0=250, seed=4)
-    template = _spike(400, 250)
-    critical = _abmc_prepare(info, local, x, template, None, None, 0.0, None)[
-        "critical_p"
-    ]
-    assert np.isfinite(critical)
-
-    with warnings.catch_warnings(record=True) as records:
-        warnings.simplefilter("always")
-        below = make_abmc(info, local, x, template, P=0.99 * critical)
-    assert [r for r in records if "critical value" in str(r.message)] == []
-    assert_allclose(below.critical_p, critical, rtol=1e-12)
-    assert below.unstable_fraction == 1.0
-
-    # Caught by class rather than by message because past the pole the older
-    # blow-up warning fires as well, and both belong to this regime.
-    for P in (critical, 1.5 * critical):
-        with pytest.warns(RuntimeWarning) as records:
-            make_abmc(info, local, x, template, P=P)
-        assert any("at or above the critical value" in str(r.message) for r in records)
 
 
 def test_abmc_unstable_fraction_matches_the_sign_of_gc(sphere_fwd):
@@ -812,3 +768,84 @@ def test_unknown_method_is_rejected(sphere_fwd):
     x = _si_data(fwd, i, n=200, t0=100, seed=7)
     with pytest.raises(ValueError, match="method"):
         make_abmc(info, fwd, x, _spike(200, 100), method="steepest-descent")
+
+
+@pytest.mark.parametrize(
+    "gg, gc, expected_p, expected_fraction",
+    [
+        # No column can reach a pole, so there is no P that destabilises.
+        ([1.0, 2.0, 3.0], [0.5, 1.0, 2.0], np.inf, 0.0),
+        # Every column can, and the smallest pole wins: -2/-0.5 = 4 beats
+        # -1/-0.5 = 2, so the answer is 2.
+        ([1.0, 2.0], [-0.5, -0.5], 2.0, 1.0),
+        # Mixed: only the negative columns contribute a pole.
+        ([1.0, 4.0, 9.0], [1.0, -2.0, -1.5], 2.0, 2.0 / 3.0),
+        # A zero is not negative, so it contributes no pole.
+        ([1.0, 1.0], [0.0, 1.0], np.inf, 0.0),
+    ],
+)
+def test_critical_p_contract(gg, gc, expected_p, expected_fraction):
+    """The pole and the unstable share, on sign patterns chosen by hand.
+
+    Deliberately a unit test on arrays rather than on a forward. The sign of
+    ``g^T c`` is not a property of a single column, so a test cannot obtain a
+    chosen sign pattern by selecting grid points; an earlier version of these
+    tests assumed the pattern a spherical grid happened to produce locally and
+    failed on every CI runner.
+    """
+    got_p, got_fraction = _critical_p(np.array(gg), np.array(gc))
+    assert got_p == expected_p
+    assert got_fraction == pytest.approx(expected_fraction)
+
+
+def test_abmc_reports_the_pole_its_own_prep_predicts(sphere_fwd):
+    """``ABMCResult`` carries exactly what ``_critical_p`` gives for that data.
+
+    Asserted against whatever sign pattern this grid actually has, so the test
+    holds on any source space and any BLAS.
+    """
+    fwd, info = sphere_fwd
+    (i,) = _shell_sources(fwd, 1)
+    local = _local_forward(fwd, i, 12)
+    x = _si_data(fwd, i, n=400, t0=250, seed=4)
+    template = _spike(400, 250)
+
+    prep = _abmc_prepare(info, local, x, template, None, None, 0.0, None)
+    expected_p, expected_fraction = _critical_p(prep["gg"], prep["gc"])
+
+    res = make_abmc(info, local, x, template, P=0.03)
+    assert res.critical_p == expected_p
+    assert res.unstable_fraction == pytest.approx(expected_fraction)
+    assert 0.0 <= res.unstable_fraction <= 1.0
+    # The rescaling of each constraint column to its leadfield column's norm
+    # makes every pole 1/|cos|, so a finite one can never fall below 1.
+    assert res.critical_p >= 1.0
+
+
+def test_abmc_warns_from_the_critical_p_upwards_and_not_below(sphere_fwd):
+    """The pre-solve warning fires at ``P >= critical_p`` and is silent below."""
+    fwd, info = sphere_fwd
+    (i,) = _shell_sources(fwd, 1)
+    # Twelve rather than three: a small neighbourhood may contain no column with
+    # g^T c < 0 at all, and then there is no pole for this test to cross.
+    local = _local_forward(fwd, i, 12)
+    x = _si_data(fwd, i, n=400, t0=250, seed=4)
+    template = _spike(400, 250)
+    critical = _abmc_prepare(info, local, x, template, None, None, 0.0, None)[
+        "critical_p"
+    ]
+    if not np.isfinite(critical):
+        pytest.skip("this grid has no unstable column, so there is no pole to cross")
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        below = make_abmc(info, local, x, template, P=0.99 * critical)
+    assert [r for r in records if "critical value" in str(r.message)] == []
+    assert_allclose(below.critical_p, critical, rtol=1e-12)
+
+    # Caught by class rather than by message because past the pole the older
+    # blow-up warning fires as well, and both belong to this regime.
+    for P in (critical, 1.5 * critical):
+        with pytest.warns(RuntimeWarning) as records:
+            make_abmc(info, local, x, template, P=P)
+        assert any("at or above the critical value" in str(r.message) for r in records)

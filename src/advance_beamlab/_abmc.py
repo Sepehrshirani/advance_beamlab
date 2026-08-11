@@ -586,6 +586,25 @@ def _abmc_stc(forward, values):
     )
 
 
+def _critical_p(gg, gc):
+    r"""Return the smallest pole of the gain denominator, and the share of the grid.
+
+    Eq. 19 divides by :math:`g^\mathsf{T}g + P\,g^\mathsf{T}c`, so a column with
+    :math:`g^\mathsf{T}c < 0` has a pole at :math:`-g^\mathsf{T}g/g^\mathsf{T}c`
+    and a column with :math:`g^\mathsf{T}c \ge 0` has none. The first return
+    value is ``inf`` when no column has one.
+
+    Kept separate from :func:`_abmc_prepare` so the contract can be tested on
+    arrays with a chosen sign pattern. It cannot be tested by picking grid
+    points: the sign of :math:`g^\mathsf{T}c` is not a property of a column on
+    its own, and restricting a forward to a subset of its columns changes it.
+    """
+    negative = gc < 0
+    if not negative.any():
+        return np.inf, 0.0
+    return float((-gg[negative] / gc[negative]).min()), float(negative.mean())
+
+
 def _abmc_prepare(info, forward, data, template, cov, noise_cov, reg, max_lag):
     """Assemble everything in Stage 2 that does not depend on ``P``.
 
@@ -664,10 +683,7 @@ def _abmc_prepare(info, forward, data, template, cov, noise_cov, reg, max_lag):
     # solve is only large in the immediate neighbourhood of the poles. Above
     # them the weights settle onto the finite but wrong P -> infinity limit
     # f R^-1 c / (g^T R^-1 c), where no post-hoc statistic complains at all.
-    negative = gc < 0
-    critical_p = (
-        float((-gg[negative] / gc[negative]).min()) if negative.any() else np.inf
-    )
+    critical_p, unstable_fraction = _critical_p(gg, gc)
 
     return dict(
         leadfield=leadfield,
@@ -682,7 +698,7 @@ def _abmc_prepare(info, forward, data, template, cov, noise_cov, reg, max_lag):
         gg=gg,
         gc=gc,
         critical_p=critical_p,
-        unstable_fraction=float(negative.mean()),
+        unstable_fraction=unstable_fraction,
         n_channels=n_channels,
         n_columns=n_columns,
     )
