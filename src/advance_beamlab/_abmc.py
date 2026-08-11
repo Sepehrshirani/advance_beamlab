@@ -38,6 +38,19 @@ the widest run over which the localised peak does not move. ``P='auto'`` uses
 it. Selection is by stability rather than by template match, because the match
 rises with :math:`P` by construction and maximising it would be circular.
 
+Two things are known about :math:`P` before any sweep is run. First, rescaling
+each constraint column to the norm of its leadfield column (see below) makes that
+column's pole exactly :math:`1/|\cos(g_n, c_n)|`, so no :math:`P` below 1 can
+destabilise any dataset; the smallest pole over the grid is reported as
+``ABMCResult.critical_p``. Second, on the 94-channel spherical-EEG fixture of
+``examples/plot_abmc_localization.py`` (301 grid points, eight simulated spikes)
+the constraint changed the weights by 1 to 18 per cent over
+:math:`P\in[0.01, 0.18]` while leaving the localised peak exactly where the
+:math:`P\to 0` limit put it, which is the measurement behind the 0.01-0.1 range
+quoted in :func:`make_abmc`. By :math:`P=1` half of those peaks had moved and
+the mean peak error had risen from 0.85 cm to 2.20 cm, well before any weight
+blew up: the poles sat at 2.3 to 4.4 on that fixture.
+
 Localization follows the paper's criterion: the source is the grid location whose
 beamformer output has the **maximum cross-correlation with the desired template**
 :math:`u` at the best lag (not the output power, which is what LCMV maximizes).
@@ -433,9 +446,28 @@ class ABMCResult:
     converged : bool
         Whether the weight update met the tolerance before ``max_iter``.
     blowup_fraction : float
-        Fraction of grid columns whose weights grew anomalously large, which
-        signals that ``P`` is too large for this segment (cf. the paper's
-        non-convergence regime). Above ~0.05, lower ``P``.
+        Fraction of grid columns whose weights grew anomalously large, measured
+        on the weights *after* the solve. Above ~0.05, lower ``P``. A small
+        value is not an all-clear: this only detects the neighbourhood of the
+        poles described under ``critical_p``, and returns to exactly zero for
+        ``P`` well beyond them, where the weights are finite but the
+        localisation is wrong. Use ``critical_p`` to decide that ``P`` is safe.
+    critical_p : float
+        Smallest ``P`` at which some grid column's gain denominator
+        :math:`g_n^\mathsf{T}g_n + P\,g_n^\mathsf{T}c_n` vanishes, that is the
+        smallest :math:`-g_n^\mathsf{T}g_n / g_n^\mathsf{T}c_n` over the columns
+        with :math:`g_n^\mathsf{T}c_n < 0`, and ``inf`` when there are none.
+        Unlike ``blowup_fraction``, it is predicted from the forward and the
+        constraint columns *before* the solve, and it remains valid for every
+        larger ``P`` rather than only near the pole. Because each constraint
+        column is rescaled to the norm of its leadfield column, a column's pole
+        is exactly :math:`1/|\cos(g_n, c_n)|`, so this is never below 1 for any
+        dataset.
+    unstable_fraction : float
+        Fraction of grid columns with :math:`g_n^\mathsf{T}c_n < 0`, that is the
+        share of the grid that has a finite pole at all. Also predicted before
+        the solve. It says how much of the grid ``critical_p`` speaks for, not
+        that anything has gone wrong at the ``P`` actually used.
 
     References
     ----------
@@ -451,6 +483,8 @@ class ABMCResult:
     n_iter: int
     converged: bool
     blowup_fraction: float
+    critical_p: float
+    unstable_fraction: float
 
 
 def _aligned_leadfield_and_data(info, forward, data):
@@ -619,6 +653,22 @@ def _abmc_prepare(info, forward, data, template, cov, noise_cov, reg, max_lag):
         / np.clip(np.linalg.norm(c, axis=0), _TINY, None)
     )[None, :]
 
+    gg = np.einsum("mk,mk->k", leadfield, leadfield)
+    gc = np.einsum("mk,mk->k", leadfield, c)
+    # Predict the instability rather than wait to observe it. The gain
+    # denominator of Eq. 19 is g^T g + P g^T c, so a column with g^T c < 0 has a
+    # pole at P = -g^T g / g^T c and its weights are worthless from there on.
+    # Two reasons to compute it here: it is available before the solve (one pass
+    # over the columns, measured at 0.1 ms for eight 301-point grids), and it
+    # stays true for every larger P, whereas the blow-up share measured after the
+    # solve is only large in the immediate neighbourhood of the poles. Above
+    # them the weights settle onto the finite but wrong P -> infinity limit
+    # f R^-1 c / (g^T R^-1 c), where no post-hoc statistic complains at all.
+    negative = gc < 0
+    critical_p = (
+        float((-gg[negative] / gc[negative]).min()) if negative.any() else np.inf
+    )
+
     return dict(
         leadfield=leadfield,
         x=x,
@@ -629,8 +679,10 @@ def _abmc_prepare(info, forward, data, template, cov, noise_cov, reg, max_lag):
         c=c,
         u_shift=u_shift,
         col_lag=col_lag,
-        gg=np.einsum("mk,mk->k", leadfield, leadfield),
-        gc=np.einsum("mk,mk->k", leadfield, c),
+        gg=gg,
+        gc=gc,
+        critical_p=critical_p,
+        unstable_fraction=float(negative.mean()),
         n_channels=n_channels,
         n_columns=n_columns,
     )
@@ -756,6 +808,8 @@ def _abmc_readout(prep, w, forward, P, f, return_weights, n_iter, converged):
         n_iter=n_iter,
         converged=converged,
         blowup_fraction=m["blowup"],
+        critical_p=prep["critical_p"],
+        unstable_fraction=prep["unstable_fraction"],
     )
 
 
@@ -831,8 +885,12 @@ def abmc_stability_curve(
     norm of :math:`\Pi`, grows as :math:`g^\mathsf{T}d = g^\mathsf{T}g +
     P\,g^\mathsf{T}c` shrinks. Consequently, wherever :math:`g^\mathsf{T}c < 0`
     there is a :math:`P` beyond which the paper's descent is unstable. That is
-    the "threshold for each segment" the paper reports without deriving, and it
-    is why the viable range has to be found per dataset rather than assumed.
+    the "threshold for each segment" the paper reports without deriving; the
+    smallest such :math:`P` over the grid is reported directly as
+    ``ABMCResult.critical_p``. The threshold is what bounds the sweep from
+    above, but not where the answer stops being trustworthy: the peak can move
+    well below it, which is why the viable range has to be found per dataset
+    rather than assumed.
 
     Selection is by stability rather than by score, deliberately. The template
     match increases with :math:`P` by construction: a stronger constraint pulls
@@ -932,7 +990,19 @@ def _abmc_select_p(prep, forward, f, P_range, n_coarse, n_refine):
 
     p_coarse = np.geomspace(lo, hi, int(n_coarse))
     peaks, matches, blows, coups = score(p_coarse)
-    viable = (coups >= 1e-6) & (blows <= 0.05)
+    # Three conditions, and the third is not redundant. Beyond every column's
+    # pole the weights settle onto the finite P -> infinity limit
+    # f R^-1 c / (g^T R^-1 c), which is a fixed point: its peak sits perfectly
+    # still over decades of P and blows up nowhere, so it looks exactly like a
+    # plateau to the rule below while localising badly. Measured on the
+    # ``plot_abmc_localization`` fixture, dropping this condition and narrowing
+    # the range to (1e-2, 1e4) makes that false plateau win on seven of eight
+    # segments, selecting P = 334 to 750 and a mean peak error of 7.91 cm
+    # against 0.85 cm, with no warning raised anywhere. Requiring P below the
+    # smallest pole removes it: every real plateau there ends by P = 5.01 and
+    # every false one starts at P >= 10. It changes nothing on the default
+    # range, where the selections are bit-identical.
+    viable = (coups >= 1e-6) & (blows <= 0.05) & (p_coarse < prep["critical_p"])
     span = _plateau(peaks, viable)
 
     p_all, pk_all, tm_all, bl_all, cp_all = p_coarse, peaks, matches, blows, coups
@@ -966,7 +1036,8 @@ def _abmc_select_p(prep, forward, f, P_range, n_coarse, n_refine):
             tm_all = np.concatenate([matches, fm])[keep]
             bl_all = np.concatenate([blows, fb])[keep]
             cp_all = np.concatenate([coups, fc])[keep]
-            fine_span = _plateau(fp, (fc >= 1e-6) & (fb <= 0.05))
+            fine_viable = (fc >= 1e-6) & (fb <= 0.05) & (p_fine < prep["critical_p"])
+            fine_span = _plateau(fp, fine_viable)
             if fine_span is not None and fp[fine_span[0]] == peaks[i]:
                 p_opt = float(np.sqrt(p_fine[fine_span[0]] * p_fine[fine_span[1]]))
         logger.info(
@@ -1061,10 +1132,20 @@ def make_abmc(
         the distortionless one (default 0.03). The constraint column is rescaled
         to the norm of its leadfield column before Eq. 19 is applied, so ``P`` is
         a dimensionless trade-off and its useful range does not depend on the
-        units of the data: ``P`` of order 0.01-0.1 gives the template a
-        perceptible but subordinate weight, ``P`` far below that reduces ABMC to
-        an iterative LCMV, and large ``P`` enters the paper's weight-blow-up /
-        non-convergence regime. Watch ``result.blowup_fraction``.
+        units of the data. Work at ``P`` of order 0.01-0.1. On the 94-channel
+        spherical-EEG fixture of ``examples/plot_abmc_localization.py`` the
+        constraint changed the weights by 1 to 18 per cent over ``P`` in
+        [0.01, 0.18] while the localised peak stayed exactly where the
+        :math:`P\to 0` (plain LCMV) limit put it on all eight simulated spikes;
+        at :math:`P=1` half of those peaks had moved and the mean peak error had
+        risen from 0.85 cm to 2.20 cm. ``P`` far below that range reduces ABMC
+        to an iterative LCMV (a warning fires). Above it, the test for ``P``
+        being too large is ``result.critical_p``, the first ``P`` at which a
+        column's gain denominator vanishes; ``result.blowup_fraction`` sees only
+        the immediate neighbourhood of that value. Where exactly the stable
+        range ends is a property of the recording rather than of the method, so
+        use ``P='auto'`` (:func:`abmc_stability_curve`) to place it on your own
+        data.
     reg : float
         Diagonal loading of :math:`R`, as a fraction of
         :math:`\mathrm{tr}(R)/M`. The default is **0**, which is what the paper
@@ -1128,6 +1209,21 @@ def make_abmc(
             "the template constraint is numerically inert (P g^T c / g^T g is "
             f"at most {coupling:.2e}); ABMC reduces to a plain LCMV beamformer. "
             "Raise P, or check that the template is not orthogonal to the data.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    # Checked before the solve, because past the first pole the weights are not
+    # large but simply wrong, so no post-hoc statistic will say so.
+    critical_p = prep["critical_p"]
+    if P >= critical_p:
+        warnings.warn(
+            f"P={P:.4g} is at or above the critical value {critical_p:.4g} at "
+            "which the gain denominator g^T g + P g^T c of a grid column "
+            f"vanishes ({prep['unstable_fraction']:.1%} of columns have "
+            "g^T c < 0). Beyond it the weights of those columns are past their "
+            "pole and the localisation is unreliable, without necessarily "
+            "blowing up. Lower P below the critical value, or pass P='auto'.",
             RuntimeWarning,
             stacklevel=2,
         )

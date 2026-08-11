@@ -4,13 +4,15 @@
 #          Muzhi Wang
 # License: BSD-3-Clause
 
+import re
 import warnings
 
 import mne
 import numpy as np
 import pytest
 from mne.beamformer import apply_lcmv_cov
-from numpy.testing import assert_allclose
+from mne.utils import catch_logging
+from numpy.testing import assert_allclose, assert_array_equal
 
 from advance_beamlab import (
     make_recipsiicos_cov,
@@ -18,18 +20,24 @@ from advance_beamlab import (
     recipsiicos_rank_curve,
 )
 from advance_beamlab._recipsiicos import (
+    _DEFAULT_PCT_VAR,
+    _NEG_ENERGY_LIMIT,
     _apply_projector,
     _correlation_blocks,
     _correlation_gram,
     _optimal_rank,
     _power_columns,
     _power_projector,
+    _power_rank_curve,
+    _recipsiicos_working,
     _reduction_operator,
     _spectral_flip,
     _tangential_topographies,
     _unvec,
     _vec,
+    _warn_negative_energy,
     _whitened_projector,
+    _whitened_rank_curve,
 )
 
 mne.set_log_level("ERROR")
@@ -839,6 +847,267 @@ def test_whitened_rank_annihilating_covariance_warns(fwd_fixed):
             pct_var=1.0,
         )
     assert np.linalg.norm(cov_ok.data) > 1e-3 * np.linalg.norm(data_cov.data)
+
+
+# --------------------------------------------------------------------------- #
+# Negative-eigenvalue energy (Eq. 24) at the selected rank.
+# --------------------------------------------------------------------------- #
+def _neg_energy(fwd, info, data_cov, method, rank, pct_var=_DEFAULT_PCT_VAR):
+    """The Eq. 24 fraction the beamformer entry points report at ``rank``."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        out = _recipsiicos_working(
+            info,
+            fwd,
+            data_cov,
+            method=method,
+            rank=int(rank),
+            noise_cov=None,
+            whitener_rank=None,
+            pct_var=pct_var,
+            n_virtual=None,
+            reg=0.05,
+        )
+    return out[5]
+
+
+def _flip_warnings(records):
+    """The Eq. 24 warnings in ``records``, excluding the annihilation warning."""
+    return [w for w in records if str(w.message).startswith("The spectral-flip step")]
+
+
+def test_rank_curve_data_cov_leaves_the_curves_and_kstar_unchanged(fwd_rich):
+    """Passing data_cov adds a diagnostic and changes nothing else.
+
+    The curves and K* are functions of the forward alone, so reading the
+    covariance values for the Eq. 24 diagnostic must not perturb them, and the
+    return contract (three arrays, or four values with return_optimal) is
+    unchanged.
+    """
+    fwd, info = fwd_rich
+    data_cov = _cov_from_sources(fwd, idx=[5, 100], rho=0.9)
+    for method in ("recipsiicos", "whitened"):
+        ranks, p_pwr, p_cor, kstar = recipsiicos_rank_curve(
+            fwd, info, method=method, return_optimal=True
+        )
+        out = recipsiicos_rank_curve(fwd, info, method=method, data_cov=data_cov)
+        assert len(out) == 3
+        assert_array_equal(out[0], ranks)
+        assert_array_equal(out[1], p_pwr)
+        assert_array_equal(out[2], p_cor)
+        out = recipsiicos_rank_curve(
+            fwd, info, method=method, data_cov=data_cov, return_optimal=True
+        )
+        assert len(out) == 4
+        assert out[3] == kstar
+
+
+def test_rank_curve_projector_matches_the_built_projector(fwd_fixed):
+    """The curve's projection closure equals the projector built at that rank.
+
+    The Eq. 24 number the curve reports at K* is only meaningful if the closure
+    that reuses the curve's own factorisation applies exactly the projector the
+    beamformer would build, so this checks the two at every rank rather than at
+    the selected one alone.
+    """
+    from advance_beamlab._recipsiicos import _forward_gain
+
+    info = _avg_ref(mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg"))
+    info.set_montage("standard_1020")
+    ch = fwd_fixed["sol"]["row_names"]
+    b_op, _, _ = _reduction_operator(
+        info,
+        fwd_fixed,
+        ch,
+        noise_cov=None,
+        whitener_rank=None,
+        pct_var=1.0,
+        n_virtual=None,
+    )
+    gain, fixed = _forward_gain(fwd_fixed, ch)
+    topos = _tangential_topographies(b_op @ gain, fixed)
+    g_pwr = _power_columns(topos)
+    c_pwr = g_pwr @ g_pwr.T
+    c_cor = _correlation_gram(topos)
+    tr_pwr, tr_cor = np.trace(c_pwr), np.trace(c_cor)
+    reg = 0.05
+
+    data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.9)
+    cov_work = b_op @ data_cov.data @ b_op.T
+    tol = 1e-9 * np.linalg.norm(cov_work)
+
+    _, _, project_pwr = _power_rank_curve(g_pwr, c_pwr, c_cor, tr_pwr, tr_cor)
+    _, _, project_wht = _whitened_rank_curve(g_pwr, c_pwr, c_cor, tr_pwr, tr_cor, reg)
+    for k in range(1, g_pwr.shape[0] + 1):
+        proj, _ = _power_projector(g_pwr, k)
+        assert_allclose(
+            project_pwr(cov_work, k), _apply_projector(proj, cov_work), atol=tol
+        )
+        proj, _, _ = _whitened_projector(g_pwr, c_cor, k, reg=reg)
+        assert_allclose(
+            project_wht(cov_work, k), _apply_projector(proj, cov_work), atol=tol
+        )
+
+
+def test_rank_curve_reports_the_negative_energy_at_kstar(fwd_rich):
+    """With data_cov the curve reports the number the beamformer will report.
+
+    On this forward and covariance the selected rank clears the one-fifth limit,
+    so nothing is warned about; the warning branch is covered by the two tests
+    below.
+    """
+    fwd, info = fwd_rich
+    data_cov = _cov_from_sources(fwd, idx=[5, 100], rho=0.9)
+    for method in ("recipsiicos", "whitened"):
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            with catch_logging(verbose="info") as log:
+                _, _, _, kstar = recipsiicos_rank_curve(
+                    fwd,
+                    info,
+                    method=method,
+                    data_cov=data_cov,
+                    return_optimal=True,
+                    verbose=True,
+                )
+        neg = _neg_energy(fwd, info, data_cov, method, kstar)
+        # The logged percentage is the one the build path computes at K*.
+        found = re.search(r"negative-eigenvalue energy ([0-9.]+)%", log.getvalue())
+        assert found is not None
+        assert float(found.group(1)) == pytest.approx(100 * neg, abs=0.06)
+        assert neg < _NEG_ENERGY_LIMIT
+        assert _flip_warnings(rec) == []
+
+        # Without a covariance the number cannot be computed, and the log says
+        # how to obtain it rather than reporting nothing.
+        with catch_logging(verbose="info") as log:
+            recipsiicos_rank_curve(fwd, info, method=method, verbose=True)
+        text = log.getvalue()  # ClosingStringIO closes on the first read
+        assert "Pass data_cov" in text
+        assert re.search(r"negative-eigenvalue energy [0-9.]+%", text) is None
+
+
+def test_negative_energy_warning_points_at_the_covariance(fwd_fixed):
+    """Above the limit the warning fires, naming the covariance, not a new rank.
+
+    The fraction was measured to be a property of the data covariance rather
+    than of the rank, so the warning must not tell the caller to change the
+    rank, and must point at the curve for deliberate inspection.
+    """
+    data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.9)
+    info = _avg_ref(mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg"))
+    info.set_montage("standard_1020")
+    # Measured: this rank puts ~80% of the eigenvalue energy in the flipped
+    # eigenvalues while leaving the covariance far from annihilated.
+    assert _neg_energy(fwd_fixed, info, data_cov, "whitened", 8, 1.0) > 0.5
+
+    with pytest.warns(RuntimeWarning, match="The spectral-flip step carried") as rec:
+        make_recipsiicos_cov(
+            data_cov, fwd_fixed, info, rank=8, method="whitened", pct_var=1.0
+        )
+    msg = str(_flip_warnings(rec)[0].message)
+    assert "at rank 8" in msg
+    assert "data covariance" in msg
+    assert "recipsiicos_rank_curve" in msg
+    assert "Consider a different projection rank" not in msg
+
+
+def test_annihilated_covariance_does_not_warn_about_negative_energy(fwd_fixed):
+    """An annihilated covariance raises only the annihilation warning.
+
+    The Eq. 24 ratio divides one norm by another, so it stays large on a
+    covariance the projector has reduced to round-off. Warning about it there
+    reports the ratio of two numerically meaningless quantities on top of the
+    annihilation warning, which is the one that describes the real problem.
+    """
+    data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.9)
+    info = _avg_ref(mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg"))
+    info.set_montage("standard_1020")
+    q = len(fwd_fixed["sol"]["row_names"])
+    n_sym = q * (q + 1) // 2
+
+    # The ratio is over the limit at this rank, so it is suppression rather than
+    # absence that keeps the second warning away.
+    assert _neg_energy(fwd_fixed, info, data_cov, "whitened", n_sym, 1.0) > (
+        _NEG_ENERGY_LIMIT
+    )
+    with pytest.warns(RuntimeWarning, match=r"q\(q\+1\)/2") as rec:
+        cov = make_recipsiicos_cov(
+            data_cov, fwd_fixed, info, rank=n_sym, method="whitened", pct_var=1.0
+        )
+    assert np.linalg.norm(cov.data) < 1e-9 * np.linalg.norm(data_cov.data)
+    assert _flip_warnings(rec) == []
+
+
+def test_warn_negative_energy_branches():
+    """The Eq. 24 warning fires above the limit, and only on a live covariance.
+
+    Unit-level cover for the three branches, since the floor that suppresses the
+    warning on an annihilated covariance is a relative-norm test that no single
+    end-to-end configuration exercises in both directions.
+    """
+    cov_work = np.eye(4)
+    over = 2 * _NEG_ENERGY_LIMIT
+    with pytest.warns(RuntimeWarning, match="The spectral-flip step carried"):
+        _warn_negative_energy(over, np.eye(4), cov_work, 3, stacklevel=2)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        # At the limit, not above it.
+        _warn_negative_energy(_NEG_ENERGY_LIMIT, np.eye(4), cov_work, 3, stacklevel=2)
+        # Over the limit, but on a covariance the projector has annihilated.
+        _warn_negative_energy(over, 1e-14 * np.eye(4), cov_work, 3, stacklevel=2)
+
+
+def test_negative_energy_follows_the_covariance_at_a_fixed_rank(fwd_rich):
+    """At one forward and one rank the fraction is set by the covariance.
+
+    This is what the warning text asserts and what stops the fraction from being
+    read as a statement about the rank: raising the sensor noise, with the
+    forward, the rank and the source pair held fixed, collapses it.
+    """
+    fwd, info = fwd_rich
+    gain = np.asarray(fwd["sol"]["data"], dtype=np.float64)
+    idx = [5, 100]
+    # Per-channel signal variance, so the noise level below is a true SNR.
+    sig = np.trace(gain[:, idx] @ gain[:, idx].T) / gain.shape[0]
+    _, _, _, kstar = recipsiicos_rank_curve(fwd, info, return_optimal=True)
+
+    high_snr = _cov_from_sources(fwd, idx=idx, rho=0.9, noise=1e-6 * sig)
+    low_snr = _cov_from_sources(fwd, idx=idx, rho=0.9, noise=10.0 * sig)
+    neg_high = _neg_energy(fwd, info, high_snr, "recipsiicos", kstar)
+    neg_low = _neg_energy(fwd, info, low_snr, "recipsiicos", kstar)
+    assert neg_high > 0.05
+    assert neg_low < 0.1 * neg_high
+
+
+def test_optimal_rank_logs_the_floor_backoff():
+    """The retained-power floor moving K* off the 45-degree point is logged.
+
+    The back-off is the only thing that moves the returned rank away from the
+    stated criterion, so it must not be silent, and it must also not change the
+    rank that is returned.
+    """
+    # Whitened (decreasing) curve whose crossing at rank 2 has already emptied
+    # the power subspace, so the floor pulls K* back to the identity end.
+    p_pwr = np.array([1.0, 0.05, 0.03, 0.02, 0.01])
+    p_cor = np.array([1.0, 0.02, 0.01, 0.005, 0.0])
+    with catch_logging(verbose="info") as log:
+        kstar = _optimal_rank(p_pwr, p_cor, "whitened")
+    assert kstar == 1
+    text = log.getvalue()
+    assert "the 45-degree crossing at rank 2" in text
+    assert "backed off to rank 1" in text
+    assert "The returned rank is not the 45-degree point" in text
+
+
+def test_optimal_rank_does_not_log_a_backoff_it_did_not_make(fwd_rich):
+    """A healthy curve returns the crossing itself, and says nothing about it."""
+    fwd, info = fwd_rich
+    _, p_pwr, p_cor = recipsiicos_rank_curve(fwd, info, method="recipsiicos")
+    with catch_logging(verbose="info") as log:
+        kstar = _optimal_rank(p_pwr, p_cor, "recipsiicos")
+    assert p_pwr[kstar - 1] > 0.1  # the floor is not active
+    assert "backed off" not in log.getvalue()
 
 
 # --------------------------------------------------------------------------- #

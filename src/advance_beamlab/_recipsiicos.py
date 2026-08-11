@@ -109,6 +109,16 @@ _ALLOWED_WEIGHT_NORM = ("unit-noise-gain-invariant", "unit-noise-gain", "nai", N
 # recommend the modification stay below ~20%; their Eq. 24).
 _NEG_ENERGY_LIMIT = 0.20
 
+# Relative Frobenius norm below which a projected covariance counts as
+# numerically annihilated, and the Eq. 24 ratio as meaningless. The ratio is
+# scale-blind: it divides the negative eigenvalue energy by the total, so a
+# covariance the projector has reduced to round-off still reports a large
+# fraction. That is not hypothetical: ``method='whitened'`` at or above the
+# retained rank of C_pwr leaves ||P(C)||/||C|| ~ 5e-15 and an Eq. 24 ratio of
+# 37.9%, which used to raise a second, meaningless warning on top of the
+# annihilation warning that is already correct there.
+_NEG_ENERGY_FLOOR = 1e-10
+
 # Default fraction of whitened-leadfield variance kept by the virtual-sensor
 # reduction. Kuznetsova et al. (2021) keep 90% of the variance (95% in their
 # real-data analysis); 0.99 is the more conservative default here, and still
@@ -367,6 +377,12 @@ def _power_rank_curve(g_pwr, c_pwr, c_cor, tr_pwr, tr_cor):
     With ``P_k = U_k U_k^T`` the projector onto the ``k`` leading power
     directions, ``tr(P_k C P_k^T) = tr(U_k^T C U_k) = sum_{i<=k} u_i^T C u_i``,
     so each curve is the cumulative sum of the per-direction quadratic forms.
+
+    Returns ``(p_pwr, p_cor, project)``, where ``project(cov, k)`` applies the
+    rank-``k`` projector to a working-space covariance by reusing the single SVD
+    computed here. Reusing it is what makes the negative-energy diagnostic at
+    ``K*`` free: it costs one ``q x q`` eigendecomposition rather than a second
+    ``q^2 x q^2`` factorisation.
     """
     u, _, _ = np.linalg.svd(g_pwr, full_matrices=False)
     n_dir = u.shape[1]
@@ -383,7 +399,15 @@ def _power_rank_curve(g_pwr, c_pwr, c_cor, tr_pwr, tr_cor):
     p_pwr[n_dir:] = cum_pwr[-1]
     p_cor[:n_dir] = cum_cor
     p_cor[n_dir:] = cum_cor[-1]
-    return p_pwr, p_cor
+
+    def _project(cov, rank):
+        """Apply ``P_k = U_k U_k^T`` to ``vec(cov)`` (Eqs. 10-11)."""
+        k = int(np.clip(int(rank), 1, n_dir))
+        u_k = u[:, :k]
+        modified = _unvec(u_k @ (u_k.T @ _vec(cov)), cov.shape[0])
+        return 0.5 * (modified + modified.T)
+
+    return p_pwr, p_cor, _project
 
 
 def _whitened_rank_curve(g_pwr, c_pwr, c_cor, tr_pwr, tr_cor, reg):
@@ -400,6 +424,10 @@ def _whitened_rank_curve(g_pwr, c_pwr, c_cor, tr_pwr, tr_cor, reg):
 
     every term of which is a cumulative sum over the ordered eigenvectors, so
     both curves follow from a single eigendecomposition.
+
+    Returns ``(p_pwr, p_cor, project)``, where ``project(cov, k)`` applies the
+    rank-``k`` projector to a working-space covariance by reusing the whitener
+    and eigenvectors computed here (see :func:`_power_rank_curve`).
     """
     w, w_inv, _ = _whitening_pair(c_pwr, reg)
     c_cor_w = w @ c_cor @ w.T
@@ -420,7 +448,16 @@ def _whitened_rank_curve(g_pwr, c_pwr, c_cor, tr_pwr, tr_cor, reg):
         f_k = diag_pq.sum() - np.cumsum(diag_pq) - np.cumsum(diag_qp) + block_cumsum
         return f_k / trace
 
-    return _curve(c_pwr_e, tr_pwr), _curve(c_cor_e, tr_cor)
+    def _project(cov, rank):
+        """Apply ``P_k = W^{-1}(I - E_k E_k^T)W`` to ``vec(cov)`` (Eqs. 16-17)."""
+        k = int(np.clip(int(rank), 1, e.shape[1]))
+        e_k = e[:, :k]  # ``e`` is largest-first, the order the projector removes
+        x = w @ _vec(cov)
+        x = x - e_k @ (e_k.T @ x)
+        modified = _unvec(w_inv @ x, cov.shape[0])
+        return 0.5 * (modified + modified.T)
+
+    return _curve(c_pwr_e, tr_pwr), _curve(c_cor_e, tr_cor), _project
 
 
 # --------------------------------------------------------------------------- #
@@ -448,6 +485,49 @@ def _spectral_flip(cov):
     corrected = eigvecs @ np.diag(abs_eigvals) @ eigvecs.T
     corrected = 0.5 * (corrected + corrected.T)
     return corrected, float(neg_energy)
+
+
+def _warn_negative_energy(neg_energy, modified, cov_work, rank, *, stacklevel):
+    """Warn when the spectral flip carried too much energy (Eq. 24).
+
+    Two things this deliberately does not say, because both were measured to be
+    false. It does not tell the caller to lower the rank: the fraction is not a
+    monotone function of the rank, and on the one configuration in this
+    repository that trips the limit no rank between 19 and 139 clears it at all,
+    while the ranks that do clear it mislocalise by 13 to 64 mm on an 8.7 mm
+    grid, against 0 mm at the automatically selected rank. And it does not
+    present the fraction as a property of the rank: holding the forward and the
+    rank fixed and changing only the covariance moved it from 0.5% (a real
+    baseline covariance) to 22% (simulated, 50:1 SNR, correlated sources), and
+    raising the simulated sensor noise took it back to 0%.
+
+    The warning is suppressed when the projector has annihilated the covariance,
+    since the Eq. 24 ratio is scale-blind and would then be computed on
+    round-off; :func:`_build_projector` already warns about that case on its own
+    terms.
+    """
+    if neg_energy <= _NEG_ENERGY_LIMIT:
+        return
+    ref = np.linalg.norm(cov_work)
+    if ref > 0 and np.linalg.norm(modified) <= _NEG_ENERGY_FLOOR * ref:
+        return
+    warnings.warn(
+        f"The spectral-flip step carried {neg_energy * 100:.1f}% of the "
+        f"eigenvalue energy in negative eigenvalues at rank {rank} (> "
+        f"{_NEG_ENERGY_LIMIT * 100:.0f}%), so the modified covariance sits well "
+        "away from the projected one. This fraction is mainly a property of the "
+        "data covariance rather than of the rank: at a fixed forward and a fixed "
+        "rank it ranged from 0.5% on a real baseline covariance to 22% on a "
+        "simulated one at 50:1 SNR with correlated sources, and fell back to 0% "
+        "as the sensor noise was raised. Large values are therefore expected in "
+        "exactly the regime ReciPSIICOS is meant for. Treat this as a diagnostic "
+        "to check the result against (compare the source estimate with plain "
+        "LCMV) rather than as a rank to change; lowering the rank is not "
+        "reliably an improvement. Use recipsiicos_rank_curve to inspect the "
+        "power-versus-correlation trade-off if you do want to change it.",
+        RuntimeWarning,
+        stacklevel=stacklevel,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -593,15 +673,8 @@ def _recipsiicos_working(
         f"sensors; projection rank {rank}; negative-eigenvalue energy "
         f"{neg_energy * 100:.1f}%."
     )
-    if neg_energy > _NEG_ENERGY_LIMIT:
-        warnings.warn(
-            f"The spectral-flip step carried {neg_energy * 100:.1f}% of the "
-            f"eigenvalue energy in negative eigenvalues (> "
-            f"{_NEG_ENERGY_LIMIT * 100:.0f}%); the modified covariance may be "
-            "unreliable. Consider a different projection rank.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
+    # stacklevel 3: helper -> here -> make_recipsiicos_cov/make_recipsiicos_lcmv.
+    _warn_negative_energy(neg_energy, modified, cov_work, rank, stacklevel=3)
     return common_ch, b_op, gain_work, fixed, cov_clean, neg_energy, q
 
 
@@ -679,7 +752,9 @@ def make_recipsiicos_cov(
     rank : int
         Projection rank ``K`` (Eq. 10 / Eq. 17), in the ``q^2``-dimensional
         working covariance vector space (``q`` = number of virtual sensors). Use
-        :func:`recipsiicos_rank_curve` to choose it.
+        :func:`recipsiicos_rank_curve` to choose it; the rank it returns is the
+        45-degree point of the criterion and is safe to pass through unchanged
+        (see the Notes on the negative-eigenvalue warning).
     method : 'recipsiicos' | 'whitened'
         Which projector to build. ``'recipsiicos'`` projects onto the principal
         power subspace (Eq. 10); ``'whitened'`` projects away from the principal
@@ -713,6 +788,18 @@ def make_recipsiicos_cov(
     Notes
     -----
     Equation numbers refer to Kuznetsova et al. (2021).
+
+    A ``RuntimeWarning`` is raised when the spectral-flip step (Eq. 12) carries
+    more than a fifth of the eigenvalue energy in negative eigenvalues (Eq. 24).
+    That fraction is largely a property of ``data_cov`` rather than of ``rank``:
+    it is largest for high-SNR, near-rank-deficient, strongly correlated
+    covariances, which is the regime the method targets, so it flags a result
+    worth checking (against plain LCMV, say) rather than a rank worth changing.
+    :func:`recipsiicos_rank_curve` reports the same number at its selected rank
+    when it is given a ``data_cov``. The warning is suppressed when the
+    projector has annihilated the covariance, because the Eq. 24 ratio is
+    scale-blind and would then be computed on round-off; that case has its own
+    warning.
 
     References
     ----------
@@ -793,7 +880,9 @@ def make_recipsiicos_lcmv(
     rank : int
         Projection rank ``K`` in the ``q^2``-dimensional working covariance
         vector space (``q`` = number of virtual sensors). See
-        :func:`recipsiicos_rank_curve`.
+        :func:`recipsiicos_rank_curve`, whose selected rank is meant to be
+        passed through unchanged (see the Notes on the negative-eigenvalue
+        warning).
     method : 'recipsiicos' | 'whitened'
         Which ReciPSIICOS projector to use.
     noise_cov : instance of mne.Covariance | None
@@ -860,6 +949,18 @@ def make_recipsiicos_lcmv(
     :math:`q^2 \times q^2` Gram (99 MiB at ``q = 60``, 1.5 GiB at ``q = 120``)
     plus one same-sized accumulator. Lower ``pct_var`` or set ``n_virtual`` if
     that is too much.
+
+    A ``RuntimeWarning`` is raised when the spectral-flip step (Eq. 12) carries
+    more than a fifth of the eigenvalue energy in negative eigenvalues (Eq. 24).
+    That fraction is largely a property of ``data_cov`` rather than of ``rank``:
+    it is largest for high-SNR, near-rank-deficient, strongly correlated
+    covariances, which is the regime the method targets, so it flags a result
+    worth checking (against plain LCMV, say) rather than a rank worth changing.
+    :func:`recipsiicos_rank_curve` reports the same number at its selected rank
+    when it is given a ``data_cov``. The warning is suppressed when the
+    projector has annihilated the covariance, because the Eq. 24 ratio is
+    scale-blind and would then be computed on round-off; that case has its own
+    warning.
 
     References
     ----------
@@ -1020,7 +1121,17 @@ def _optimal_rank(p_pwr, p_cor, method, floor=0.1):
     In each case a ``floor`` on the retained power guards against a degenerate
     curve (a rank-deficient forward, e.g. a single-shell sphere model, whose
     subspaces do not separate) returning a rank that (near-)empties the
-    covariance; the back-off runs toward that method's identity end.
+    covariance; the back-off runs toward that method's identity end. That
+    back-off is the only thing that ever moves the returned rank off the
+    45-degree point, and it is logged when it happens so the caller is never
+    silently handed a rank the stated criterion did not choose.
+
+    Nothing else adjusts ``K*``. In particular it is not capped to keep the
+    negative-eigenvalue energy of the modified covariance (Eq. 24) below
+    :data:`_NEG_ENERGY_LIMIT`: that quantity is a function of the data
+    covariance, which does not enter this criterion at all, and capping against
+    it was measured to cost 13 to 64 mm of localisation accuracy on the fixture
+    that trips the limit.
     """
     n = int(p_pwr.size)
     if n < 3:
@@ -1030,17 +1141,28 @@ def _optimal_rank(p_pwr, p_cor, method, floor=0.1):
         # Descending axis: the crossing is the *last* negative difference.
         hit = np.nonzero(delta < 0)[0]
         k = int(hit[-1] + 2) if hit.size else 1
+        crossing = k
         # Increasing curve: back off toward larger (near-identity) rank.
         while k < n and p_pwr[k - 1] < floor:
             k += 1
     else:
         hit = np.nonzero(delta > 0)[0]
         k = int(hit[0] + 1) if hit.size else 1
+        crossing = k
         # Decreasing curve: back off toward smaller (near-identity) rank so the
         # projector does not remove essentially all of the covariance.
         while k > 1 and p_pwr[k - 1] < floor:
             k -= 1
-    return max(1, min(k, n))
+    k = max(1, min(k, n))
+    if k != crossing:
+        logger.info(
+            f"    Degenerate rank curve: the 45-degree crossing at rank "
+            f"{crossing} retains only {p_pwr[crossing - 1]:.3f} of the power "
+            f"subspace (floor {floor:.2f}), so K* was backed off to rank {k} "
+            f"(p_pwr {p_pwr[k - 1]:.3f}) toward the identity end of the curve. "
+            f"The returned rank is not the 45-degree point."
+        )
+    return k
 
 
 @verbose
@@ -1067,6 +1189,13 @@ def recipsiicos_rank_curve(
     ``p_cor`` against ``p_pwr`` makes this trade-off visible and its 45-degree
     point (Section 2.4) is the recommended rank.
 
+    The returned ``K*`` is that 45-degree point, unmodified. Pass ``data_cov``
+    to also have the negative-eigenvalue energy of the modified covariance
+    (Eq. 24) reported at ``K*``, so that the diagnostic
+    :func:`make_recipsiicos_lcmv` reports at build time is visible while the
+    rank is being chosen. It costs one extra ``q x q`` eigendecomposition, and
+    it changes neither the curves nor ``K*``.
+
     Note that the two methods traverse the rank axis in opposite directions:
     ``k = q^2`` is the identity for ``'recipsiicos'`` and ``k = 0`` is the
     identity for ``'whitened'``. ``p_pwr`` and ``p_cor`` therefore rise with
@@ -1084,7 +1213,11 @@ def recipsiicos_rank_curve(
     method : 'recipsiicos' | 'whitened'
         Which projector family to characterise.
     data_cov : instance of mne.Covariance | None
-        Only used to intersect channels; its values do not affect the curve.
+        Used to intersect channels and, when given, to report the
+        negative-eigenvalue energy at ``K*`` (Eq. 24), warning above the same
+        one-fifth limit the beamformer entry points use. Its values affect
+        neither ``p_pwr``, ``p_cor`` nor ``K*``, which are functions of the
+        forward alone.
     noise_cov : instance of mne.Covariance | None
         Noise covariance used to whiten (see :func:`make_recipsiicos_lcmv`).
     whitener_rank : int | None | 'full'
@@ -1113,11 +1246,28 @@ def recipsiicos_rank_curve(
     p_cor : ndarray, shape (n_ranks,)
         Fraction of correlation-subspace energy retained at each rank (Eq. 21).
     optimal : int
-        The selected rank ``K*`` (only if ``return_optimal=True``).
+        The selected rank ``K*`` (only if ``return_optimal=True``). This is the
+        45-degree point of Section 2.4 exactly as that criterion defines it. It
+        is never capped or nudged to satisfy the negative-eigenvalue limit; the
+        single exception is a degenerate curve, where a floor on the retained
+        power backs ``K*`` off toward the identity end, and that back-off is
+        logged whenever it happens.
 
     Notes
     -----
     Equation numbers refer to Kuznetsova et al. (2021).
+
+    The negative-eigenvalue energy reported when ``data_cov`` is given is a
+    property of the covariance far more than of the rank. Measured on a fixed
+    forward at a fixed rank it ran from 0.005 on a real baseline covariance to
+    0.22 on a simulated one at 50:1 SNR with correlated sources, and dropped
+    back to zero as the simulated sensor noise was raised, so a large value
+    flags the high-SNR, strongly correlated regime the method exists for rather
+    than a bad rank. It is reported here because a number worth checking should
+    be visible when the rank is chosen; it is not a reason to override ``K*``.
+    On the one simulation in this package that trips the limit, ``K*`` is one of
+    only two ranks that put both peaks on the true sources, and every rank that
+    clears the limit misses by 13 to 64 mm on an 8.7 mm grid.
 
     The curve needs a forward with rich leadfield structure. On a single-shell
     sphere model the tangential leadfields are so low-rank that the power
@@ -1136,21 +1286,24 @@ def recipsiicos_rank_curve(
     _check_option("method", method, _ALLOWED_METHOD)
     _validate_type(info, "info", "info")
 
-    # Determine the common channels (values of data_cov are irrelevant here).
+    # Determine the common channels. The curves and K* are functions of the
+    # forward alone, so the values of data_cov are irrelevant to them; they are
+    # carried through the channel selection only for the Eq. 24 diagnostic at
+    # K* below, which needs the covariance in the same working space.
     if data_cov is not None:
-        common_ch, _ = _align_channels(info, forward, data_cov)
+        common_ch, cov = _align_channels(info, forward, data_cov)
     else:
         bads = set(info["bads"])
         fwd_set = set(forward["sol"]["row_names"])
         common_ch = [ch for ch in info["ch_names"] if ch in fwd_set and ch not in bads]
         if len(common_ch) == 0:
             raise ValueError("No common good channels between info and forward.")
+        # Placeholder: with no data_cov only the channel list is needed.
+        cov = np.empty((len(common_ch), len(common_ch)))
 
     # Same channel selection as the beamformer entry points, so the curve
-    # characterises the space the filters are actually built in. Only the
-    # channel list matters here, hence the placeholder matrix.
-    n_ch = len(common_ch)
-    common_ch, _ = _intersect_noise_cov(common_ch, np.empty((n_ch, n_ch)), noise_cov)
+    # characterises the space the filters are actually built in.
+    common_ch, cov = _intersect_noise_cov(common_ch, cov, noise_cov)
     _check_noise_cov_required(info, common_ch, noise_cov)
     _check_eeg_reference(info, common_ch)
 
@@ -1175,10 +1328,35 @@ def recipsiicos_rank_curve(
     msq = g_pwr.shape[0]
     ranks = np.arange(1, msq + 1)
     if method == "recipsiicos":
-        p_pwr, p_cor = _power_rank_curve(g_pwr, c_pwr, c_cor, tr_pwr, tr_cor)
+        p_pwr, p_cor, project = _power_rank_curve(g_pwr, c_pwr, c_cor, tr_pwr, tr_cor)
     else:
-        p_pwr, p_cor = _whitened_rank_curve(g_pwr, c_pwr, c_cor, tr_pwr, tr_cor, reg)
+        p_pwr, p_cor, project = _whitened_rank_curve(
+            g_pwr, c_pwr, c_cor, tr_pwr, tr_cor, reg
+        )
+
+    # K* is computed whether or not the caller asked for it, so that the
+    # selection (and any floor back-off inside _optimal_rank) is logged either
+    # way and the diagnostic below has a rank to report at.
+    kstar = _optimal_rank(p_pwr, p_cor, method)
+    selected = (
+        f"    ReciPSIICOS ({method}) rank curve over {msq} ranks; selected "
+        f"K*={kstar} (p_pwr {p_pwr[kstar - 1]:.3f}, p_cor {p_cor[kstar - 1]:.3f})"
+    )
+    if data_cov is None:
+        logger.info(
+            f"{selected}. Pass data_cov to also report the negative-eigenvalue "
+            "energy at that rank."
+        )
+    else:
+        # Reuses the factorisation the curve already built, so this is one
+        # q x q eigendecomposition on top of a q^2 x q^2 problem.
+        cov_work = b_op @ cov @ b_op.T
+        modified = project(cov_work, kstar)
+        _, neg_energy = _spectral_flip(modified)
+        logger.info(f"{selected}; negative-eigenvalue energy {neg_energy * 100:.1f}%.")
+        # stacklevel 3: helper -> here -> the @verbose wrapper around this call.
+        _warn_negative_energy(neg_energy, modified, cov_work, kstar, stacklevel=3)
 
     if return_optimal:
-        return ranks, p_pwr, p_cor, _optimal_rank(p_pwr, p_cor, method)
+        return ranks, p_pwr, p_cor, kstar
     return ranks, p_pwr, p_cor

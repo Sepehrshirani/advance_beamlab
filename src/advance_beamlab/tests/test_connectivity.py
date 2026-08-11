@@ -7,6 +7,7 @@ import mne
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose
+from scipy.signal import lfilter
 
 from advance_beamlab import (
     ar1_surrogate_significance,
@@ -16,6 +17,7 @@ from advance_beamlab import (
     reconstruct_pairwise_mcmv,
 )
 from advance_beamlab._connectivity import (
+    _SPECTRAL_METHODS,
     _ar1_fit,
     _ar1_surrogate,
     _as_pairs,
@@ -24,6 +26,7 @@ from advance_beamlab._connectivity import (
     _epoched,
     _pair_connectivity,
     _select_neighbours,
+    _spectral_conn_matrix,
 )
 
 mne.set_log_level("ERROR")
@@ -673,16 +676,6 @@ def test_ar1_degenerate_null_is_not_significant():
     assert not mask.any()
 
 
-def test_ar1_rejects_non_envelope_methods():
-    """The AR(1) surrogate is defined for envelope correlation only."""
-    ref = np.random.default_rng(0).standard_normal((3, 4000))
-    conn = np.zeros((3, 3))
-    with pytest.raises(ValueError, match="method='envelope' only"):
-        ar1_surrogate_significance(
-            conn, ref, method="plv", sfreq=SFREQ, n_surrogates=10, random_state=0
-        )
-
-
 def test_ar1_requires_at_least_two_surrogates():
     ref = np.random.default_rng(0).standard_normal((3, 4000))
     with pytest.raises(ValueError, match="n_surrogates must be at least 2"):
@@ -724,6 +717,324 @@ def test_benjamini_hochberg_matches_scipy():
     # non-finite p-values are treated as "not rejected"
     keep = _benjamini_hochberg(np.array([np.nan, 1e-9, np.inf]), 0.05)
     assert keep.tolist() == [False, True, False]
+
+
+# --------------------------------------------------------------------------- #
+# AR(1) surrogate significance: the spectral extension                        #
+# --------------------------------------------------------------------------- #
+BAND = dict(fmin=8.0, fmax=12.0, mt_bandwidth=None)
+# Realisations of the complete null averaged over by ``_spectral_null_rate``.
+NULL_SEEDS = tuple(range(8))
+
+
+def _epoch(x, n_epochs, n_times):
+    """Cut a continuous ``(n_sources, n_epochs * n_times)`` block into epochs."""
+    return x.reshape(len(x), n_epochs, n_times).transpose(1, 0, 2)
+
+
+def _ar1_epochs(n_sources, n_epochs, n_times, phi=0.95, seed=0):
+    """Independent AR(1) sources: exactly the model the surrogate null assumes."""
+    rng = np.random.default_rng(seed)
+    innov = rng.standard_normal((n_sources, n_epochs * n_times))
+    return _epoch(lfilter([1.0], [1.0, -phi], innov, axis=-1), n_epochs, n_times)
+
+
+def _narrowband_epochs(n_sources, n_epochs, n_times, seed=0):
+    """Independent 9-11 Hz sources, whose in-band power AR(1) cannot reproduce."""
+    rng = np.random.default_rng(seed)
+    x = mne.filter.filter_data(
+        rng.standard_normal((n_sources, n_epochs * n_times)),
+        SFREQ,
+        9.0,
+        11.0,
+        verbose=False,
+    )
+    return _epoch(x, n_epochs, n_times)
+
+
+def _spectral_matrix(ref, method):
+    """Band-averaged connectivity matrix in the pair ordering the estimator uses.
+
+    ``_spectral_conn_matrix`` fills only the lower triangle, and entry
+    ``[j, i]`` holds the *ordered* pair ``(j, i)``, which is the entry
+    ``_pair_connectivity`` reads; ``imcoh`` changes sign with that order, so the
+    matrix handed to the test must be built the same way.
+    """
+    dense = _spectral_conn_matrix(ref, method, sfreq=SFREQ, **BAND)
+    n = ref.shape[1]
+    conn = np.zeros((n, n))
+    for i, j in _as_pairs(n):
+        conn[i, j] = conn[j, i] = dense[j, i]
+    return conn
+
+
+def _spectral_null_rate(method, sources, seeds=NULL_SEEDS, alpha=0.05):
+    """Fraction of true-null edges flagged over ``seeds`` complete-null datasets.
+
+    ``sources`` builds ``(n_epochs, n_sources, n_times)`` mutually independent
+    signals, so every edge is a true negative and the returned fraction is the
+    per-edge false-positive rate of the mask (that is, after Benjamini-Hochberg,
+    since that is what the function returns).
+    """
+    n_sources, n_epochs, n_times = 6, 24, 400
+    pairs = _as_pairs(n_sources)
+    seeds = list(seeds)
+    n_flagged = 0
+    for seed in seeds:
+        ref = sources(n_sources, n_epochs, n_times, seed=seed)
+        mask = ar1_surrogate_significance(
+            _spectral_matrix(ref, method),
+            ref,
+            method=method,
+            sfreq=SFREQ,
+            n_surrogates=60,
+            alpha=alpha,
+            random_state=seed,
+            **BAND,
+        )
+        n_flagged += sum(bool(mask[i, j]) for i, j in pairs)
+    return n_flagged / (len(seeds) * len(pairs))
+
+
+@pytest.mark.parametrize("method", _SPECTRAL_METHODS)
+def test_ar1_spectral_mask_is_symmetric_and_flags_the_coupled_pair(method):
+    """The spectral path returns a well-formed mask and finds a lagged coupling.
+
+    Sources 2 and 3 share a 9-11 Hz oscillation a quarter cycle apart, which
+    every supported metric can see (a zero-lag coupling would be invisible to
+    ``imcoh``, ``pli`` and ``wpli``); the other two sources are independent, so
+    the only edge that may be flagged is ``(2, 3)``.
+    """
+    n_epochs, n_times, lag = 24, 400, 5  # 5 samples is a quarter cycle at 10 Hz
+    rng = np.random.default_rng(0)
+    x = mne.filter.filter_data(
+        rng.standard_normal((4, n_epochs * n_times)), SFREQ, 9.0, 11.0, verbose=False
+    )
+    common = mne.filter.filter_data(
+        rng.standard_normal(n_epochs * n_times), SFREQ, 9.0, 11.0, verbose=False
+    )
+    x[2] = 0.7 * common + 0.3 * x[2]
+    x[3] = 0.7 * np.roll(common, lag) + 0.3 * x[3]
+    ref = _epoch(x, n_epochs, n_times)
+
+    conn = _spectral_matrix(ref, method)
+    # The null is compared against the estimator's own value for the pair, so
+    # the matrix read out of the joint call must equal the two-signal call.
+    assert_allclose(
+        conn[2, 3],
+        _pair_connectivity(
+            ref[:, [2, 3]],
+            method,
+            sfreq=SFREQ,
+            orthogonalize=False,
+            absolute=False,
+            **BAND,
+        ),
+        atol=1e-10,
+    )
+
+    mask = ar1_surrogate_significance(
+        conn, ref, method=method, sfreq=SFREQ, n_surrogates=60, random_state=0, **BAND
+    )
+    assert mask.shape == (4, 4)
+    assert mask.dtype == np.bool_
+    assert np.array_equal(mask, mask.T)
+    assert not mask.diagonal().any()
+    assert [(i, j) for i, j in _as_pairs(4) if mask[i, j]] == [(2, 3)]
+
+
+@pytest.mark.parametrize("method", ("coh", "plv"))
+def test_ar1_spectral_null_false_positive_rate_at_or_below_alpha(method):
+    """Under a complete null the spectral mask flags at most ``alpha`` of edges.
+
+    Six mutually independent AR(1) sources (:math:`\\varphi = 0.95`) over eight
+    realisations, so all 120 edge decisions are true negatives and the sources
+    are exactly the model the surrogate assumes. Measured here the mask flags
+    0.000 (coh) and 0.008 (plv) of them. This is the rate of the returned mask,
+    that is after Benjamini-Hochberg, which only ever rejects a subset of the
+    edges with an uncorrected p at or below ``alpha``, so it says nothing about
+    the uncorrected rate; that one is above nominal, as the warning in
+    ``ar1_surrogate_significance`` documents. Sources that are not AR(1) can
+    push even the corrected rate above ``alpha`` (0.092 for coherence on
+    narrow-band sources), which
+    ``test_ar1_spectral_null_is_anticonservative_for_narrow_band_sources``
+    measures.
+    """
+    alpha = 0.05
+    assert _spectral_null_rate(method, _ar1_epochs, alpha=alpha) <= alpha
+
+
+def test_ar1_spectral_null_is_anticonservative_for_narrow_band_sources():
+    """The spectral null only holds when the sources really are AR(1).
+
+    An AR(1) process can match the lag-1 autocorrelation of a narrow-band source
+    and still put almost none of its power in the analysis band, so its
+    band-averaged null comes out too narrow. With the same six independent
+    sources, the same 8-12 Hz coherence and the same seeds, replacing the AR(1)
+    sources by 9-11 Hz ones takes the fraction of flagged true-null edges from
+    0.000 to 0.092, that is from below ``alpha`` to above it. The excess moves
+    with the realisation: over five blocks of eight seeds it measured 0.042 to
+    0.133 for the narrow-band sources against 0.000 to 0.017 for the AR(1) ones.
+    Only the ordering is asserted, since the size of the gap is a property of
+    the simulation rather than of the code.
+    """
+    alpha = 0.05
+    matched = _spectral_null_rate("coh", _ar1_epochs, alpha=alpha)
+    narrow = _spectral_null_rate("coh", _narrowband_epochs, alpha=alpha)
+    assert matched <= alpha
+    assert narrow > matched
+
+
+def test_ar1_nonnegative_metric_is_tested_one_sided():
+    """A coherence far *below* its null is no evidence of coupling.
+
+    With four independent 9-11 Hz sources the surrogate null of the
+    band-averaged coherence sits at about 0.07, so a coherence of exactly zero
+    lies 2.4 to 3.8 null standard deviations below it, which a two-sided reading
+    would reject at ``alpha=0.05`` on every edge (p 0.0002 to 0.015, measured on
+    the 60 surrogates drawn here). The one-sided rule for the non-negative
+    metrics flags none of them, while the mirror-image case of an implausibly
+    high coherence is flagged.
+    """
+    ref = _narrowband_epochs(4, 24, 400, seed=0)
+    masks = []
+    for value in (0.0, 0.99):
+        conn = np.full((4, 4), value)
+        np.fill_diagonal(conn, 0.0)
+        masks.append(
+            ar1_surrogate_significance(
+                conn,
+                ref,
+                method="coh",
+                sfreq=SFREQ,
+                n_surrogates=60,
+                random_state=0,
+                **BAND,
+            )
+        )
+    assert not masks[0].any()
+    assert masks[1].sum() == 2 * len(_as_pairs(4))
+
+
+def _envelope_reference():
+    """Four courses with two very different kinds of envelope coupling.
+
+    Rows 0 and 1 share a slow amplitude but have independent 9-11 Hz carriers,
+    the amplitude coupling that survives pairwise orthogonalisation; rows 2 and
+    3 are near copies of one another, an instantaneous coupling that
+    orthogonalisation removes. The contrast is what makes the pinned masks below
+    sensitive to ``orthogonalize``.
+    """
+    rng = np.random.default_rng(0)
+    n_times = 8000
+
+    def ar1(phi=0.9):
+        return lfilter([1.0], [1.0, -phi], rng.standard_normal(n_times))
+
+    slow = np.abs(ar1(0.995))
+    carrier = mne.filter.filter_data(
+        rng.standard_normal((2, n_times)), SFREQ, 9.0, 11.0, verbose=False
+    )
+    x2 = ar1()
+    x3 = 0.85 * x2 + 0.15 * ar1()
+    return np.stack([slow * carrier[0], slow * carrier[1], x2, x3])
+
+
+ENVELOPE_CASES = [
+    ({}, [True, False, False, False, False, True]),
+    ({"absolute": True}, [True, False, False, False, False, True]),
+    ({"orthogonalize": "pairwise"}, [True, False, False, False, False, False]),
+    ({"envelope_lowpass": None}, [True, False, False, False, False, True]),
+    ({"envelope_resample": 10.0}, [True, False, False, False, False, True]),
+]
+
+
+@pytest.mark.parametrize("kwargs, expected", ENVELOPE_CASES)
+def test_ar1_envelope_mask_is_unchanged_by_the_spectral_extension(kwargs, expected):
+    """The envelope path still gives the mask it gave before the extension.
+
+    The expected masks were generated by running the implementation of commit
+    c0fb92b, before the spectral metrics were added, on this reference and these
+    settings; they are reproduced exactly by the current code. They are also
+    stable, being unchanged over four surrogate seeds and 60, 100 and 200
+    surrogates, so a difference means a change of behaviour rather than of
+    sampling.
+    """
+    ref = _envelope_reference()
+    conn = _envelope_corr_matrix(
+        ref,
+        sfreq=SFREQ,
+        orthogonalize=kwargs.get("orthogonalize", False),
+        absolute=kwargs.get("absolute", False),
+        envelope_lowpass=kwargs.get("envelope_lowpass", 0.5),
+        envelope_resample=kwargs.get("envelope_resample", None),
+    )
+    np.fill_diagonal(conn, 0.0)
+    mask = ar1_surrogate_significance(
+        conn, ref, sfreq=SFREQ, n_surrogates=100, random_state=0, **kwargs
+    )
+    assert [bool(mask[i, j]) for i, j in _as_pairs(4)] == expected
+
+
+def test_ar1_envelope_is_tested_two_sided():
+    """The signed envelope correlation is flagged on either side of its null.
+
+    Unlike coherence, a strongly *negative* envelope correlation is a real
+    effect, so the envelope keeps the two-sided p-value it has always had. The
+    null-centred value is the control: it is flagged on neither side.
+    """
+    ref = _ar1_epochs(4, 1, 8000, phi=0.9, seed=1)[0]
+    flagged = {}
+    for value in (-0.9, 0.0, 0.9):
+        conn = np.full((4, 4), value)
+        np.fill_diagonal(conn, 0.0)
+        mask = ar1_surrogate_significance(
+            conn, ref, sfreq=SFREQ, n_surrogates=100, random_state=0
+        )
+        flagged[value] = int(mask.sum())
+    n_edges = 2 * len(_as_pairs(4))
+    assert flagged == {-0.9: n_edges, 0.0: 0, 0.9: n_edges}
+
+
+def test_ar1_envelope_two_dimensional_reference_equals_a_one_epoch_reference():
+    """Wrapping the paper's single continuous segment as one epoch changes nothing."""
+    ref = _envelope_reference()
+    conn = _envelope_corr_matrix(
+        ref,
+        sfreq=SFREQ,
+        orthogonalize=False,
+        absolute=False,
+        envelope_lowpass=0.5,
+        envelope_resample=None,
+    )
+    np.fill_diagonal(conn, 0.0)
+    kwargs = dict(sfreq=SFREQ, n_surrogates=50, random_state=3)
+    assert np.array_equal(
+        ar1_surrogate_significance(conn, ref, **kwargs),
+        ar1_surrogate_significance(conn, ref[np.newaxis], **kwargs),
+    )
+
+
+def test_ar1_spectral_requires_an_epoched_reference():
+    """A spectral null needs the epoch geometry the estimate came from.
+
+    The null of a band-averaged spectral metric moves with the number of epochs,
+    and on a single segment plv, pli and wpli are identically 1, so a continuous
+    reference is refused rather than silently tested against a degenerate null.
+    ``method='envelope'``, the case of Nunes et al. (2020), still takes it.
+    """
+    ref = _ar1_epochs(3, 1, 4000)[0]
+    assert ref.shape == (3, 4000)
+    with pytest.raises(ValueError, match="at least 2 epochs"):
+        ar1_surrogate_significance(
+            np.zeros((3, 3)),
+            ref,
+            method="plv",
+            sfreq=SFREQ,
+            n_surrogates=10,
+            random_state=0,
+            **BAND,
+        )
 
 
 # --------------------------------------------------------------------------- #
