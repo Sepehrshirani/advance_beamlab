@@ -344,8 +344,9 @@ a false positive in the screen can pull a non-conductor into the augmented set,
 raising the order and the condition number for no bias. The screen has both
 kinds of error in the example itself: it rejected the very A-B edge APW-MCMV
 repairs (the example forces the mask to proceed) and retained A-C, whose
-envelopes are independent. Scope limits: there is no real-data and no MEG
-connectivity example in this package;
+envelopes are independent. Scope limits: the real-MEG section of
+:ref:`ex-apw-mcmv-connectivity` shows the pipeline running but has no ground
+truth, so every quantitative claim above rests on the simulation;
 :func:`~advance_beamlab.ar1_surrogate_significance` raises for anything other
 than ``method='envelope'``, so the APW gating step is
 unavailable for ``'coh'``/``'plv'``/``'imcoh'``/``'wpli'`` and you must supply

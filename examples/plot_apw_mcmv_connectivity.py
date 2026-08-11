@@ -379,4 +379,126 @@ fig2.tight_layout()
 # resting-state data the indirect leakage accumulates across many conductors,
 # which is where APW-MCMV's advantage is largest (Nunes et al., 2020).
 
+# %%
+# On a real recording
+# -------------------
+# Everything above is a simulation, which is where the ground truth lives. This
+# last section runs the same pipeline on real MEG so that the calls are shown
+# against data nobody constructed: 60 s of the MNE ``sample`` recording,
+# gradiometers, filtered to the alpha band, with four regions taken from the
+# anatomical parcellation.
+#
+# There is no truth to score against here, so no claim is made about which
+# estimate is right. What this shows is the sequence a user actually writes.
+
+raw = mne.io.read_raw_fif(
+    mne.datasets.sample.data_path()
+    / "MEG"
+    / "sample"
+    / "sample_audvis_filt-0-40_raw.fif",
+    preload=True,
+)
+raw.pick("grad").filter(8, 12).crop(0, 60)
+subjects_dir = mne.datasets.sample.data_path() / "subjects"
+
+fwd_real = mne.read_forward_solution(
+    mne.datasets.sample.data_path()
+    / "MEG"
+    / "sample"
+    / "sample_audvis-meg-oct-6-fwd.fif"
+)
+fwd_real = mne.convert_forward_solution(fwd_real, force_fixed=True, use_cps=True)
+fwd_real = mne.pick_channels_forward(fwd_real, raw.ch_names, ordered=True)
+
+names = (
+    "transversetemporal-lh",
+    "transversetemporal-rh",
+    "pericalcarine-lh",
+    "pericalcarine-rh",
+)
+parc = {
+    lab.name: lab
+    for lab in mne.read_labels_from_annot("sample", "aparc", subjects_dir=subjects_dir)
+    if lab.name in names
+}
+src_real = fwd_real["src"]
+
+
+def label_centre(label):
+    """One representative grid index per label, as PW-MCMV takes point sources."""
+    offset = 0 if label.hemi == "lh" else src_real[0]["nuse"]
+    hemi = src_real[0] if label.hemi == "lh" else src_real[1]
+    shared = np.intersect1d(hemi["vertno"], label.vertices)
+    return int(
+        np.median([offset + int(np.where(hemi["vertno"] == v)[0][0]) for v in shared])
+    )
+
+
+rois_real = [label_centre(parc[n]) for n in names]
+
+epochs_real = mne.make_fixed_length_epochs(raw, duration=4.0, preload=True)
+cov_real = mne.compute_covariance(epochs_real, method="shrunk")
+noise_real = mne.make_ad_hoc_cov(raw.info)
+
+conn_real = pairwise_mcmv_connectivity(
+    raw,
+    raw.info,
+    fwd_real,
+    cov_real,
+    rois_real,
+    method="envelope",
+    noise_cov=noise_real,
+)
+
+pairs_real, tcs_real = reconstruct_pairwise_mcmv(
+    raw, raw.info, fwd_real, cov_real, rois_real, noise_cov=noise_real
+)
+ref_real = np.empty((len(rois_real), np.asarray(tcs_real[0]).shape[-1]))
+for i in range(len(rois_real)):
+    k, row = next(
+        (k, r) for k, pr in enumerate(pairs_real) for r, m in enumerate(pr) if m == i
+    )
+    ref_real[i] = tcs_real[k][row]
+
+mask_real = ar1_surrogate_significance(
+    conn_real,
+    ref_real,
+    method="envelope",
+    sfreq=raw.info["sfreq"],
+    n_surrogates=100,
+    random_state=0,
+)
+conn_apw_real = augmented_pairwise_mcmv_connectivity(
+    raw,
+    raw.info,
+    fwd_real,
+    cov_real,
+    rois_real,
+    conn_real,
+    mask_real,
+    method="envelope",
+    noise_cov=noise_real,
+)
+
+short = ["aud-L", "aud-R", "vis-L", "vis-R"]
+print(
+    f"significant edges after the AR(1) screen: {int(np.asarray(mask_real).sum() // 2)}"
+)
+for i in range(len(short)):
+    for j in range(i + 1, len(short)):
+        flag = "*" if np.asarray(mask_real)[i, j] else " "
+        print(
+            f"  {short[i]:>5} - {short[j]:<5} {flag}  PW {conn_real[i, j]:.3f}   "
+            f"APW {conn_apw_real[i, j]:.3f}"
+        )
+
+# %%
+# The two matrices agree here, and that is the documented behaviour rather than
+# a bug: APW-MCMV only adds a region to a pair's beamformer when that region is
+# in the list passed in, lies within ``radius`` of one of the pair, and itself
+# carries a significant edge. With four regions spread across both hemispheres
+# and the occipital pole, no third region qualifies, so APW-MCMV rebuilds the
+# same order-2 filter PW-MCMV already used. The augmentation earns its cost on
+# dense parcellations where neighbours are close enough to conduct.
+
 # sphinx_gallery_thumbnail_number = 1
