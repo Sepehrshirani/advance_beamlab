@@ -46,6 +46,7 @@ from mne.beamformer import apply_lcmv_cov, make_lcmv
 
 from advance_beamlab import (
     apply_mcmv,
+    fetch_ny_head,
     make_mcmv,
     make_ny_head_info,
     ny_head_montage,
@@ -61,6 +62,11 @@ from advance_beamlab import (
 # strict subsets of one another, so a coarse mesh is a genuine subsampling of
 # the same geometry. 5K is ample for EEG, whose spatial resolution is far
 # coarser than the mesh.
+
+# ``read_ny_head_forward`` fetches the model on first use. Call
+# :func:`~advance_beamlab.fetch_ny_head` yourself to control where it is cached,
+# or to download it ahead of time on a machine that will later be offline.
+print(f"model cached at: {fetch_ny_head()}")
 
 fwd = read_ny_head_forward(resolution="5K", orientation="normal")
 info = make_ny_head_info(sfreq=250.0)

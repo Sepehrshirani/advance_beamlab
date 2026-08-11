@@ -46,7 +46,12 @@ import mne
 import numpy as np
 from mne.beamformer import apply_lcmv_cov, make_lcmv
 
-from advance_beamlab import make_abmc, make_abmc_dictionary, sbl_covariance
+from advance_beamlab import (
+    abmc_stability_curve,
+    make_abmc,
+    make_abmc_dictionary,
+    sbl_covariance,
+)
 
 mne.set_log_level("ERROR")
 
@@ -345,5 +350,45 @@ for name, r in results.items():
     peak = int(np.argmax(r.template_match))
     err = np.linalg.norm(rr[peak] - rr[i_src]) * 100
     print(f"{name:>8}: error {err:.1f} cm, lag {int(r.lag[peak])} samples")
+
+# %%
+# Choosing ``P``, and knowing when not to trust it
+# ------------------------------------------------
+# ``P`` weighs the template constraint against the distortionless one, and it is
+# the only genuinely free parameter. :func:`~advance_beamlab.abmc_stability_curve`
+# sweeps it and reports where the localised peak stops moving, which is what
+# ``P="auto"`` uses internally.
+
+curve = abmc_stability_curve(info, fwd, data, template, return_optimal=True)
+P_grid, peaks, matches, blowups, coups, P_opt = curve
+stable = np.array([np.linalg.norm(rr[pk] - rr[i_src]) * 100 for pk in peaks])
+print(f"stability sweep over {len(P_grid)} values; selected P = {P_opt:.4g}")
+
+fig, ax = plt.subplots(figsize=(7, 3.4), constrained_layout=True)
+ax.semilogx(P_grid, stable, "o-", ms=3, label="peak error")
+ax.axvline(P_opt, color="#D55E00", lw=1.2, label=f"selected P = {P_opt:.3g}")
+ax.set(
+    xlabel="P",
+    ylabel="peak error (cm)",
+    title="The peak holds still over a range of P, then walks away",
+)
+ax.legend()
+
+# %%
+# :func:`~advance_beamlab.make_abmc` returns an
+# :class:`~advance_beamlab.ABMCResult`, and two of its fields say whether the
+# ``P`` you used was safe. They answer different questions.
+# ``blowup_fraction`` is measured after the solve and only
+# detects the neighbourhood of the poles, so it returns to zero for large ``P``
+# where the weights are finite but the answer is wrong. ``critical_p`` is
+# predicted from the forward before the solve: it is the smallest ``P`` at which
+# some column's gain denominator vanishes, and because each constraint column is
+# rescaled to the norm of its leadfield column it is never below 1.
+
+result = make_abmc(info, fwd, data, template, P=P_opt)
+print(f"critical_p        = {result.critical_p:.3g} (never below 1)")
+print(f"unstable_fraction = {result.unstable_fraction:.3f} of the grid has a pole")
+print(f"blowup_fraction   = {result.blowup_fraction:.3f} at the selected P")
+print(f"P / critical_p    = {P_opt / result.critical_p:.4f}, so well clear of it")
 
 # sphinx_gallery_thumbnail_number = 3

@@ -186,6 +186,7 @@ class _PedagogicalOrder:
         "plot_recipsiicos_auditory.py",
         "plot_apw_mcmv_connectivity.py",
         "plot_abmc_localization.py",
+        "plot_abmc_auditory.py",
         "plot_fem_head_model.py",
     ]
 

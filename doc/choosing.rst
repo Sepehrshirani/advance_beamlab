@@ -416,9 +416,13 @@ Finally, read the map, not the argmax: over the example's 8 sources the winning
 template-match beat the runner-up by 0.000-0.011 in absolute value (0.402 against
 0.402 at the worst source), ``ABMCResult`` exposes no prominence or significance
 measure, and the peak will move between adjacent grid points across noise
-realisations. Coverage limits worth knowing: ABMC is never run on a real
-recording anywhere in this package, never on MEG for accuracy, and never against
-a competing higher-power source. That is the regime its own rationale is about.
+realisations. Coverage limits worth knowing: ABMC is never run against a
+competing higher-power source, which is the regime its own rationale is about.
+It is now run on a real MEG recording, in :ref:`ex-abmc-auditory`, where it sits
+5 to 11 mm from Heschl's gyrus against 12 mm for LCMV across an averaging sweep.
+Read that as evidence it survives a real recording rather than as an accuracy
+result: the grid is spaced at several millimetres and distance to an anatomical
+label is a weak criterion next to a simulated ground truth.
 
 **The parameters that matter.** ``template`` is the load-bearing input rather
 than a tuning knob: only its shape matters (the read-out is exactly invariant to
