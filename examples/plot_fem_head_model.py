@@ -50,6 +50,7 @@ from advance_beamlab import (
     make_mcmv,
     make_ny_head_info,
     ny_head_montage,
+    ny_head_plot_indices,
     ny_head_scalp,
     read_ny_head_forward,
     scan_mcmv,
@@ -269,23 +270,42 @@ print(
 
 # %%
 # The LCMV power map on the FEM cortical surface, with the two simulated
-# locations marked. Both are recovered.
+# locations marked. Both are recovered: the two simulated vertices are the two
+# highest-power points of the 5004 on the grid.
 
 peaks = np.argsort(power)[::-1][:2]
 errors = [np.linalg.norm(rr[peaks] - rr[k], axis=1).min() * 1000 for k in (i1, i2)]
 print(f"LCMV peak localisation errors: {errors[0]:.1f} and {errors[1]:.1f} mm")
 
-scalars = [np.zeros(s["np"]) for s in fwd["src"]]
-n_lh = fwd["src"][0]["nuse"]
-scalars[0][fwd["src"][0]["vertno"]] = power[:n_lh]
-scalars[1][fwd["src"][1]["vertno"]] = power[n_lh:]
+# Spread the estimate onto the dense mesh before drawing it. The sources live on
+# the 5K mesh and the surface has 74382 vertices, so painting the values where
+# they sit and leaving the rest at zero gives a field of isolated specks rather
+# than a source distribution. ``ny_head_plot_indices`` returns the model's own
+# nearest-source index for exactly this: each dense vertex takes the value of
+# the source representing it, a median of 2.6 mm away.
+dense = power[ny_head_plot_indices(resolution="5K")]
+n_lh_dense = fwd["src"][0]["np"]
+scalars = [dense[:n_lh_dense], dense[n_lh_dense:]]
+
+# Clip the colour scale to the top of the distribution, as ``stc.plot()`` does by
+# default. A unit-noise-gain map has a narrow dynamic range (here the median is
+# 1.03 and the maximum 2.08), so drawing the full range makes the whole cortex a
+# uniform dark red and hides the very peaks the figure exists to show.
+lo, hi = np.percentile(power, [95, 99.9])
 
 plotter = pv.Plotter(window_size=(800, 500), off_screen=True)
 for hemi, values in zip(fwd["src"], scalars, strict=True):
     mesh = _mesh(hemi["rr"], hemi["tris"])
     mesh["power"] = values
     plotter.add_mesh(
-        mesh, scalars="power", cmap="hot", smooth_shading=True, show_scalar_bar=False
+        mesh,
+        scalars="power",
+        cmap="hot",
+        clim=(lo, hi),
+        below_color="#3a3226",
+        smooth_shading=True,
+        show_scalar_bar=True,
+        scalar_bar_args=dict(title="LCMV power (unit noise gain)", n_labels=4),
     )
 plotter.add_points(
     rr[[i1, i2]] * 1000.0,

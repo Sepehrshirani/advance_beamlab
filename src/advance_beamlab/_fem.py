@@ -338,6 +338,69 @@ def ny_head_scalp(path=None, *, verbose=None):
 
 
 @verbose
+def ny_head_plot_indices(resolution="10K", path=None, *, geodesic=True, verbose=None):
+    """Index that spreads a source estimate onto the model's dense mesh.
+
+    A source estimate lives on the mesh ``resolution`` selects, but the surface
+    worth looking at is the full 74382-vertex one. Painting the coarse values
+    onto the dense mesh and leaving the rest at zero produces a speckled map
+    rather than a source distribution, because at ``'5K'`` only one vertex in
+    fourteen carries a value. The model ships the fix: an index that gives, for
+    every dense vertex, the coarse source that represents it. Applying it is
+    nearest-source interpolation, which is what makes the map readable, and it
+    is not smoothing: no value is averaged or spread beyond its own cell.
+
+    Parameters
+    ----------
+    resolution : str
+        The mesh the estimate lives on, as passed to
+        :func:`read_ny_head_forward`.
+    path : path-like | None
+        Path to ``sa_nyhead.mat``; downloaded via :func:`fetch_ny_head` if
+        ``None``.
+    geodesic : bool
+        Measure "nearest" along the cortical surface (default) rather than
+        through the head. The distinction matters across a sulcal bank, where
+        two points can be millimetres apart in space and centimetres apart along
+        the sheet.
+    %(verbose)s
+
+    Returns
+    -------
+    idx : ndarray, shape (74382,)
+        Index into the source ordering of
+        :func:`read_ny_head_forward`, so that ``values[idx]`` is a per-vertex
+        array on the dense mesh.
+
+    Notes
+    -----
+    Median distance from a dense vertex to the source representing it is 2.6 mm
+    at ``'5K'``, with a 95th percentile of 5.8 mm, so the interpolation is local.
+
+    See Also
+    --------
+    read_ny_head_forward
+    """
+    _check_option("resolution", resolution, _RESOLUTIONS)
+    if resolution == "75K":
+        return np.arange(_N_VERT_TOTAL)
+    key = "in_to_cortex75K_geod" if geodesic else "in_to_cortex75K_eucl"
+    with _open(path) as f:
+        group = f["sa"][f"cortex{resolution}"]
+        # Both are 1-based MATLAB indices, and ``in_to_cortex75K_*`` indexes the
+        # file's own (unsorted) vertex order.
+        from_75k = np.asarray(group["in_from_cortex75K"]).ravel().astype(np.int64) - 1
+        to_dense = np.asarray(group[key]).ravel().astype(np.int64) - 1
+    # ``read_ny_head_forward`` sorts the vertices, which is what puts the left
+    # hemisphere first as MNE requires, so the file's positions have to be
+    # mapped through that same permutation.
+    order = np.argsort(from_75k)
+    rank = np.empty_like(order)
+    rank[order] = np.arange(len(order))
+    return rank[to_dense]
+
+
+@verbose
 def make_ny_head_info(sfreq=1000.0, path=None, *, verbose=None):
     """Build a measurement info matching the New York Head electrode array.
 

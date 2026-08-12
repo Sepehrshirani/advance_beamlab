@@ -79,6 +79,7 @@ is downloaded on demand and is not redistributed with this package.
    ny_head_montage
    make_ny_head_info
    ny_head_scalp
+   ny_head_plot_indices
 
 References
 ----------
