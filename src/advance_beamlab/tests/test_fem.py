@@ -306,6 +306,13 @@ def test_ny_head_picks_systems(info):
     assert set(ny_head_picks("10-20")) < set(ny_head_picks("10-10"))
     assert set(ny_head_picks("10-10")) < set(ny_head_picks("10-05"))
     assert set(ny_head_picks("10-05")) < set(ny_head_picks("all"))
+    # The counts above are short of the nominal ones because the model lacks
+    # these names, which is what the docstrings claim; pin the claim itself.
+    assert not names & {"F9", "F10", "T9", "T10", "TP9", "TP10"}
+    assert not names & {"A1", "A2", "M1", "M2"}
+    # The model carries the pre-auricular points as EEG channels; no montage
+    # should hand a user a channel their recording cannot have.
+    assert not set(ny_head_picks("10-05")) & {"LPA", "RPA"}
 
 
 def test_ny_head_picks_rejects_unknown_system():

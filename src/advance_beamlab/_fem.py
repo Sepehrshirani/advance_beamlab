@@ -439,17 +439,29 @@ def ny_head_picks(system="10-05", path=None, *, verbose=None):
     Returns
     -------
     names : list of str
-        Electrode names present in the model, in the conventional order for
-        that system.
+        Electrode names present in the model, ready to be passed as ``picks``.
+        ``'10-20'`` and ``'10-10'`` come in the conventional order of the
+        system, front to back; ``'10-05'`` alphabetically; ``'all'`` in the
+        model's own order, which is the row order of a forward read with
+        ``picks=None``. The four sets are strictly nested.
 
     Notes
     -----
     **What each returns, and what is missing.** ``'10-20'`` gives all nineteen
-    scalp electrodes of the classic system. ``'10-10'`` gives 67 of the 73 named
-    positions: the model has no ``F9``, ``F10``, ``T9``, ``T10``, ``TP9`` or
-    ``TP10``, the inferior temporal chain that sits below the standard row.
-    ``'10-05'`` gives the 161 electrodes whose names are standard, and ``'all'``
-    gives every one of the 231.
+    scalp electrodes of the classic system. The 21 usually counted for it add
+    the earlobe references ``A1`` and ``A2``, and neither name, nor the mastoids
+    ``M1`` and ``M2``, is among the model's 231. ``'10-10'`` gives 67 of the 73
+    named positions: the model has no ``F9``, ``F10``, ``T9``, ``T10``, ``TP9``
+    or ``TP10``, the inferior temporal chain that sits below the standard row.
+    ``'10-05'`` gives the 161 electrodes whose names are standard. That is not
+    the whole 10-05 system, which has over 300 positions, but the part of it
+    this model samples; the 70 electrodes it leaves out are the ``Ex`` and
+    ``Exx`` face and cheek positions, the four ``Nk`` neck electrodes and the
+    pre-auricular points ``LPA`` and ``RPA``, all of which the model carries as
+    ordinary EEG channels. ``Nz`` is kept, because the 10-10 layout names it
+    even though MNE files it as a fiducial rather than a channel; a recording
+    without an ``Nz`` channel should drop it from the list. ``'all'`` gives
+    every one of the 231.
 
     **Nineteen electrodes is not enough for correlated sources on this model,**
     and that is worth stating before anyone reaches for the familiar montage.
@@ -458,23 +470,36 @@ def ny_head_picks(system="10-05", path=None, *, verbose=None):
     at all over ten noise seeds, so it is a bias of the array rather than a
     noise effect. Over eight further correlated pairs 30 to 40 mm apart the
     median error is 20.5 mm at 19 electrodes with every pair above 10 mm,
-    against 0.0 mm at 69. A single source, or an uncorrelated pair, localises
-    exactly at every count including 19, so the failure is specific to
-    correlated sources rather than general. Dropping from 231 to 161 costs
-    nothing measurable.
+    against 0.0 mm at 10-10 density and above. A single source, or an
+    uncorrelated pair, localises exactly at every count including 19, so the
+    failure is specific to correlated sources rather than general.
+
+    Read those exact zeros as an inverse crime rather than as accuracy. The data
+    behind them are generated from the very lead field being inverted, the
+    sources sit on grid nodes, and the covariance sees thousands of samples, so
+    a simulation of that kind cannot show what a coarse array costs for a single
+    source. Source correlation is the only thing separating the electrode counts
+    here.
+
+    Dropping from
+    231 to the 10-05 set costs nothing measurable, and the counterweight is that
+    the full array needs more data: with one source at a per-electrode SNR of
+    0.58 and 250 samples, 231 electrodes missed by a median 31.6 mm where 19 and
+    a 10-10 cap were exact, and all three were exact from 500 samples up.
 
     **The average reference.** The lead field is supplied in common average
     reference over all 231, exactly (residual 1e-15). Any subset breaks that,
     and not gently: the retained columns miss their own average by a median 18
     to 21 per cent of the column norm whatever the size, because a cap is the
     top of this array rather than a well-distributed sample of it. A random 160
-    of the 231 gives 3 per cent where the real 10-05 set of that size gives 21. This
-    costs nothing provided the rank is handled, because the offending component
-    is exactly what an average-reference projector removes: with a projector the
-    beamformer reproduces a by-hand re-referenced lead field to 3e-15 in
-    relative power. Use :func:`make_ny_head_info`, which supplies one. Without
-    it, and without declaring ``rank=dict(eeg=n-1)``, localisation degrades
-    badly and erratically.
+    of the 231 gives 3 per cent where the 161-electrode 10-05 set gives 21.
+    This costs nothing provided the rank is handled, because the offending
+    component is exactly what an average-reference projector removes: with a
+    projector the beamformer reproduces a by-hand re-referenced lead field to
+    within numerical precision. Use :func:`make_ny_head_info`, which supplies
+    one. Without it, and without declaring ``rank=dict(eeg=n-1)``, localisation
+    degrades badly and erratically; see :func:`read_ny_head_forward` for the
+    measured cost.
 
     See Also
     --------
@@ -486,9 +511,11 @@ def ny_head_picks(system="10-05", path=None, *, verbose=None):
     .. footbibliography::
     """
     _check_option("system", system, ("10-20", "10-10", "10-05", "all"))
-    available = set(ny_head_montage(path=path, verbose=False).ch_names)
+    # One read serves every branch: the montage carries the model's own order.
+    ordered = list(ny_head_montage(path=path, verbose=False).ch_names)
     if system == "all":
-        return list(ny_head_montage(path=path, verbose=False).ch_names)
+        return ordered
+    available = set(ordered)
     if system == "10-05":
         from mne.channels import make_standard_montage
 
@@ -611,8 +638,9 @@ def read_ny_head_forward(
         orientation.
     picks : list of str | None
         Electrode names to keep, in the order given. ``None`` (default) keeps
-        all 231. Note that subsetting breaks the exact average reference of the
-        lead field; see Notes.
+        all 231; :func:`ny_head_picks` returns the names of a standard montage.
+        Note that subsetting breaks the exact average reference of the lead
+        field; see Notes.
     %(verbose)s
 
     Returns
@@ -635,10 +663,39 @@ def read_ny_head_forward(
 
     If ``picks`` selects a subset of electrodes, the retained columns no longer
     sum to zero across channels, because the average was taken over all 231.
-    The subset is still a valid forward model for average-referenced data
-    recorded on those electrodes to within the difference between the two
-    averages; for a large, well-distributed subset this is small, but it is an
-    approximation and not an identity.
+    That mismatch was measured rather than assumed, and it is larger than the
+    phrase "a large, well-distributed subset" would suggest. On the ``'5K'``
+    mesh, over all 5004 sources, the fraction of each column's norm lying along
+    the constant vector (exactly the part that re-referencing the subset to its
+    own average removes) has a median of 18.5 per cent at 19 electrodes, 20.2
+    at 67 and 20.7 at 161, a 95th percentile of 54 to 58 per cent, and a worst
+    case above 80 per cent, where the supplied topography agrees with its
+    correctly re-referenced counterpart only to a cosine of 0.4 to 0.6. It does
+    not shrink as the subset grows, because a cap is the top of this array
+    rather than a well-distributed sample of it: a random 160 of the 231 gives
+    3.5 per cent where the 161-electrode 10-05 set gives 21, and the electrodes
+    a cap omits sit 30 to 110 mm lower on average than the ones it keeps. The
+    figure belongs to the montage rather than to the mesh (``'5K'`` and
+    ``'10K'`` agree to within 0.3 percentage points) and is a little smaller for
+    ``orientation='free'`` (12 to 17 per cent).
+
+    None of that costs anything so long as the data carry an average-reference
+    projector over the picked channels, because the residual is precisely the
+    component such a projector removes: with one, a beamformer built on the
+    columns as supplied and one built on a by-hand re-referenced copy give the
+    same power map to within numerical precision. Omitting it is what does the
+    damage, and MNE permits it. As supplied, a subset lead field is full rank
+    ``n`` (19 of 19, 67 of 67, 161 of 161, condition numbers 11 to 1.5e3),
+    because the reference offset is an extra dimension rather than information,
+    and the projector returns the rank to ``n - 1`` exactly as the full model is
+    230 of 231. :func:`mne.compute_rank` reports ``n - 1`` either way, but
+    :func:`mne.beamformer.make_lcmv` with its default ``rank='info'`` records
+    ``n`` when no projector is declared. That rank declaration, rather than the
+    topography residual, is what breaks the beamformer: in simulation, omitting
+    the projector moved the power peak by a median of 26 to 66 mm and by as much
+    as 150 mm on a head 200 mm across, swinging with the noise seed, against
+    0.0 mm with it. Declaring ``rank=dict(eeg=n - 1)`` restores the correct
+    result exactly, which is how the mechanism was identified.
 
     **Visualisation.** The source space is the model's own cortical mesh, not a
     FreeSurfer subject, so ``stc.plot()``, which looks up a subject in a
