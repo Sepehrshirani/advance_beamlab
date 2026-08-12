@@ -83,7 +83,9 @@ class ConstraintDemo:
     reconstructed : ndarray, shape (n_sources, n_times)
         Recovered waveforms, in ampere-metres.
     amplitude_ratio : ndarray, shape (n_sources,)
-        Recovered peak over true peak. One means the amplitude survived.
+        Recovered root mean square over true root mean square. One means the
+        amplitude survived. Root mean square rather than peak because the
+        reconstruction carries filtered sensor noise.
     power_map : ndarray, shape (n_grid,)
         The localiser map over the whole source grid, for display.
     peak_errors : ndarray, shape (n_sources,)
@@ -311,8 +313,23 @@ def constraint_demo(
             ev = mne.EvokedArray(x, info, tmin=0.0, verbose=False)
             return np.asarray(apply_lcmv(ev, filters, verbose=False).data)[sources]
 
+        # Two filters, deliberately. The unit-gain filter above reads out the
+        # true source amplitude, which is what the reconstruction and the
+        # constraint table need, but its output power grows with depth, so a map
+        # of it is dominated by one deep source and everything else normalises
+        # to nothing. The display map therefore comes from a unit-noise-gain
+        # filter, which is depth normalised, exactly as MNE's own examples do.
+        display = make_lcmv(
+            info,
+            forward,
+            data_cov,
+            reg=reg,
+            noise_cov=noise_cov,
+            weight_norm="unit-noise-gain",
+            verbose=False,
+        )
         power_map = np.asarray(
-            apply_lcmv_cov(data_cov, filters, verbose=False).data
+            apply_lcmv_cov(data_cov, display, verbose=False).data
         ).ravel()
 
     elif method == "mcmv":
@@ -363,7 +380,10 @@ def constraint_demo(
 
     gains = _measure_gains(apply_fn, gain, sources, n_times)
     reconstructed = apply_fn(sensor)
-    ratio = np.abs(reconstructed).max(axis=1) / np.abs(true_tcs).max(axis=1)
+    # Root mean square rather than peak: the reconstruction carries filtered
+    # sensor noise, and the peak of a noisy trace measures the noise as much as
+    # the signal.
+    ratio = np.sqrt((reconstructed**2).mean(axis=1) / (true_tcs**2).mean(axis=1))
 
     peaks = np.argsort(power_map)[::-1][: len(sources)]
     peak_errors = np.array(
@@ -385,3 +405,239 @@ def constraint_demo(
         power_map=power_map,
         peak_errors=peak_errors,
     )
+
+
+def _draw(axes, demo, forward):
+    """Redraw the four panels for one scene. Shared by the explorer and export."""
+    rr = forward["source_rr"]
+    ax_map, ax_sensor, ax_tc, ax_gain = axes
+
+    # 1. Where the method points. Axial projection of the whole grid, coloured
+    #    by the localiser, with the simulated sources marked.
+    ax_map.clear()
+    # Normalised to its own maximum and drawn with a colormap that is visible at
+    # the low end. Clipping at a high percentile with a black-at-zero map, which
+    # is the obvious thing to do, paints most of the grid black and hides the
+    # result the panel exists to show.
+    # Two traps here, both met on the way to this line. Clipping at a high
+    # percentile with a black-at-zero colormap paints most of the grid black and
+    # hides the result. Spanning the full range instead paints it all one colour,
+    # because a depth-normalised localiser is flat: on this fixture its median is
+    # 0.42 of the maximum and its 90th percentile only 0.52. Spanning the upper
+    # half shows the peak while leaving the rest legible.
+    # Displayed by rank rather than by value. The four localisers have very
+    # different distributions, and any single value-based scaling that suits one
+    # hides another: LCMV's unit-gain power is dominated by one deep source,
+    # while a depth-normalised map is nearly flat, with a median of 0.42 of its
+    # maximum. Rank is legible for all of them, at the cost of showing order
+    # rather than magnitude, which is what the colour bar says.
+    order = np.argsort(np.argsort(demo.power_map))
+    power = order / (len(order) - 1)
+    scatter = ax_map.scatter(
+        rr[:, 0] * 100,
+        rr[:, 1] * 100,
+        c=power,
+        cmap="viridis",
+        vmin=0.0,
+        vmax=1.0,
+        s=46,
+        linewidths=0,
+    )
+    if getattr(ax_map, "_advance_beamlab_cbar", None) is None:
+        ax_map._advance_beamlab_cbar = ax_map.figure.colorbar(
+            scatter, ax=ax_map, fraction=0.046, pad=0.03
+        )
+        ax_map._advance_beamlab_cbar.set_label("localiser rank", fontsize=8)
+    # Ring the simulated sources rather than covering them: a peaked localiser
+    # puts almost all of its energy on those two points, so a filled marker
+    # hides the only part of the map worth seeing.
+    ax_map.scatter(
+        demo.positions[:, 0] * 100,
+        demo.positions[:, 1] * 100,
+        marker="o",
+        s=260,
+        facecolors="none",
+        edgecolors="#D55E00",
+        linewidths=2.2,
+        label="simulated",
+    )
+    label = "scan_mcmv search map" if demo.method == "mcmv" else "localiser"
+    ax_map.set(xlabel="x (cm)", ylabel="y (cm)", title=f"Where it points: {label}")
+    ax_map.legend(loc="upper right", fontsize=8)
+    ax_map.set_aspect("equal")
+
+    # 2. What the sensors record.
+    ax_sensor.clear()
+    ax_sensor.plot(demo.times, demo.sensor_data[::8].T * 1e6, lw=0.6, color="0.45")
+    ax_sensor.set(xlabel="time (s)", ylabel="sensor (uV)", title="What the sensors see")
+
+    # 3. What comes back out.
+    ax_tc.clear()
+    for i, colour in enumerate(("C0", "C3")):
+        ax_tc.plot(
+            demo.times,
+            demo.true_tcs[i] * 1e9,
+            color=colour,
+            lw=1.2,
+            label=f"source {i + 1}, true",
+        )
+        ax_tc.plot(
+            demo.times,
+            demo.reconstructed[i] * 1e9,
+            color=colour,
+            lw=1.6,
+            ls="--",
+            label=f"source {i + 1}, recovered",
+        )
+    ax_tc.set(
+        xlabel="time (s)",
+        ylabel="amplitude (nA m)",
+        title=(
+            f"Recovered {demo.amplitude_ratio[0]:.2f} and "
+            f"{demo.amplitude_ratio[1]:.2f} of the truth"
+        ),
+    )
+    ax_tc.legend(fontsize=7, ncol=2)
+
+    # 4. The constraint itself.
+    ax_gain.clear()
+    g = demo.gains
+    ax_gain.imshow(g, cmap="RdBu_r", vmin=-1.2, vmax=1.2)
+    for i in range(g.shape[0]):
+        for j in range(g.shape[1]):
+            ax_gain.text(
+                j,
+                i,
+                f"{g[i, j]:+.3f}",
+                ha="center",
+                va="center",
+                fontsize=11,
+                fontweight="bold",
+                color="white" if abs(g[i, j]) > 0.6 else "black",
+            )
+    ax_gain.set(
+        xticks=[0, 1],
+        yticks=[0, 1],
+        xticklabels=["source 1", "source 2"],
+        yticklabels=["filter 1", "filter 2"],
+        title="The constraint: gain of each filter at each source",
+    )
+
+
+@verbose
+def constraint_explorer(
+    info,
+    forward,
+    *,
+    method="lcmv",
+    correlation=0.9,
+    separation=0.04,
+    snr=3.0,
+    verbose=None,
+):
+    """Interactive panel showing what a beamformer constraint does.
+
+    Drag the correlation and watch two things move together: the off-diagonal of
+    the constraint table, which is the gain the filter has chosen at the *other*
+    source, and the recovered amplitude. For LCMV they move in opposite
+    directions, which is signal cancellation caught in the act. Switch to MCMV
+    and the off-diagonal is pinned at zero and the amplitude stops moving.
+
+    Requires a live matplotlib backend; in a script call
+    ``matplotlib.pyplot.show()`` afterwards. The documentation carries a
+    precomputed version of the same panel for readers who have not installed
+    the package.
+
+    Parameters
+    ----------
+    info : mne.Info
+        Measurement info matching ``forward``.
+    forward : mne.Forward
+        Fixed-orientation forward solution.
+    method : str
+        Method selected when the panel opens.
+    correlation : float
+        Source correlation when the panel opens.
+    separation : float
+        Source separation in metres when the panel opens.
+    snr : float
+        Sensor signal-to-noise ratio when the panel opens.
+    %(verbose)s
+
+    Returns
+    -------
+    fig : instance of matplotlib.figure.Figure
+        The panel. Keep a reference to it, or the widgets stop responding.
+
+    See Also
+    --------
+    constraint_demo
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.widgets import RadioButtons, Slider
+
+    fig = plt.figure(figsize=(12, 7.5))
+    grid = fig.add_gridspec(
+        2, 2, left=0.30, right=0.97, top=0.94, bottom=0.10, hspace=0.42, wspace=0.28
+    )
+    axes = [
+        fig.add_subplot(grid[0, 0]),
+        fig.add_subplot(grid[0, 1]),
+        fig.add_subplot(grid[1, 0]),
+        fig.add_subplot(grid[1, 1]),
+    ]
+
+    state = dict(method=method, correlation=correlation, separation=separation, snr=snr)
+
+    def refresh(_=None):
+        demo = constraint_demo(
+            info,
+            forward,
+            method=state["method"],
+            correlation=state["correlation"],
+            separation=state["separation"],
+            snr=state["snr"],
+            verbose=False,
+        )
+        _draw(axes, demo, forward)
+        fig.canvas.draw_idle()
+
+    ax_method = fig.add_axes([0.02, 0.62, 0.22, 0.26])
+    ax_method.set_title("method", fontsize=10)
+    radio = RadioButtons(ax_method, _METHODS, active=_METHODS.index(method))
+    s_corr = Slider(
+        fig.add_axes([0.12, 0.50, 0.16, 0.03]),
+        "correlation",
+        0.0,
+        0.99,
+        valinit=correlation,
+    )
+    s_sep = Slider(
+        fig.add_axes([0.12, 0.43, 0.16, 0.03]),
+        "separation (cm)",
+        1.0,
+        9.0,
+        valinit=separation * 100,
+    )
+    s_snr = Slider(
+        fig.add_axes([0.12, 0.36, 0.16, 0.03]), "SNR", 0.5, 10.0, valinit=snr
+    )
+
+    def on_method(label):
+        state["method"] = label
+        refresh()
+
+    def on_slider(_):
+        state["correlation"] = float(s_corr.val)
+        state["separation"] = float(s_sep.val) / 100.0
+        state["snr"] = float(s_snr.val)
+        refresh()
+
+    radio.on_clicked(on_method)
+    for slider in (s_corr, s_sep, s_snr):
+        slider.on_changed(on_slider)
+    # Keep the widgets alive: matplotlib drops them when they are garbage
+    # collected, and the panel then silently stops responding.
+    fig._advance_beamlab_widgets = (radio, s_corr, s_sep, s_snr)
+    refresh()
+    return fig

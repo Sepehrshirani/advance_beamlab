@@ -94,6 +94,7 @@ out of the weights, so that the four methods are directly comparable.
    :toctree: generated/
 
    constraint_demo
+   constraint_explorer
    ConstraintDemo
 
 References

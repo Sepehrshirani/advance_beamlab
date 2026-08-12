@@ -42,7 +42,7 @@ from ._connectivity import (
     pairwise_mcmv_connectivity,
     reconstruct_pairwise_mcmv,
 )
-from ._explain import ConstraintDemo, constraint_demo
+from ._explain import ConstraintDemo, constraint_demo, constraint_explorer
 from ._fem import (
     fetch_ny_head,
     make_ny_head_info,
@@ -100,6 +100,7 @@ __all__ = [
     "ny_head_picks",
     "constraint_demo",
     "ConstraintDemo",
+    "constraint_explorer",
 ]
 
 __version__ = "0.1.0.dev0"

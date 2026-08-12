@@ -68,10 +68,18 @@ def test_lcmv_cancels_and_mcmv_does_not(sphere):
     # MCMV: zero either way, by construction rather than by luck.
     assert off["mcmv", 0.0] < 1e-6
     assert off["mcmv", 0.99] < 1e-6
-    # And the amplitude follows: LCMV loses most of it, MCMV keeps it.
-    assert ratio["lcmv", 0.99] < 0.6
-    assert ratio["mcmv", 0.99] > 0.9
-    assert ratio["lcmv", 0.99] < ratio["mcmv", 0.99]
+    # And the amplitude follows. Measured on this fixture, the recovered root
+    # mean square runs 0.854 / 0.412 / 0.234 for LCMV at correlation 0 / 0.9 /
+    # 0.99 and 0.854 / 0.856 / 0.856 for MCMV, so the test is that LCMV loses
+    # most of it while MCMV is flat. The baseline is 0.854 rather than 1.0
+    # because the reconstruction carries filtered noise and the covariance is
+    # regularised; that offset is common to both methods and is not the effect.
+    assert ratio["lcmv", 0.99] < 0.4
+    assert ratio["mcmv", 0.99] > 0.8
+    assert ratio["lcmv", 0.99] < 0.5 * ratio["mcmv", 0.99]
+    # The sharpest statement of the constraint: correlation barely moves MCMV.
+    assert abs(ratio["mcmv", 0.99] - ratio["mcmv", 0.0]) < 0.05
+    assert ratio["lcmv", 0.0] - ratio["lcmv", 0.99] > 0.4
 
 
 @pytest.mark.parametrize("method", ["lcmv", "mcmv", "recipsiicos", "abmc"])
