@@ -19,6 +19,7 @@ from advance_beamlab._fem import (  # noqa: E402
     _ny_head_dir,
     make_ny_head_info,
     ny_head_montage,
+    ny_head_picks,
     ny_head_scalp,
 )
 
@@ -282,3 +283,39 @@ def test_recipsiicos_runs(fwd, info):
     power = apply_lcmv_cov(dc, flt).data.ravel()
     assert power.shape == (fwd["nsource"],)
     assert np.all(np.isfinite(power)) and power.max() > 0
+
+
+def test_ny_head_picks_systems(info):
+    """Each named montage returns electrodes the model actually has."""
+    names = set(info["ch_names"])
+    counts = {}
+    for system in ("10-20", "10-10", "10-05", "all"):
+        picks = ny_head_picks(system)
+        assert picks, system
+        assert len(picks) == len(set(picks)), f"{system} has duplicates"
+        assert set(picks) <= names, f"{system} names the model does not have"
+        counts[system] = len(picks)
+    # The classic system is complete; the 10-10 set is missing the inferior
+    # temporal chain, which the model does not carry.
+    assert counts["10-20"] == 19
+    assert counts["10-10"] == 67
+    assert counts["10-05"] == 161
+    assert counts["all"] == 231
+    # Strictly nested, which is what lets a user step up a montage without
+    # losing a channel they already had.
+    assert set(ny_head_picks("10-20")) < set(ny_head_picks("10-10"))
+    assert set(ny_head_picks("10-10")) < set(ny_head_picks("10-05"))
+    assert set(ny_head_picks("10-05")) < set(ny_head_picks("all"))
+
+
+def test_ny_head_picks_rejects_unknown_system():
+    with pytest.raises(ValueError, match="system"):
+        ny_head_picks("10-3")
+
+
+def test_ny_head_picks_drive_a_forward(info):
+    """The names are usable as ``picks`` and give a forward of that size."""
+    picks = ny_head_picks("10-20")
+    fwd = read_ny_head_forward(resolution="1K", picks=picks)
+    assert fwd["nchan"] == 19
+    assert fwd["sol"]["row_names"] == picks

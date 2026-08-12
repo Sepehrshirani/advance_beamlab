@@ -46,6 +46,7 @@ from ._fem import (
     fetch_ny_head,
     make_ny_head_info,
     ny_head_montage,
+    ny_head_picks,
     ny_head_plot_indices,
     ny_head_scalp,
     read_ny_head_forward,
@@ -95,6 +96,7 @@ __all__ = [
     "make_ny_head_info",
     "ny_head_scalp",
     "ny_head_plot_indices",
+    "ny_head_picks",
 ]
 
 __version__ = "0.1.0.dev0"

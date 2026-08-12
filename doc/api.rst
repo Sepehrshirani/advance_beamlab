@@ -80,6 +80,7 @@ is downloaded on demand and is not redistributed with this package.
    make_ny_head_info
    ny_head_scalp
    ny_head_plot_indices
+   ny_head_picks
 
 References
 ----------

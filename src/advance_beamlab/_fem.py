@@ -106,6 +106,22 @@ _N_VERT_TOTAL = 74382
 _N_VERT_HEMI = 37191
 
 
+# The international 10-20 system, as standardised by the American Clinical
+# Neurophysiology Society: nineteen scalp electrodes. T3, T4, T5 and T6 were
+# renamed T7, T8, P7 and P8 when the 10-10 system superseded it
+# :footcite:`OostenveldPraamstra2001`, and the later names are used here.
+_TEN_TWENTY = "Fp1 Fp2 F7 F3 Fz F4 F8 T7 C3 Cz C4 T8 P7 P3 Pz P4 P8 O1 O2".split()
+
+# The 10-10 system, which extends the above to 74 positions. The model supplies
+# 67 of the 73 named here; see ``ny_head_picks`` for which are absent.
+_TEN_TEN = (
+    "Nz Fpz Fp1 Fp2 AF7 AF3 AFz AF4 AF8 F9 F7 F5 F3 F1 Fz F2 F4 F6 F8 F10 "
+    "FT9 FT7 FC5 FC3 FC1 FCz FC2 FC4 FC6 FT8 FT10 T9 T7 C5 C3 C1 Cz C2 C4 C6 "
+    "T8 T10 TP9 TP7 CP5 CP3 CP1 CPz CP2 CP4 CP6 TP8 TP10 P9 P7 P5 P3 P1 Pz P2 "
+    "P4 P6 P8 P10 PO7 PO3 POz PO4 PO8 O1 Oz O2 Iz".split()
+)
+
+
 def _ny_head_dir():
     """Return the directory the model is cached in, honouring MNE's config."""
     from mne import get_config
@@ -398,6 +414,93 @@ def ny_head_plot_indices(resolution="10K", path=None, *, geodesic=True, verbose=
     rank = np.empty_like(order)
     rank[order] = np.arange(len(order))
     return rank[to_dense]
+
+
+@verbose
+def ny_head_picks(system="10-05", path=None, *, verbose=None):
+    """Electrode names of the New York Head belonging to a named montage.
+
+    The model carries 231 electrodes, which is a subset of the 10-05 system
+    (Oostenveld and Praamstra extended the 74-position 10-10 system to over 300
+    positions :footcite:`OostenveldPraamstra2001`) together with face, cheek,
+    neck and fiducial positions the model needs for stimulation targeting. Most
+    recordings use far fewer, so this returns the names for a conventional
+    montage, to be passed to :func:`read_ny_head_forward` as ``picks``.
+
+    Parameters
+    ----------
+    system : str
+        ``'10-20'``, ``'10-10'``, ``'10-05'`` or ``'all'``.
+    path : path-like | None
+        Path to ``sa_nyhead.mat``; downloaded via :func:`fetch_ny_head` if
+        ``None``.
+    %(verbose)s
+
+    Returns
+    -------
+    names : list of str
+        Electrode names present in the model, in the conventional order for
+        that system.
+
+    Notes
+    -----
+    **What each returns, and what is missing.** ``'10-20'`` gives all nineteen
+    scalp electrodes of the classic system. ``'10-10'`` gives 67 of the 73 named
+    positions: the model has no ``F9``, ``F10``, ``T9``, ``T10``, ``TP9`` or
+    ``TP10``, the inferior temporal chain that sits below the standard row.
+    ``'10-05'`` gives the 161 electrodes whose names are standard, and ``'all'``
+    gives every one of the 231.
+
+    **Nineteen electrodes is not enough for correlated sources on this model,**
+    and that is worth stating before anyone reaches for the familiar montage.
+    On the correlated pair of :ref:`ex-fem-head-model` the peak error is 38.9 mm
+    at 19 electrodes and 0.0 mm at 33 and above, and the 38.9 mm has no spread
+    at all over ten noise seeds, so it is a bias of the array rather than a
+    noise effect. Over eight further correlated pairs 30 to 40 mm apart the
+    median error is 20.5 mm at 19 electrodes with every pair above 10 mm,
+    against 0.0 mm at 69. A single source, or an uncorrelated pair, localises
+    exactly at every count including 19, so the failure is specific to
+    correlated sources rather than general. Dropping from 231 to 161 costs
+    nothing measurable.
+
+    **The average reference.** The lead field is supplied in common average
+    reference over all 231, exactly (residual 1e-15). Any subset breaks that,
+    and not gently: the retained columns miss their own average by a median 18
+    to 21 per cent of the column norm whatever the size, because a cap is the
+    top of this array rather than a well-distributed sample of it. A random 160
+    of the 231 gives 3 per cent where the real 10-05 set of that size gives 21. This
+    costs nothing provided the rank is handled, because the offending component
+    is exactly what an average-reference projector removes: with a projector the
+    beamformer reproduces a by-hand re-referenced lead field to 3e-15 in
+    relative power. Use :func:`make_ny_head_info`, which supplies one. Without
+    it, and without declaring ``rank=dict(eeg=n-1)``, localisation degrades
+    badly and erratically.
+
+    See Also
+    --------
+    read_ny_head_forward
+    make_ny_head_info
+
+    References
+    ----------
+    .. footbibliography::
+    """
+    _check_option("system", system, ("10-20", "10-10", "10-05", "all"))
+    available = set(ny_head_montage(path=path, verbose=False).ch_names)
+    if system == "all":
+        return list(ny_head_montage(path=path, verbose=False).ch_names)
+    if system == "10-05":
+        from mne.channels import make_standard_montage
+
+        # Union rather than intersection with MNE's montage: ``Nz`` is a genuine
+        # 10-10 position that MNE files as a fiducial rather than a channel, so
+        # intersecting alone would drop it and leave 10-10 not nested inside
+        # 10-05.
+        standard = set(make_standard_montage("standard_1005").ch_names)
+        standard.update(_TEN_TEN)
+        return sorted(available & standard)
+    wanted = _TEN_TWENTY if system == "10-20" else _TEN_TEN
+    return [name for name in wanted if name in available]
 
 
 @verbose

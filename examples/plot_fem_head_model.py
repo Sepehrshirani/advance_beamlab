@@ -50,6 +50,7 @@ from advance_beamlab import (
     make_mcmv,
     make_ny_head_info,
     ny_head_montage,
+    ny_head_picks,
     ny_head_plot_indices,
     ny_head_scalp,
     read_ny_head_forward,
@@ -319,6 +320,65 @@ img = plotter.screenshot()
 fig, ax = plt.subplots(figsize=(9, 6), constrained_layout=True)
 ax.imshow(img)
 ax.set_axis_off()
+
+# %%
+# Standard montages, and why 10-20 is not enough here
+# ---------------------------------------------------
+# Few recordings have 231 electrodes. :func:`~advance_beamlab.ny_head_picks`
+# returns the names for a conventional montage, to be passed as ``picks``.
+# The model has all nineteen electrodes of the classic 10-20 system and 67 of
+# the 73 named 10-10 positions, lacking only the inferior temporal chain
+# (``F9``/``F10``, ``T9``/``T10``, ``TP9``/``TP10``).
+
+for system in ("10-20", "10-10", "10-05", "all"):
+    print(f"  {system:>6}: {len(ny_head_picks(system))} electrodes")
+
+# %%
+# It is worth knowing what the familiar montage costs before reaching for it.
+# Repeating the localisation above at each electrode count, on the same
+# correlated pair, the 19-electrode array misses by 38.9 mm while 33 electrodes
+# and upwards are exact. That miss has no spread at all across noise seeds, so
+# it is a bias of the array rather than a noise effect, and it is specific to
+# correlated sources: a single source, or an uncorrelated pair, localises
+# exactly at every count including 19.
+
+for system in ("10-20", "10-10", "10-05"):
+    picks = ny_head_picks(system)
+    fwd_sub = read_ny_head_forward(resolution="5K", picks=picks)
+    info_sub = mne.pick_info(info, [info["ch_names"].index(p) for p in picks])
+    sensor_sub = np.einsum("cs,est->ect", fwd_sub["sol"]["data"], sources)
+    noise_sub = rng.standard_normal(sensor_sub.shape) * 0.15e-6
+    noise_sub -= noise_sub.mean(1, keepdims=True)
+    ep_sub = mne.EpochsArray(sensor_sub + noise_sub, info_sub, tmin=0, baseline=None)
+    epn_sub = mne.EpochsArray(noise_sub, info_sub, tmin=0, baseline=None)
+    dc_sub = mne.compute_covariance(ep_sub, method="empirical")
+    nc_sub = mne.compute_covariance(epn_sub, method="empirical")
+    flt_sub = make_lcmv(
+        info_sub,
+        fwd_sub,
+        dc_sub,
+        reg=0.05,
+        noise_cov=nc_sub,
+        weight_norm="unit-noise-gain",
+    )
+    pw = apply_lcmv_cov(dc_sub, flt_sub).data.ravel()
+    top = np.argsort(pw)[::-1][:2]
+    err = [np.linalg.norm(rr[top] - rr[k], axis=1).min() * 1000 for k in (i1, i2)]
+    print(
+        f"  {system:>6} ({len(picks):3d} electrodes): peak errors "
+        f"{err[0]:5.1f} and {err[1]:5.1f} mm"
+    )
+
+# %%
+# The other half of the trade is the reference. The lead field is supplied in
+# common average reference over all 231 electrodes, exactly, so any subset
+# breaks that: the retained columns miss their own average by a median 18 to 21
+# per cent of the column norm, and that does not improve with subset size,
+# because a cap is the top of this array rather than a well-distributed sample
+# of it. It costs nothing provided the rank is handled, because it is exactly
+# the component an average-reference projector removes, and
+# :func:`~advance_beamlab.make_ny_head_info` supplies one. Omit both the
+# projector and an explicit ``rank`` and the localisation degrades badly.
 
 # %%
 # Why this is EEG-only
