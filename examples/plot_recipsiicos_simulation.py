@@ -50,7 +50,7 @@ import matplotlib.pyplot as plt
 import mne
 import numpy as np
 from mne import Label
-from mne.beamformer import apply_lcmv, make_lcmv
+from mne.beamformer import apply_lcmv, apply_lcmv_cov, make_lcmv
 from mne.forward import restrict_forward_to_label
 
 from advance_beamlab import (
@@ -228,18 +228,24 @@ ax.legend(loc="lower left")
 fig.tight_layout()
 
 # %%
-# **How sensitive is this to the rank?** Much less than one might fear, which is
-# the useful practical finding. Sweeping the rank over more than an order of
-# magnitude around :math:`K^*` (from :math:`K^*/8` to :math:`4K^*`) moves the
-# recovered amplitude only between about 0.96 and 1.08, while LCMV on the same
-# data sits at 0.31. On this configuration the choice of rank is not what
-# separates the two methods; applying the projection at all is.
+# **How sensitive is this to the rank?** Less than one might fear over the ranks
+# that are valid, which is the useful practical finding. The top of the range
+# needs more care than that sentence suggests, though, and the obvious metric is
+# blind to the reason why.
 #
-# That is not a licence to ignore the parameter. The bound at the top end is
-# real: once the rank reaches the rank of the power Gram the projector annihilates
-# the covariance entirely, and the implementation warns when a requested rank
-# crosses it. The point is that between those limits there is a broad plateau
-# rather than a knife edge. The sweep below is measured at :math:`\rho = 0.95`.
+# The bound is hard. Once the rank reaches the rank of the power Gram, which is
+# the number of independent source topographies the forward supports, the
+# whitened projector removes the entire power subspace and the modified
+# covariance is exactly zero; the implementation warns when a requested rank
+# crosses it. What makes this worth a figure rather than a footnote is that the
+# recovered-amplitude metric cannot detect it. A unit-gain filter satisfies
+# :math:`w^T g = 1` at the location it is pointed at whatever covariance it was
+# built from, so past the bound it keeps reporting about one while the filter
+# carries no information at all. The sweep below therefore reports a second
+# quantity as well, the share of the whole power map falling on the two true
+# sources, which has no such floor and does collapse.
+#
+# The sweep is measured at :math:`\rho = 0.95`.
 
 rho_fixed = 0.95
 phi = np.arccos(rho_fixed)
@@ -259,8 +265,16 @@ noise_cov = mne.compute_covariance(
 evoked = epochs.average()
 truth = amp / np.sqrt(2)
 
+# Where the projector annihilates the covariance: the rank at which the
+# power-retention curve reaches zero, because past that point there is no power
+# subspace left to remove. This is a property of the forward model rather than
+# of the data, and it is the same bound the library warns against.
+_zero = np.flatnonzero(p_pwr <= 1e-12)
+annihilation = int(ranks[_zero[0]]) if _zero.size else int(ranks[-1]) + 1
+print(f"the whitened projector annihilates the covariance from rank {annihilation}")
+
 test_ranks = sorted({max(1, k_opt // 8), k_opt // 3, k_opt, 2 * k_opt, 4 * k_opt})
-rank_amp = []
+rank_amp, rank_share = [], []
 for rk in test_ranks:
     filters = make_recipsiicos_lcmv(
         info,
@@ -274,19 +288,69 @@ for rk in test_ranks:
     )
     tc = apply_lcmv(evoked, filters).data[sources][:, active]
     rank_amp.append(float(np.mean(np.sqrt((tc**2).mean(axis=1)) / truth)))
-    print(f"rank {int(rk):4d}: recovered {rank_amp[-1]:.3f}")
+    power = apply_lcmv_cov(data_cov, filters).data.ravel()
+    rank_share.append(float(power[sources].sum() / power.sum()))
+    print(
+        f"rank {int(rk):4d}: recovered {rank_amp[-1]:.3f}, "
+        f"power share at true sources {rank_share[-1]:.4f}"
+        f"{'   (past the bound)' if rk >= annihilation else ''}"
+    )
 
 lcmv_ref = lcmv_amp[list(rhos).index(0.95)]
-fig, ax = plt.subplots(figsize=(7, 3.8))
-ax.semilogx(test_ranks, rank_amp, "o-", color="C3", ms=7, label="ReciPSIICOS")
-ax.axhline(lcmv_ref, color="C0", ls="--", lw=1.2, label="LCMV")
-ax.axvline(k_opt, color="k", ls="--", lw=1.2, label=f"$K^*$ = {k_opt}")
-ax.set(xlabel="projection rank $K$", ylabel="recovered amplitude / true", ylim=(0, 1.2))
-ax.set_title(rf"A broad plateau, not a knife edge ($\rho$ = {rho_fixed})", loc="left")
-ax.legend(loc="lower left")
-fig.tight_layout()
+valid = [rk < annihilation for rk in test_ranks]
+
+
+def _split(series, keep):
+    """Ranks and values on one side of the annihilation bound."""
+    sel = [i for i, v in enumerate(valid) if v == keep]
+    return [test_ranks[i] for i in sel], [series[i] for i in sel]
+
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.1), constrained_layout=True)
+for ax, series, ylabel, ref in (
+    (ax1, rank_amp, "recovered amplitude / true", lcmv_ref),
+    (ax2, rank_share, "share of map power at true sources", None),
+):
+    ax.axvspan(annihilation, max(test_ranks) * 1.4, color="0.88", lw=0, zorder=0)
+    ax.semilogx(*_split(series, True), "o-", color="C3", ms=7, label="ReciPSIICOS")
+    ax.semilogx(
+        *_split(series, False),
+        "o",
+        mfc="none",
+        mec="0.35",
+        ms=8,
+        label="covariance annihilated",
+    )
+    ax.axvline(k_opt, color="k", ls="--", lw=1.2, label=f"$K^*$ = {k_opt}")
+    if ref is not None:
+        ax.axhline(ref, color="C0", ls="--", lw=1.2, label="LCMV")
+    ax.set(xlabel="projection rank $K$", ylabel=ylabel)
+    ax.set_xlim(min(test_ranks) * 0.7, max(test_ranks) * 1.4)
+ax1.set_ylim(0, 1.3)
+ax2.set_ylim(0, None)
+ax1.set_title("what the amplitude metric shows", loc="left", fontsize=10)
+ax2.set_title("what it cannot show", loc="left", fontsize=10)
+ax1.legend(loc="lower left", fontsize=8)
+fig.suptitle(
+    rf"Rank sensitivity at $\rho$ = {rho_fixed}, with the invalid range shaded",
+    x=0.008,
+    ha="left",
+)
 
 # %%
+# Read the shaded band as invalid rather than as more plateau. Over the ranks
+# that are valid, :math:`K^*/8` to :math:`K^*`, the recovered amplitude stays
+# between 0.96 and 1.02 while LCMV on the same data sits at 0.31. On this
+# configuration the choice of rank really is not what separates the two methods;
+# applying the projection at all is.
+#
+# Past the bound the amplitude carries straight on and reaches 1.08 at
+# :math:`4K^*`, the highest value anywhere in the sweep, and it means nothing:
+# the covariance behind it is zero to within round-off. The power share in the
+# right-hand panel falls from about 0.15 to 0.006 and 0.004 over the same two
+# points, a factor of twenty-five and thirty-five. That is what a real failure
+# looks like, and it is the reason the left-hand panel alone was not enough.
+#
 # **The modified covariance itself.** :func:`~advance_beamlab.make_recipsiicos_cov`
 # returns the cleaned sensor covariance directly, which is useful for inspection
 # and for interoperating with other tools. It is the same object

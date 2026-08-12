@@ -60,12 +60,17 @@ from advance_beamlab import apply_mcmv, make_mcmv
 # and not an orientation search.
 #
 # It is worth saying what this is *not* for, because the opposite is easy to
-# assume: ``pick_ori="max-power"`` does not escape the cancellation. Measured on
-# this same fixture, the amplitude a free-orientation LCMV recovers with
-# ``max-power`` exceeds the fixed-orientation one by a factor of 1.00, 1.03,
-# 1.05 and 1.18 at r = 0.5, 0.9, 0.95 and 0.99. Both collapse together as the
-# correlation rises. Re-optimising one source's orientation cannot undo a
-# cancellation that comes from the *other* source being in the same filter.
+# assume: ``pick_ori="max-power"`` does not escape the cancellation. On this
+# fixture the two agree to within noise, a ratio of 1.00 at every correlation
+# from 0.5 to 0.99, and they collapse together as the correlation rises.
+#
+# That agreement is not by itself the argument, and it is worth being straight
+# about why. The volume grid gives every source the same normal, and the
+# simulation injects along exactly that direction, so the fixed orientation here
+# already *is* the true one and ``max-power`` has nothing left to find. A fixture
+# built this way cannot test an orientation search. The argument is structural
+# instead: re-optimising one source's orientation cannot undo a cancellation
+# that comes from the *other* source sitting in the same filter.
 
 montage = mne.channels.make_standard_montage("standard_1020")
 ch_names = list(dict.fromkeys(montage.ch_names))

@@ -42,6 +42,7 @@ import matplotlib.pyplot as plt
 import mne
 import numpy as np
 import pyvista as pv
+from matplotlib.colors import LinearSegmentedColormap
 from mne.beamformer import apply_lcmv_cov, make_lcmv
 
 from advance_beamlab import (
@@ -288,38 +289,71 @@ dense = power[ny_head_plot_indices(resolution="5K")]
 n_lh_dense = fwd["src"][0]["np"]
 scalars = [dense[:n_lh_dense], dense[n_lh_dense:]]
 
-# Clip the colour scale to the top of the distribution, as ``stc.plot()`` does by
-# default. A unit-noise-gain map has a narrow dynamic range (here the median is
-# 1.03 and the maximum 2.08), so drawing the full range makes the whole cortex a
-# uniform dark red and hides the very peaks the figure exists to show.
-lo, hi = np.percentile(power, [95, 99.9])
-
-plotter = pv.Plotter(window_size=(800, 500), off_screen=True)
-for hemi, values in zip(fwd["src"], scalars, strict=True):
-    mesh = _mesh(hemi["rr"], hemi["tris"])
-    mesh["power"] = values
-    plotter.add_mesh(
-        mesh,
-        scalars="power",
-        cmap="hot",
-        clim=(lo, hi),
-        below_color="#3a3226",
-        smooth_shading=True,
-        show_scalar_bar=True,
-        scalar_bar_args=dict(title="LCMV power (unit noise gain)", n_labels=4),
-    )
-plotter.add_points(
-    rr[[i1, i2]] * 1000.0,
-    color="#0072B2",
-    point_size=18,
-    render_points_as_spheres=True,
+# The colour scale decides whether this figure can back up its own caption. The
+# claim is that the two simulated vertices are the two highest-power points, so
+# the top of the scale has to be the map maximum. Clipping at the 99.9th
+# percentile, which is roughly what ``stc.plot()`` does by default, puts six of
+# the 5004 sources at or above the top of the colormap here: the two true ones
+# and four spurious ones 16 to 22 mm away. All six then render the same white
+# and the reader has no way to tell them apart. Against the full range the two
+# true peaks are the only points above 0.64 of the scale.
+#
+# The bottom of the scale needs the same care. Plain ``hot`` starts at black,
+# which is darker than the ``below_color`` painted on the rest of the cortex, so
+# the weakest supra-threshold sources would come out *less* visible than the
+# sub-threshold background they are supposed to stand out from. Starting the
+# colormap a quarter of the way up fixes that.
+lo, hi = np.percentile(power, 95), power.max()
+cmap = LinearSegmentedColormap.from_list(
+    "hot_upper", plt.get_cmap("hot")(np.linspace(0.25, 1.0, 256))
 )
-plotter.camera_position = "xy"
-plotter.camera.elevation = 65
-img = plotter.screenshot()
-fig, ax = plt.subplots(figsize=(9, 6), constrained_layout=True)
-ax.imshow(img)
-ax.set_axis_off()
+
+
+def _render_power(mark):
+    """Render the power map, optionally marking the simulated positions."""
+    plotter = pv.Plotter(window_size=(800, 500), off_screen=True)
+    for hemi, values in zip(fwd["src"], scalars, strict=True):
+        mesh = _mesh(hemi["rr"], hemi["tris"])
+        mesh["power"] = values
+        plotter.add_mesh(
+            mesh,
+            scalars="power",
+            cmap=cmap,
+            clim=(lo, hi),
+            below_color="#3a3226",
+            smooth_shading=True,
+            show_scalar_bar=True,
+            scalar_bar_args=dict(title="LCMV power (unit noise gain)", n_labels=4),
+        )
+    if mark:
+        plotter.add_points(
+            rr[[i1, i2]] * 1000.0,
+            color="#0072B2",
+            point_size=9,
+            render_points_as_spheres=True,
+        )
+    plotter.camera_position = "xy"
+    plotter.camera.elevation = 65
+    img = plotter.screenshot()
+    plotter.close()
+    return img
+
+
+# Drawn twice, because a marker on a peak is the thing that stops a reader
+# checking the peak is there. Filled spheres over these two locations covered
+# about 90 per cent of each peak's rendered pixels, which is most of the
+# evidence for the sentence above. The left panel is that evidence; the right
+# panel says where the answer should be.
+fig, axes = plt.subplots(1, 2, figsize=(12, 4), constrained_layout=True)
+for ax, mark, title in zip(
+    axes,
+    (False, True),
+    ("LCMV power", "the same map, simulated positions marked"),
+    strict=True,
+):
+    ax.imshow(_render_power(mark))
+    ax.set_axis_off()
+    ax.set_title(title, fontsize=10)
 
 # %%
 # Standard montages, and why 10-20 is not enough here
@@ -336,11 +370,20 @@ for system in ("10-20", "10-10", "10-05", "all"):
 # %%
 # It is worth knowing what the familiar montage costs before reaching for it.
 # Repeating the localisation above at each electrode count, on the same
-# correlated pair, the 19-electrode array misses by 38.9 mm while 33 electrodes
-# and upwards are exact. That miss has no spread at all across noise seeds, so
-# it is a bias of the array rather than a noise effect, and it is specific to
-# correlated sources: a single source, or an uncorrelated pair, localises
-# exactly at every count including 19.
+# correlated pair, the 19-electrode array misses by 38.9 mm while the
+# 67-electrode 10-10 cap and everything denser is exact.
+#
+# The counts in between are the ones a reader actually has to choose among, and
+# the loop below does not print them, so they are worth stating: the error does
+# not fall away gradually. Random subsets of 26 to 40 electrodes still miss one
+# of the two sources by up to 34 mm, and only from about 45 electrodes does
+# every draw land on both. A 32-channel cap sits on the wrong side of that line,
+# which is the opposite of what this paragraph used to claim.
+#
+# The miss is a property of the array rather than of the noise. Across ten noise
+# seeds it comes out at 38.9 mm nine times and 41.7 mm once. It is also specific
+# to correlated sources: a single source, and an uncorrelated pair at the same
+# two locations, both localise exactly at every count including 19.
 
 for system in ("10-20", "10-10", "10-05"):
     picks = ny_head_picks(system)

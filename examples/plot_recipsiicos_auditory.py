@@ -164,8 +164,9 @@ stc_recip = apply_lcmv_cov(data_cov, recip)
 #
 # The honest summary is that this dataset demonstrates that ReciPSIICOS *runs
 # correctly end to end on real, mixed-sensor MEG* (the rank curve, the projector,
-# the whitening and the virtual-sensor reduction) rather than that it beats LCMV
-# here.
+# the whitening and the virtual-sensor reduction), and that it does not beat LCMV
+# *on this balance metric*. It does recover a substantially larger waveform at
+# the auditory peaks, which the last figure of this example shows.
 
 
 def hemi_peaks(stc):
@@ -188,8 +189,15 @@ try:
     brain = stc_recip.plot(
         subject="sample",
         subjects_dir=subjects_dir,
-        hemi="both",
+        # "split", not "both". With hemi="both" the two inflated surfaces are
+        # offset along x and a single lateral camera looks straight down that
+        # axis, so the near hemisphere hides the far one completely. That matters
+        # here more than most places: the left hemisphere carries this estimate's
+        # global maximum, so the one figure of an example about hemispheric
+        # balance was hiding the larger of the two peaks it compares.
+        hemi="split",
         views="lateral",
+        size=(1000, 500),
         clim=dict(kind="percent", lims=[90, 95, 99]),
         time_viewer=False,  # static image: no interactive picking (offscreen-safe)
     )
@@ -202,17 +210,28 @@ except Exception as exc:  # 3-D rendering is optional
 # figure appear correctly in the built documentation, and it keeps the window
 # open, which the CI runner needs.
 if brain is not None:
-    fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(10, 5), constrained_layout=True)
     ax.imshow(brain.screenshot())
     ax.set_axis_off()
 
 # %%
 # Finally, the reconstructed time courses at the two hemispheric peaks: the same
-# comparison as the power map, now as a waveform. The ratio in each panel
-# title is the ReciPSIICOS peak over the LCMV peak. Consistent with the balance
-# figures above, the two filters largely agree on this dataset; the point of the
-# panel is that the repaired covariance yields a sane, well-formed time course on
-# real data, not that it recovers a larger one here.
+# comparison as the power map, now as a waveform. The ratio in each panel title
+# is the ReciPSIICOS peak over the LCMV peak.
+#
+# These panels disagree with the balance metric above, and the disagreement is
+# the interesting part rather than an inconsistency to smooth over. On
+# hemispheric balance the two filters are close, because LCMV already recovers
+# both hemispheres. On waveform amplitude at the auditory peaks they are not:
+# ReciPSIICOS returns roughly four and a half times the LCMV peak on the left and
+# about a third more on the right. That is not an artefact of the two weight
+# normalisations, since the pre-stimulus baseline deviations are comparable
+# between the two filters, so the peak signal-to-noise improves along with the
+# amplitude.
+#
+# The two metrics are asking different questions. Balance asks whether each
+# hemisphere shows up at all, and LCMV passes. Peak amplitude asks how much of
+# the source survived the filter, and that is where cancellation leaves its mark.
 
 evoked = epochs.average()
 tc_lcmv = apply_lcmv(evoked, lcmv)
@@ -242,6 +261,15 @@ for ax, idx, hemi in zip(axes, peaks, ("Left", "Right"), strict=True):
         ylabel="amplitude (a.u.)",
     )
     ax.legend(loc="upper right")
+    # Printed as well as drawn, because the paragraph above quotes these two
+    # numbers and a reader should be able to check them against the run.
+    base = evoked.times < 0.0
+    print(
+        f"{hemi:>5} peak: LCMV {l_peak:.3g}, ReciPSIICOS {r_peak:.3g}, "
+        f"ratio {ratio:.2f}; pre-stimulus SD "
+        f"{np.std(tc_lcmv.data[idx, base].real):.3g} vs "
+        f"{np.std(tc_recip.data[idx, base].real):.3g}"
+    )
 axes[-1].set_xlabel("time (ms)")
 
 # sphinx_gallery_thumbnail_number = 1

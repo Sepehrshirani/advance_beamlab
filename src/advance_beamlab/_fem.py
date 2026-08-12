@@ -466,13 +466,21 @@ def ny_head_picks(system="10-05", path=None, *, verbose=None):
     **Nineteen electrodes is not enough for correlated sources on this model,**
     and that is worth stating before anyone reaches for the familiar montage.
     On the correlated pair of :ref:`ex-fem-head-model` the peak error is 38.9 mm
-    at 19 electrodes and 0.0 mm at 33 and above, and the 38.9 mm has no spread
-    at all over ten noise seeds, so it is a bias of the array rather than a
-    noise effect. Over eight further correlated pairs 30 to 40 mm apart the
-    median error is 20.5 mm at 19 electrodes with every pair above 10 mm,
-    against 0.0 mm at 10-10 density and above. A single source, or an
-    uncorrelated pair, localises exactly at every count including 19, so the
-    failure is specific to correlated sources rather than general.
+    at 19 electrodes and 0.0 mm at 10-10 density and above. It does not improve
+    smoothly in between: random subsets of 26 to 40 electrodes still miss by up
+    to 34 mm, and only from about 45 does every draw land on both sources, so a
+    32-channel cap sits on the wrong side of the transition. The 38.9 mm is a
+    bias of the array rather than a noise effect, coming out at 38.9 mm on nine
+    of ten noise seeds and at 41.7 mm on the tenth.
+
+    Density helps but does not guarantee. On a further eight correlated pairs 31
+    to 39 mm apart, all eight miss by more than 10 mm at 19 electrodes, with a
+    median of 33.6 mm; seven of the eight are then exact at both 10-10 and 10-05,
+    while the remaining pair misses by 33.6 mm at every count including 231.
+
+    A single source, or an uncorrelated pair at the same two locations, localises
+    exactly at every count including 19, so the failure is specific to correlated
+    sources rather than general.
 
     Read those exact zeros as an inverse crime rather than as accuracy. The data
     behind them are generated from the very lead field being inverted, the

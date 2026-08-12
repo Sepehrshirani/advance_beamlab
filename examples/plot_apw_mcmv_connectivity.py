@@ -425,16 +425,33 @@ src_real = fwd_real["src"]
 
 
 def label_centre(label):
-    """One representative grid index per label, as PW-MCMV takes point sources."""
+    """One representative grid index per label, as PW-MCMV takes point sources.
+
+    The representative point has to be chosen in space. Taking the median of the
+    vertices' *positions in* ``vertno`` instead, which is what this function used
+    to do, picks out the median FreeSurfer vertex number: an ordering with no
+    geometric meaning at all. It put three of these four regions outside their
+    own label, the auditory ones about 4 cm away in precentral cortex and in no
+    label at all, while the rows below were still captioned aud-L and aud-R.
+    """
     offset = 0 if label.hemi == "lh" else src_real[0]["nuse"]
     hemi = src_real[0] if label.hemi == "lh" else src_real[1]
     shared = np.intersect1d(hemi["vertno"], label.vertices)
-    return int(
-        np.median([offset + int(np.where(hemi["vertno"] == v)[0][0]) for v in shared])
-    )
+    idx = np.array([offset + int(np.where(hemi["vertno"] == v)[0][0]) for v in shared])
+    pos = fwd_real["source_rr"][idx]
+    return int(idx[np.argmin(np.linalg.norm(pos - pos.mean(0), axis=1))])
 
 
 rois_real = [label_centre(parc[n]) for n in names]
+
+# Check the regions are where they are said to be, rather than trusting that
+# they are. Each chosen grid point must be a vertex of the label it stands for.
+for name, roi in zip(names, rois_real, strict=True):
+    hemi_src = src_real[0] if parc[name].hemi == "lh" else src_real[1]
+    offset = 0 if parc[name].hemi == "lh" else src_real[0]["nuse"]
+    vertex = hemi_src["vertno"][roi - offset]
+    assert vertex in parc[name].vertices, f"{name} representative is outside its label"
+print(f"region representatives (all inside their own label): {rois_real}")
 
 epochs_real = mne.make_fixed_length_epochs(raw, duration=4.0, preload=True)
 cov_real = mne.compute_covariance(epochs_real, method="shrunk")
@@ -493,12 +510,24 @@ for i in range(len(short)):
         )
 
 # %%
-# The two matrices agree here, and that is the documented behaviour rather than
-# a bug: APW-MCMV only adds a region to a pair's beamformer when that region is
-# in the list passed in, lies within ``radius`` of one of the pair, and itself
-# carries a significant edge. With four regions spread across both hemispheres
-# and the occipital pole, no third region qualifies, so APW-MCMV rebuilds the
-# same order-2 filter PW-MCMV already used. The augmentation earns its cost on
-# dense parcellations where neighbours are close enough to conduct.
+# One edge moves and the rest do not, which is what the augmentation rule
+# predicts. APW-MCMV adds a region to a pair's beamformer only when that region
+# is in the list passed in, lies within ``radius`` of one of the pair, and itself
+# carries a significant edge. Of the six pairs here, only ``aud-R``-``vis-L``
+# has such a neighbour: the two pericalcarine regions are about 3 cm apart, well
+# inside the 4 cm ``radius``, and their own edge survives the AR(1) screen, so
+# ``vis-R`` joins that pair's filter and the order goes from two to three. The
+# value it reports shifts from 0.255 to 0.261.
+#
+# A shift that small is the honest expectation for a set this sparse. One extra
+# conductor in a four-region layout carries little indirect leakage, and the
+# augmentation is built for dense parcellations where a pair has several
+# neighbours close enough to conduct.
+#
+# This paragraph used to report that the two matrices agreed exactly, and it was
+# right about the arithmetic and wrong about the reason. The regions were being
+# picked by the median of their vertex *numbers* rather than their positions, so
+# the four sat 4 to 8 cm apart with nothing inside the radius. Nothing in the
+# printed output looked wrong, which is the point worth taking from it.
 
 # sphinx_gallery_thumbnail_number = 1

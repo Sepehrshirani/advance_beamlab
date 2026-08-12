@@ -74,10 +74,16 @@ def lcmv_power_map(data, info, fwd, reg=0.05):
     Uses MNE's own beamformer with ``weight_norm='unit-noise-gain'``, which
     removes the depth bias of the raw unit-gain output power and is what an
     expert would use as the power-based comparator here.
+
+    ``data`` is copied before it is wrapped, and that copy is load bearing.
+    :class:`mne.EpochsArray` applies the info's projectors to the array it is
+    handed, in place and without copying it first, so handing ``data`` straight
+    in would silently average-reference the caller's own array. Every later
+    section of this example would then be reading a different array from the one
+    ABMC was given a line earlier.
     """
-    evoked = mne.EvokedArray(data, info, tmin=0.0, verbose=False)
     cov = mne.compute_covariance(
-        mne.EpochsArray(data[np.newaxis], info, verbose=False),
+        mne.EpochsArray(data[np.newaxis].copy(), info, verbose=False),
         method="empirical",
         verbose=False,
     )
@@ -91,7 +97,6 @@ def lcmv_power_map(data, info, fwd, reg=0.05):
         weight_norm="unit-noise-gain",
         verbose=False,
     )
-    del evoked
     return apply_lcmv_cov(cov, filters, verbose=False).data[:, 0]
 
 
@@ -176,11 +181,16 @@ print(f"mean error  ABMC {np.mean(abmc_err):.1f} cm   LCMV {np.mean(lcmv_err):.1
 # will not cancel correlated sources; the template constraint of Stage 2 is what
 # turns that into a location. That division of labour is the method.
 #
-# The right panel is why the model matters numerically. The empirical covariance
-# is rank deficient: the average-reference projector alone costs it a dimension,
-# and a short segment costs more. Its condition number is therefore astronomical,
-# and it cannot be inverted directly. The fitted :math:`R` is full rank by
-# construction.
+# The right panel is the eigenvalue spectrum of both covariances, and the honest
+# reading of it is a negative one. It would be convenient to argue that the
+# empirical covariance is too ill-conditioned to invert and that this is what
+# forces the model. It is not. Over the dimensions this segment actually
+# occupies the empirical covariance is well conditioned, as the panel title
+# reports, and :func:`mne.beamformer.make_lcmv` inverts that very matrix a few
+# cells further down to produce the LCMV map plotted below. The fitted
+# :math:`R` is full rank by construction, which is convenient, but the reason to
+# reach for it is the structural one above: a diagonal :math:`\alpha` carries no
+# cross-source correlation for a beamformer to exploit.
 
 emp_cov = mne.Covariance(
     worst["data"] @ worst["data"].T / n_times,
@@ -212,7 +222,7 @@ ax2.semilogy(ev_emp / ev_emp.max(), color=C_LCMV, label="empirical")
 ax2.semilogy(ev_sbl / ev_sbl.max(), color=C_ABMC, label="SBL model")
 ax2.set(xlabel="eigenvalue index", ylabel="normalised eigenvalue")
 ax2.set_title(
-    f"condition number {ev_emp[0] / ev_emp[-1]:.0e} vs {ev_sbl[0] / ev_sbl[-1]:.1f}",
+    f"condition number {ev_emp[0] / ev_emp[-1]:.3g} vs {ev_sbl[0] / ev_sbl[-1]:.3g}",
     loc="left",
 )
 ax2.legend(loc="lower left")
@@ -220,6 +230,14 @@ fig.tight_layout()
 
 print(f"alpha ranks the true source {alpha_rank} of {len(alpha)}")
 print(f"but its own peak is {alpha_peak_cm:.1f} cm away; Stage 1 is not a localiser")
+# Printed rather than left in the figure title alone, because the paragraph
+# above makes a claim about it and a reader should be able to check the claim
+# against the run rather than against remembered prose.
+print(
+    f"condition number: empirical {ev_emp[0] / ev_emp[-1]:.3g}, "
+    f"SBL model {ev_sbl[0] / ev_sbl[-1]:.3g} "
+    f"(empirical rank {np.linalg.matrix_rank(emp_cov.data)} of {len(ev_emp)})"
+)
 
 # %%
 # **Localisation maps**, shown at the single source where the power map does
@@ -302,10 +320,17 @@ fig.tight_layout()
 
 # %%
 # **Reconstructed source** at that location. Both filters are unit-gain at the
-# source, so both recover the spike; ABMC's template constraint yields a modestly
-# cleaner trace (``r`` = correlation with the noiseless source). ABMC's decisive
-# edge is in *localisation* above. The larger waveform gains in the paper come
-# with realistic iEEG noise, not this idealised sphere.
+# source, so both recover the spike, and ABMC's trace is modestly cleaner
+# (``r`` = correlation with the noiseless source).
+#
+# It is worth being exact about which half of the method earns that, because the
+# obvious reading is the wrong one. Most of it is Stage 1 rather than the
+# template. A unit-gain filter built on the Stage-1 covariance with the template
+# constraint switched off already reaches r = 0.39, against 0.34 for the same
+# filter on the empirical covariance, and turning the constraint on adds about
+# 0.01 more. The covariance does roughly five sixths of the work on the waveform.
+# ABMC's decisive edge is in *localisation* above. The larger waveform gains in
+# the paper come with realistic iEEG noise, not this idealised sphere.
 data = worst["data"]
 res = make_abmc(info, fwd, data, template, return_weights=True)
 abmc_out = res.weights[:, i_src] @ data

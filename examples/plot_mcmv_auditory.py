@@ -60,11 +60,24 @@ evoked = epochs.average()
 
 # The active window is the N100 (80-130 ms), not the whole post-stimulus epoch.
 # This matters, and it is the main practical lesson of this example: a beamformer
-# is tuned by the covariance it is built from. Over 50-200 ms the bilateral N100
-# is diluted by later, hemisphere-specific activity, and the two auditory sources
-# come out essentially uncorrelated (r = -0.13). There is then no cancellation for
-# MCMV to undo, and it gains nothing. Restricted to the N100 the same two sources
-# are strongly correlated (r = +0.55), which is the regime MCMV exists for.
+# is tuned by the covariance it is built from. Restricted to the N100 the two
+# auditory sources are strongly correlated, r = +0.82 between their jointly
+# reconstructed traces, which is the regime MCMV exists for.
+#
+# Widening the window to 50-200 ms does remove the MCMV advantage, but not by the
+# route it is tempting to give. Held at these same two vertices the pair does not
+# decorrelate at all: r goes to +0.94, and MCMV still gains 1.97 and 1.71 times.
+# What changes is the choice of locations. The single-source LCMV peaks that this
+# example constrains move over the wider window, the left one by 25 mm out of
+# superior temporal cortex and into middle temporal, and it is constraining that
+# different pair which costs MCMV the gain.
+#
+# One caution about measuring the correlation at all, because it is easy to get
+# backwards and this example is where it would bite. Those numbers come from the
+# *joint* reconstruction. Read the correlation off the per-source LCMV traces
+# instead and the same N100 window gives r = -0.09, so a strongly correlated pair
+# reads as uncorrelated through the very filter whose cancellation the
+# correlation was meant to explain. Estimate it with the joint filter.
 data_cov = mne.compute_covariance(epochs, tmin=0.08, tmax=0.13, method="shrunk")
 noise_cov = mne.compute_covariance(epochs, tmin=None, tmax=0.0, method="shrunk")
 
@@ -105,8 +118,14 @@ try:
     brain = stc_pow.plot(
         subject="sample",
         subjects_dir=subjects_dir,
-        hemi="both",
+        # "split", not "both". With hemi="both" the two inflated surfaces are
+        # offset along x and a single lateral camera looks straight down that
+        # axis, so the near hemisphere hides the far one completely: the figure
+        # would show only the right hemisphere while the text below claims both.
+        # "split" gives each hemisphere its own panel and its own camera.
+        hemi="split",
         views="lateral",
+        size=(1000, 500),
         clim=dict(kind="percent", lims=[90, 95, 99]),
         time_viewer=False,  # static image: no interactive picking (offscreen-safe)
     )
@@ -119,7 +138,7 @@ except Exception as exc:  # 3-D rendering is optional
 # figure appear correctly in the built documentation, and it keeps the window
 # open, which the CI runner needs.
 if brain is not None:
-    fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(10, 5), constrained_layout=True)
     ax.imshow(brain.screenshot())
     ax.set_axis_off()
 
@@ -151,14 +170,24 @@ mcmv = make_mcmv(
 s_mcmv = apply_mcmv(evoked, mcmv)  # (2, n_times)
 s_lcmv = apply_lcmv(evoked, lcmv_ug).data[sources]  # (2, n_times)
 
+# Both correlations, printed, because the paragraph at the top of this example
+# quotes them and because reading one off the wrong filter reverses the sign.
+_win = (evoked.times >= 0.08) & (evoked.times <= 0.13)
+print(
+    "source correlation over the covariance window: joint (MCMV) "
+    f"r = {np.corrcoef(s_mcmv[0, _win], s_mcmv[1, _win])[0, 1]:+.2f}, "
+    f"per-source (LCMV) r = {np.corrcoef(s_lcmv[0, _win], s_lcmv[1, _win])[0, 1]:+.2f}"
+)
+
 # %%
 # The MCMV null on the opposite source removes the shared-signal cancellation, so
 # the joint auditory time courses are recovered at a fuller amplitude than the
 # per-source LCMV traces. The peak-amplitude ratio in each panel quantifies how
 # much the per-source LCMV is attenuated. Both ratios exceed one here, and by a
 # clear margin on the left hemisphere. Re-run this example with the wider
-# ``tmin=0.05, tmax=0.2`` covariance window and both ratios collapse to about one:
-# the effect is real but it only exists where the sources are actually correlated.
+# ``tmin=0.05, tmax=0.2`` covariance window and both ratios collapse to about
+# one, for the reason set out at the top: the wider window moves the peaks this
+# example constrains, rather than decorrelating the auditory pair.
 
 times = evoked.times * 1e3
 post = evoked.times >= 0.0
