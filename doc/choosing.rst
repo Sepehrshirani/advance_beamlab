@@ -419,11 +419,14 @@ template-match beat the runner-up by 0.000-0.011 in absolute value (0.402 agains
 measure, and the peak will move between adjacent grid points across noise
 realisations. Coverage limits worth knowing: ABMC is never run against a
 competing higher-power source, which is the regime its own rationale is about.
-It is now run on a real MEG recording, in :ref:`ex-abmc-auditory`, where it sits
-5 to 11 mm from Heschl's gyrus against 12 mm for LCMV across an averaging sweep.
-Read that as evidence it survives a real recording rather than as an accuracy
-result: the grid is spaced at several millimetres and distance to an anatomical
-label is a weak criterion next to a simulated ground truth.
+It is now run on a real MEG recording, in :ref:`ex-abmc-auditory`, and the
+result is a boundary rather than a win. On a single trial ABMC is worse than
+LCMV and highly variable, a median of 29 mm over eight disjoint trials against
+11 mm for LCMV, with a range of 1 to 46 mm. From two trials upwards it is
+consistently better, 9 mm at two, four and eight and 7 mm at sixteen. LCMV is
+given the whole recording throughout, so the comparison runs against ABMC and it
+still wins above one trial. Distance to an anatomical label remains a weak
+criterion next to a simulated ground truth.
 
 **The parameters that matter.** ``template`` is the load-bearing input rather
 than a tuning knob: only its shape matters (the read-out is exactly invariant to

@@ -23,13 +23,19 @@ the transverse temporal (Heschl's) gyrus, and both methods are scored by the
 distance from their peak to the nearest grid point inside that label. The
 comparison is against :func:`mne.beamformer.make_lcmv` on the same data.
 
-The summary, which the numbers below reproduce: ABMC lands 5 to 11 mm from
-Heschl's gyrus at every averaging level, against 12 mm for LCMV, and its best
-result is on a single trial. Two caveats keep that from being a stronger claim
-than it is. Grid spacing here is several millimetres, so differences of a few
-millimetres are not resolved, and a distance to a label is a weak criterion
-compared with a simulated ground truth. What the example does establish is that
-ABMC runs correctly on a real recording and is not worse than LCMV on one.
+The summary, which the numbers below reproduce. On a single trial ABMC is worse
+than LCMV and wildly variable: a median of 29 mm across eight disjoint trials,
+ranging from 1 to 46 mm, against 11 mm for LCMV. From two trials upwards it is
+consistently better, 9 mm at two, four and eight trials and 7 mm at sixteen, and
+the spread narrows as it goes. So the method works here, but not at the
+signal-to-noise of one trial of this recording.
+
+Read the comparison knowing it is deliberately unfair to ABMC. LCMV is given the
+whole recording, all 72 epochs, while ABMC is given between one and sixteen
+trials, and ABMC still wins from two trials up. The asymmetry is not hidden in
+the legend: it is drawn there. ABMC is not given only its own trials either, and
+that cuts the other way: its template and noise covariance both come from all 72
+epochs, and only the segment being localised is short.
 """
 # Authors: Sepehr Shirani <sepehrshirani@gmail.com>, <s.shirani@ucl.ac.uk>
 #          Muzhi Wang
@@ -78,25 +84,26 @@ labels = [
     )
     if "transversetemporal" in label.name
 ]
-auditory, offset = [], 0
-for hemi, src_hemi in zip(("lh", "rh"), fwd["src"], strict=True):
-    for label in labels:
-        if label.hemi != hemi:
-            continue
-        shared = np.intersect1d(src_hemi["vertno"], label.vertices)
-        auditory += [
-            offset + int(np.where(src_hemi["vertno"] == v)[0][0]) for v in shared
-        ]
-    offset += src_hemi["nuse"]
-auditory = np.array(sorted(set(auditory)))
+# Score against the label *surface*, not against the decimated grid points that
+# happen to fall inside it. The grid is spaced at roughly 3.4 mm, so scoring
+# against the 42 grid points rather than the 1503 label vertices inflates every
+# distance by up to 3.5 mm on numbers whose whole range is a centimetre.
+auditory_rr = np.vstack(
+    [
+        src_hemi["rr"][label.vertices]
+        for hemi, src_hemi in zip(("lh", "rh"), fwd["src"], strict=True)
+        for label in labels
+        if label.hemi == hemi
+    ]
+)
 
 
 def distance_to_auditory(index):
-    """Millimetres from a grid point to the nearest Heschl's gyrus point."""
-    return np.linalg.norm(source_rr[auditory] - source_rr[index], axis=1).min() * 1000
+    """Millimetres from a grid point to the nearest point of Heschl's gyrus."""
+    return np.linalg.norm(auditory_rr - source_rr[index], axis=1).min() * 1000
 
 
-print(f"grid points inside Heschl's gyrus: {len(auditory)}")
+print(f"label vertices defining Heschl's gyrus: {len(auditory_rr)}")
 
 # %%
 # The template is the dominant temporal component of the average, which is what
@@ -123,46 +130,75 @@ print(f"LCMV peak: {lcmv_error:.0f} mm from Heschl's gyrus")
 
 # %%
 # Now ABMC, over a sweep of how many trials are averaged. Averaging raises the
-# signal-to-noise ratio and simultaneously raises the share of the variance the
-# response carries, so the sweep moves the recording out of the regime ABMC is
-# designed for while making the problem easier. Both effects are visible.
+# signal-to-noise ratio and at the same time raises the share of the variance
+# the response carries, so the sweep walks the recording out of the regime ABMC
+# is designed for while making the problem easier.
+#
+# Every level is scored on several *disjoint* blocks of trials rather than on
+# the first block alone. That is not fussiness. Scored on the first single trial
+# this recording gives 4.5 mm, which is the fifth best of the 72 single trials
+# available; the median single trial gives 20 mm, and only 28 per cent of them
+# beat LCMV. A single block would have made the method look about four times
+# better than it is.
 
 trials = epochs.get_data()
+n_blocks = 8
 rows = []
 for n_avg in (1, 2, 4, 8, 16):
-    segment = trials[:n_avg].mean(0)
-    share = np.var(evoked.data) / np.var(segment)
-    result = make_abmc(
-        epochs.info, fwd, segment, template, noise_cov=noise_cov, P="auto"
+    usable = min(n_blocks, len(trials) // n_avg)
+    errors, shares = [], []
+    for b in range(usable):
+        segment = trials[b * n_avg : (b + 1) * n_avg].mean(0)
+        shares.append(np.var(evoked.data) / np.var(segment))
+        result = make_abmc(
+            epochs.info, fwd, segment, template, noise_cov=noise_cov, P="auto"
+        )
+        errors.append(
+            distance_to_auditory(int(np.argmax(np.abs(result.template_match))))
+        )
+    errors = np.array(errors)
+    rows.append(
+        (n_avg, np.mean(shares) * 100, np.median(errors), errors.min(), errors.max())
     )
-    peak = int(np.argmax(np.abs(result.template_match)))
-    rows.append((n_avg, share * 100, distance_to_auditory(peak), result.critical_p))
     print(
-        f"  n_avg={n_avg:2d}  variance share {share * 100:5.1f}%  "
-        f"ABMC {rows[-1][2]:5.0f} mm from Heschl  critical_p {result.critical_p:.2f}"
+        f"  n_avg={n_avg:2d} ({usable} blocks)  variance share "
+        f"{np.mean(shares) * 100:5.1f}%  ABMC median {np.median(errors):5.1f} mm "
+        f"[{errors.min():.1f}, {errors.max():.1f}]"
     )
 
 # %%
-# ABMC is at or inside LCMV's error across the whole sweep, and the single-trial
-# point is the best of the five, which is the end of the sweep the method is
-# designed for. Do not over-read the ordering between 5 and 11 mm: the source
-# grid is spaced at several millimetres and the criterion is a distance to an
-# anatomical label, so the honest reading is that ABMC is not worse here, not
-# that it is reliably better by 7 mm.
+# The single-trial point is the one to look at hardest, because it is the regime
+# the method is aimed at and it is where the method loses. Its median is 29 mm
+# against LCMV's 11, and its range runs from 1 mm to 46 mm, so a single trial of
+# this recording decides almost nothing. Everything from two trials up is both
+# better than LCMV and stable enough to mean something.
 #
-# One result is worth singling out because it was different a day earlier. Before
-# the automatic selection of ``P`` was made to reject values above
-# ``critical_p``, this same recording gave 53 mm at a single trial: the plateau
+# This is also why the sweep is scored on eight disjoint blocks rather than on
+# the first one. Scored on the first single trial alone the answer is 4.5 mm,
+# which would have read as ABMC beating LCMV by a factor of two at the hardest
+# setting. That trial is the fifth best of the 72 available.
+#
+# One further result is worth singling out because it was different a day
+# earlier. Before the automatic selection of ``P`` was made to reject values
+# above ``critical_p``, this recording gave 53 mm at a single trial: the plateau
 # rule had settled on the degenerate large-``P`` limit, which is a fixed point
 # and so looks perfectly stable while localising badly. ``critical_p`` is about
-# 1.25 here, so that constraint is doing real work on this dataset rather than
+# 1.25 here, so that constraint does real work on this dataset rather than
 # guarding a case that never arises.
 
-n_avg, shares, errors, _ = map(np.array, zip(*rows, strict=True))
+n_avg, shares, errors, lo, hi = map(np.array, zip(*rows, strict=True))
 
+# Colours follow the convention the other ABMC example sets: C0 is the
+# established method, C3 the one being introduced.
 fig, ax = plt.subplots(figsize=(7.2, 4), constrained_layout=True)
-ax.plot(n_avg, errors, "o-", label="ABMC")
-ax.axhline(lcmv_error, color="#D55E00", ls="--", label=f"LCMV ({lcmv_error:.0f} mm)")
+ax.fill_between(n_avg, lo, hi, color="C3", alpha=0.18, lw=0, label="ABMC, block range")
+ax.plot(n_avg, errors, "o-", color="C3", label="ABMC, median over blocks")
+ax.axhline(
+    lcmv_error,
+    color="C0",
+    ls="--",
+    label=f"LCMV, whole recording ({lcmv_error:.0f} mm)",
+)
 ax.set(
     xlabel="trials averaged",
     ylabel="distance from Heschl's gyrus (mm)",
@@ -186,12 +222,13 @@ ax.legend()
 # %%
 # The percentages annotated on the points are the share of the segment's
 # variance carried by the evoked response. Even the single-trial point, at about
-# 4%, sits above the 0.14% to 1.05% the simulation example works at, so this
-# recording does not reach the low-variance regime the method is really aimed
-# at. No dataset shipped with MNE-Python would: none of them contain
-# epileptiform spikes. The simulation remains the place where ABMC is tested
-# against a known answer, and this example is the place where it is shown to
-# survive contact with a real recording.
+# 5 per cent, sits above the 0.14 to 1.05 per cent the simulation example works
+# at, so this recording never reaches the low-variance regime the method is
+# really aimed at. No dataset shipped with MNE-Python would: none of them
+# contain epileptiform spikes. The simulation remains the place where ABMC is
+# tested against a known answer. This example is the place where it meets a real
+# recording, and the useful thing it establishes is the boundary: two trials of
+# this data, not one.
 #
 # References
 # ----------
