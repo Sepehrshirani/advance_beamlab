@@ -82,6 +82,20 @@ is downloaded on demand and is not redistributed with this package.
    ny_head_plot_indices
    ny_head_picks
 
+Understanding the constraint
+-----------------------------
+
+The methods here differ from an ordinary LCMV in their *constraint*, which is
+the part hardest to picture from the algebra. :func:`constraint_demo` turns it
+into a number: the gain of each filter at each source, measured rather than read
+out of the weights, so that the four methods are directly comparable.
+
+.. autosummary::
+   :toctree: generated/
+
+   constraint_demo
+   ConstraintDemo
+
 References
 ----------
 
