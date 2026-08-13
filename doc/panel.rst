@@ -42,6 +42,28 @@ signature in the table.
    <script src="_static/constraint_panel_data.js"></script>
    <script src="_static/constraint_panel.js"></script>
 
+The panel opens with the problem each method is solving, and the line that
+changes between them is short. LCMV minimises :math:`\mathbf{w}_1^{\mathsf T}
+\mathbf{R}\,\mathbf{w}_1` subject to one scalar equation. MCMV minimises
+:math:`\operatorname{tr}(\mathbf{W}^{\mathsf T}\mathbf{R}\,\mathbf{W})` subject
+to :math:`\mathbf{W}^{\mathsf T}\mathbf{G} = \mathbf{I}`, which is the same
+objective with the rest of the table nailed down. ReciPSIICOS keeps LCMV's single
+constraint and replaces :math:`\mathbf{R}` with a projected
+:math:`\tilde{\mathbf{R}}`. ABMC keeps the distortionless constraint and adds a
+reward for output that resembles a known waveform, traded off by :math:`P`.
+
+The source view draws both the truth and the estimate. Rings are the simulated
+sources; crosses are the two strongest points of the localiser, which is exactly
+what :func:`~advance_beamlab.constraint_demo` measures its error against, and a
+dashed line joins each estimate to the source it missed. Watching the crosses
+walk away from the rings as the correlation rises is the localisation half of the
+story, and the amplitude collapse in the waveform panel is the other half.
+
+The bottom panel sweeps the whole correlation axis at the current separation and
+signal-to-noise ratio, for all four methods at once, with a marker where the
+sliders are. The sliders show one point; that chart shows the curve those points
+lie on, which is a fairer way to judge a method than any single setting.
+
 A few things worth knowing about what you are looking at.
 
 Every configuration here was computed ahead of time by
@@ -71,6 +93,15 @@ flattens another into a single shade. Rank is the honest compromise and the
 colour bar says so. The markers on the two simulated sources are drawn as
 unfilled rings for the same reason: a filled marker sitting on a peak hides the
 one thing you are trying to check.
+
+The sensor panel shows a field map beside the traces rather than traces alone.
+Twenty stacked gradiometers tell you there is signal; the topography tells you
+where on the helmet it sits, and how little that pattern changes when you move
+the sources a couple of centimetres. Both refer to the same instant, the peak of
+the global field power inside the drawn window, and the vertical line on the
+traces marks it. The map is interpolated in the browser from the array's own
+sensor positions, and it is diverging rather than sequential because the field
+has a sign.
 
 Finally, the amplitude. The true and recovered waveforms are drawn on one shared
 scale per scene, so a reconstruction that lost half its amplitude looks like it

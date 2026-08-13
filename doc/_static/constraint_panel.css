@@ -192,3 +192,138 @@ html[data-theme="dark"] .cp-root {
   color: var(--cp-muted);
   font-size: 0.9rem;
 }
+
+/* A card that should run the full width of the grid rather than share a row:
+   the source view, the sensor pair and the sweep all need the space. */
+.cp-wide {
+  grid-column: 1 / -1;
+}
+
+/* The equations block. Deliberately plain HTML rather than typeset maths, so it
+   renders the same in the documentation and in a standalone preview, with no
+   dependency on the page's maths engine. */
+.cp-eq {
+  margin-bottom: 1rem;
+}
+
+.cp-eq-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin: 0.35rem 0 0.5rem;
+}
+
+.cp-eq-main {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.12rem;
+  padding: 0.3rem 0.6rem;
+  background: var(--cp-bg);
+  border: 1px solid var(--cp-border);
+  border-radius: 5px;
+}
+
+.cp-eq-sub {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--cp-muted);
+}
+
+.cp-eq-sol {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 0.98rem;
+  color: var(--cp-muted);
+  margin-bottom: 0.5rem;
+}
+
+.cp-eq-live {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  border-left: 3px solid var(--cp-accent);
+  background: var(--cp-bg);
+  border-radius: 0 5px 5px 0;
+  font-size: 0.88rem;
+}
+
+.cp-eq-live b {
+  font-variant-numeric: tabular-nums;
+}
+
+.cp-views {
+  display: flex;
+  gap: 0.3rem;
+  margin-bottom: 0.5rem;
+}
+
+.cp-views button {
+  padding: 0.2rem 0.55rem;
+  font: inherit;
+  font-size: 0.78rem;
+  color: var(--cp-muted);
+  background: var(--cp-bg);
+  border: 1px solid var(--cp-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.cp-views button:hover {
+  color: var(--cp-text);
+  border-color: var(--cp-accent);
+}
+
+/* Field map beside the traces: the map says where on the helmet the signal is,
+   the traces say what it does over time. */
+.cp-sensor-row {
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) minmax(220px, 2.2fr);
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.cp-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
+}
+
+.cp-key i {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+}
+
+.cp-ring {
+  border: 2px solid var(--cp-warm);
+  border-radius: 50%;
+}
+
+.cp-cross {
+  position: relative;
+}
+
+.cp-cross::before,
+.cp-cross::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  width: 11px;
+  height: 2px;
+  background: var(--cp-text);
+}
+
+.cp-cross::before {
+  transform: rotate(45deg);
+}
+
+.cp-cross::after {
+  transform: rotate(-45deg);
+}
+
+@media (max-width: 560px) {
+  .cp-sensor-row {
+    grid-template-columns: 1fr;
+  }
+}

@@ -63,6 +63,20 @@ N_BACKDROP = 4000
 FATAL_WARNINGS = ("Too few samples", "will likely be unstable", "rank estimate")
 
 
+def sensor_layout(info):
+    """Two-dimensional sensor positions, centred and scaled to the unit disc.
+
+    The panel draws a field map from these, which is the view that makes
+    "what the sensors record" mean something: twenty stacked traces show that
+    there is signal, a topography shows where on the helmet it is.
+    """
+    layout = mne.channels.find_layout(info)
+    order = [layout.names.index(ch) for ch in info["ch_names"]]
+    pos = layout.pos[order, :2] + layout.pos[order, 2:4] / 2
+    pos = pos - pos.mean(0)
+    return pos / np.abs(pos).max()
+
+
 def build_forward(verbose=True):
     """Return the ``sample`` subject's gradiometer forward, decimated."""
     data_path = mne.datasets.sample.data_path()
@@ -154,6 +168,11 @@ def run_grid(info, fwd, verbose=True):
                             demo.sensor_data, scene["sensor"], rtol=0, atol=0
                         )
                         assert list(demo.sources) == scene["sources"]
+                    # The grid points the map actually peaks at. constraint_demo
+                    # scores its peak_errors against exactly these, so the panel
+                    # can draw the estimate the error refers to rather than a
+                    # different peak of its own choosing.
+                    peaks = np.argsort(demo.power_map)[::-1][: len(demo.sources)]
                     results.append(
                         dict(
                             scene=scene_idx,
@@ -161,6 +180,7 @@ def run_grid(info, fwd, verbose=True):
                             gains=demo.gains.tolist(),
                             amplitude_ratio=demo.amplitude_ratio.tolist(),
                             peak_errors=(demo.peak_errors * 1000).tolist(),
+                            peaks=[int(p) for p in peaks],
                             power_map=demo.power_map,
                             reconstructed=demo.reconstructed,
                         )
@@ -217,7 +237,7 @@ def _quantise(array, scale):
     return np.clip(np.round(np.asarray(array) * scale), -32767, 32767)
 
 
-def pack(scenes, results, positions, cortex, verbose=True):
+def pack(scenes, results, positions, cortex, sensor_pos, verbose=True):
     """Quantise everything into one gzipped buffer plus a JSON header."""
     packer = Packer()
     header = dict(
@@ -286,6 +306,21 @@ def pack(scenes, results, positions, cortex, verbose=True):
     header["sensor"] = packer.add(np.concatenate(sensor), np.int16)
     header["n_sensor_traces"] = N_SENSOR_TRACES
 
+    # The field over the whole array at one instant, for the topography. The
+    # instant is the peak of the global field power inside the window the panel
+    # draws, so the map and the marker on the traces refer to the same moment.
+    header["sensor_pos"] = packer.add(_quantise(sensor_pos, 20000), np.int16)
+    header["n_channels"] = int(sensor_pos.shape[0])
+    topo, topo_time = [], []
+    for s in scenes:
+        data = np.asarray(s["sensor"])[:, cut]
+        t_peak = int(np.argmax(data.std(axis=0)))
+        field = data[:, t_peak]
+        topo.append(_quantise(field / (np.abs(field).max() or 1.0), 20000))
+        topo_time.append(t_peak)
+    header["topography"] = packer.add(np.concatenate(topo), np.int16)
+    header["topography_time"] = topo_time
+
     header["scenes"] = [
         dict(
             sources=s["sources"],
@@ -302,6 +337,7 @@ def pack(scenes, results, positions, cortex, verbose=True):
             gains=[[round(v, 5) for v in row] for row in r["gains"]],
             amplitude_ratio=[round(v, 5) for v in r["amplitude_ratio"]],
             peak_errors=[round(v, 2) for v in r["peak_errors"]],
+            peaks=r["peaks"],
         )
         for r in results
     ]
@@ -326,7 +362,9 @@ def main(argv=None):
 
     info, fwd, cortex = build_forward(verbose)
     scenes, results = run_grid(info, fwd, verbose)
-    header, blob = pack(scenes, results, fwd["source_rr"], cortex, verbose)
+    header, blob = pack(
+        scenes, results, fwd["source_rr"], cortex, sensor_layout(info), verbose
+    )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(

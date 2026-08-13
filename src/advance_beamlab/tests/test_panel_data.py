@@ -76,11 +76,34 @@ def test_every_combination_is_present(header):
 
 def test_array_offsets_are_aligned(header):
     """A misaligned offset makes the browser read the wrong bytes, quietly."""
-    for key in ("positions", "cortex", "maps", "true_tcs", "reconstructed", "sensor"):
+    for key in (
+        "positions",
+        "cortex",
+        "maps",
+        "true_tcs",
+        "reconstructed",
+        "sensor",
+        "sensor_pos",
+        "topography",
+    ):
         entry = header[key]
         assert entry["dtype"] in ("int16", "uint8"), key
         width = 2 if entry["dtype"] == "int16" else 1
         assert entry["offset"] % width == 0, key
+
+
+def test_the_topography_belongs_to_the_window_that_is_drawn(header):
+    """The field map and the marker on the traces must be the same instant."""
+    times = header["topography_time"]
+    assert len(times) == len(header["scenes"])
+    assert all(0 <= t < header["n_times"] for t in times)
+
+
+def test_peaks_reproduce_the_reported_errors(header):
+    """The drawn estimate has to be the one the error was measured against."""
+    for result in header["results"]:
+        assert len(result["peaks"]) == 2
+        assert all(0 <= p < header["n_sources"] for p in result["peaks"])
 
 
 def test_the_distortionless_constraint_holds_everywhere(header):
