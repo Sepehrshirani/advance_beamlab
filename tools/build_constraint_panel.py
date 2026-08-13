@@ -1,9 +1,10 @@
 """Precompute the constraint panel that ships with the documentation.
 
-The panel lets a reader place two correlated sources on a real cortex, watch what
-they look like at the sensors, and see how each beamformer localises and
-reconstructs them. The point of it is the constraint table: LCMV pins its own
-gain to one and leaves the gain at the *other* source free, and when the two are
+The panel lets a reader place one, two or three sources on a real cortex, choose
+how correlated they are and what they look like, watch the recording they make,
+and see how each beamformer localises and reconstructs them. The point of it is
+the constraint table: LCMV pins its own gain to one and leaves the gain at the
+*other* source free, and when the two are
 correlated the value that minimises output power is a large negative one, which
 cancels the target along with its partner. MCMV forbids exactly that. Reading
 that off a formula is hard; watching the number move is not.
@@ -38,8 +39,10 @@ from advance_beamlab import constraint_demo
 # The axes a reader can move. Every combination is precomputed.
 METHODS = ("lcmv", "mcmv", "recipsiicos", "abmc")
 CORRELATIONS = (0.0, 0.5, 0.8, 0.95, 0.99)
-SEPARATIONS = (0.02, 0.04, 0.08)
+SEPARATIONS = (0.02, 0.06)
 SNRS = (1.0, 3.0, 10.0)
+N_SOURCES = (1, 2, 3)
+MORPHOLOGIES = ("oscillation", "transient")
 
 # Ten seconds at 200 Hz. The covariance is estimated from these samples, and at
 # 203 gradiometers anything shorter is rank deficient: at 200 samples MNE reports
@@ -55,7 +58,6 @@ SEED = 0
 # quadratic in the source count, at about two seconds per configuration while
 # still being a real cortex rather than a sphere.
 DECIMATION = 8
-N_SENSOR_TRACES = 20
 N_BACKDROP = 4000
 
 # Warnings that mean the numbers cannot be trusted. The build stops on these
@@ -107,94 +109,112 @@ def build_forward(verbose=True):
     return info, fwd, cortex
 
 
+def _one_scene(info, fwd, combo, verbose):
+    """All four methods on one scene, with the scene itself returned once."""
+    sep, corr, snr, n_src, morph = combo
+    scene, rows = None, []
+    for method in METHODS:
+        t0 = time.time()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            demo = constraint_demo(
+                info,
+                fwd,
+                method=method,
+                n_sources=n_src,
+                morphology=morph,
+                separation=sep,
+                correlation=corr,
+                snr=snr,
+                n_times=N_TIMES,
+                sfreq=SFREQ,
+                seed=SEED,
+            )
+        fatal = sorted(
+            {
+                str(w.message)
+                for w in caught
+                if any(f in str(w.message) for f in FATAL_WARNINGS)
+            }
+        )
+        if fatal:
+            raise RuntimeError(
+                f"{method} at separation {sep}, correlation {corr}, SNR {snr}, "
+                f"{n_src} {morph} source(s) produced a covariance that cannot "
+                "be trusted:\n  " + "\n  ".join(fatal)
+            )
+        if scene is None:
+            scene = dict(
+                sources=[int(v) for v in demo.sources],
+                separation=float(demo.separation),
+                correlation=float(demo.correlation),
+                requested=dict(sep=sep, corr=corr, snr=snr, n=n_src, morph=morph),
+                true_tcs=demo.true_tcs,
+                sensor=demo.sensor_data,
+                leadfield=demo.extra["leadfield"],
+                noise_scale=demo.extra["noise_scale"],
+            )
+        else:
+            # The comparison is only fair if the data are identical.
+            np.testing.assert_allclose(demo.true_tcs, scene["true_tcs"], rtol=0, atol=0)
+            np.testing.assert_allclose(
+                demo.sensor_data, scene["sensor"], rtol=0, atol=0
+            )
+            assert list(demo.sources) == scene["sources"]
+        # The grid points the map actually peaks at. constraint_demo scores its
+        # peak_errors against exactly these, so the panel can draw the estimate
+        # the error refers to rather than a different peak of its own choosing.
+        peaks = np.argsort(demo.power_map)[::-1][: len(demo.sources)]
+        rows.append(
+            dict(
+                method=method,
+                gains=demo.gains.tolist(),
+                amplitude_ratio=demo.amplitude_ratio.tolist(),
+                peak_errors=(demo.peak_errors * 1000).tolist(),
+                peaks=[int(v) for v in peaks],
+                power_map=demo.power_map,
+                reconstructed=demo.reconstructed,
+            )
+        )
+        if verbose:
+            off = demo.gains[0, 1] if n_src > 1 else float("nan")
+            print(
+                f"  {method:>11} {n_src} {morph[:4]}  "
+                f"sep {demo.separation * 100:4.1f} cm  r {demo.correlation:+.2f}  "
+                f"snr {snr:>4}  off-diag {off:+.3f}  "
+                f"recovered {demo.amplitude_ratio[0]:.3f}  [{time.time() - t0:.1f}s]"
+            )
+    return scene, rows
+
+
 def run_grid(info, fwd, verbose=True):
     """Every (scene, method) combination, as plain arrays.
 
-    A scene is a separation, a correlation and a signal-to-noise ratio. The
-    simulated data depend on those three and on the seed, but not on the method,
-    so the four methods in one scene really are being handed identical data;
-    that is asserted below rather than assumed, because the whole comparison
-    rests on it.
+    A scene is a separation, a correlation, a signal-to-noise ratio, a number of
+    sources and a morphology. The simulated data depend on those and on the seed
+    but not on the method, so the four methods in one scene really are handed
+    identical data; that is asserted rather than assumed, because the whole
+    comparison rests on it.
     """
+    combos = [
+        (sep, corr, snr, n_src, morph)
+        for morph in MORPHOLOGIES
+        for n_src in N_SOURCES
+        for sep in SEPARATIONS
+        for corr in CORRELATIONS
+        for snr in SNRS
+    ]
     scenes, results = [], []
     t_start = time.time()
-    for sep in SEPARATIONS:
-        for corr in CORRELATIONS:
-            for snr in SNRS:
-                scene_idx = len(scenes)
-                scene = None
-                for method in METHODS:
-                    t0 = time.time()
-                    with warnings.catch_warnings(record=True) as caught:
-                        warnings.simplefilter("always")
-                        demo = constraint_demo(
-                            info,
-                            fwd,
-                            method=method,
-                            separation=sep,
-                            correlation=corr,
-                            snr=snr,
-                            n_times=N_TIMES,
-                            sfreq=SFREQ,
-                            seed=SEED,
-                        )
-                    fatal = [
-                        str(w.message)
-                        for w in caught
-                        if any(f in str(w.message) for f in FATAL_WARNINGS)
-                    ]
-                    if fatal:
-                        raise RuntimeError(
-                            f"{method} at separation {sep}, correlation {corr}, "
-                            f"SNR {snr} produced a covariance that cannot be "
-                            f"trusted:\n  " + "\n  ".join(sorted(set(fatal)))
-                        )
-                    if scene is None:
-                        scene = dict(
-                            sources=[int(s) for s in demo.sources],
-                            separation=float(demo.separation),
-                            correlation=float(demo.correlation),
-                            requested=dict(sep=sep, corr=corr, snr=snr),
-                            true_tcs=demo.true_tcs,
-                            sensor=demo.sensor_data,
-                            times=demo.times,
-                        )
-                    else:
-                        # The comparison is only fair if the data are identical.
-                        np.testing.assert_allclose(
-                            demo.true_tcs, scene["true_tcs"], rtol=0, atol=0
-                        )
-                        np.testing.assert_allclose(
-                            demo.sensor_data, scene["sensor"], rtol=0, atol=0
-                        )
-                        assert list(demo.sources) == scene["sources"]
-                    # The grid points the map actually peaks at. constraint_demo
-                    # scores its peak_errors against exactly these, so the panel
-                    # can draw the estimate the error refers to rather than a
-                    # different peak of its own choosing.
-                    peaks = np.argsort(demo.power_map)[::-1][: len(demo.sources)]
-                    results.append(
-                        dict(
-                            scene=scene_idx,
-                            method=method,
-                            gains=demo.gains.tolist(),
-                            amplitude_ratio=demo.amplitude_ratio.tolist(),
-                            peak_errors=(demo.peak_errors * 1000).tolist(),
-                            peaks=[int(p) for p in peaks],
-                            power_map=demo.power_map,
-                            reconstructed=demo.reconstructed,
-                        )
-                    )
-                    if verbose:
-                        print(
-                            f"  scene {scene_idx:2d} ({method:>11}) "
-                            f"sep {demo.separation * 100:.1f} cm  "
-                            f"r {demo.correlation:+.2f}  snr {snr:>4}  "
-                            f"off-diag {demo.gains[0, 1]:+.3f}  "
-                            f"recovered {demo.amplitude_ratio[0]:.3f}  "
-                            f"[{time.time() - t0:.1f}s]"
-                        )
-                scenes.append(scene)
+    for i, combo in enumerate(combos):
+        if verbose:
+            print(f"scene {i + 1}/{len(combos)}")
+        scene, rows = _one_scene(info, fwd, combo, verbose)
+        index = len(scenes)
+        scenes.append(scene)
+        for row in rows:
+            row["scene"] = index
+            results.append(row)
     if verbose:
         print(
             f"{len(results)} configurations over {len(scenes)} scenes "
@@ -245,6 +265,8 @@ def pack(scenes, results, positions, cortex, sensor_pos, verbose=True):
         correlations=list(CORRELATIONS),
         separations=list(SEPARATIONS),
         snrs=list(SNRS),
+        source_counts=list(N_SOURCES),
+        morphologies=list(MORPHOLOGIES),
         n_times=DISPLAY_SAMPLES,
         n_times_simulated=N_TIMES,
         sfreq=SFREQ,
@@ -259,20 +281,25 @@ def pack(scenes, results, positions, cortex, sensor_pos, verbose=True):
     header["cortex"] = packer.add(_quantise((cortex - centre) * 1000, 10), np.int16)
     header["geometry_scale"] = 10.0
 
-    # Localiser maps, stored as display rank so the four methods, whose value
-    # distributions are wildly different, are comparable at a glance. The panel
-    # says so in its colour bar; this is the same choice the local explorer makes.
+    # Localiser maps, each normalised to its own range and compressed by a cube
+    # root. Display rank was the first choice and it was a mistake: a rank map is
+    # a uniform ramp whatever the underlying shape, so all four methods rendered
+    # identically -- measured, the fraction of the grid above half the display
+    # maximum was 0.500 for every one of them. Normalising alone is too peaky to
+    # show any structure (0.2 per cent of the grid above half). The cube root
+    # sits between, and separates the methods: 1.9, 0.1, 8.7 and 5.7 per cent for
+    # LCMV, MCMV, ReciPSIICOS and ABMC on the same scene.
     maps = []
     for r in results:
         m = np.asarray(r["power_map"], float)
-        order = np.argsort(np.argsort(m))
-        maps.append(np.round(order / max(len(order) - 1, 1) * 255))
+        span = m.max() - m.min()
+        norm = (m - m.min()) / span if span > 0 else np.zeros_like(m)
+        maps.append(np.round(norm ** (1 / 3) * 255))
     header["maps"] = packer.add(np.concatenate(maps), np.uint8)
 
-    # Waveforms. Each scene is normalised by its own true peak and the
-    # reconstruction is scaled by that *same* factor, so amplitude loss stays
-    # visible; normalising them separately would hide the effect the panel is for.
     cut = slice(None, DISPLAY_SAMPLES)
+    # Waveforms, variable in length because the scenes hold one, two or three
+    # sources. The reader walks the same cumulative offsets from the scene list.
     true_scale = [float(np.abs(s["true_tcs"]).max()) or 1.0 for s in scenes]
     header["true_tcs"] = packer.add(
         np.concatenate(
@@ -296,21 +323,36 @@ def pack(scenes, results, positions, cortex, sensor_pos, verbose=True):
     )
     header["waveform_scale"] = 20000.0
 
-    # A sample of sensor traces, evenly spaced across the array.
-    sensor = []
+    # The sensor recording is not stored. It is exactly
+    # ``leadfield @ true_tcs + noise_scale * noise``, and because the noise is
+    # drawn from a generator seeded independently of the waveforms it is the same
+    # field in every scene. Storing that field once and the mixing coefficients
+    # per scene costs about 300 kB; storing 203 channels for every scene would
+    # cost several megabytes of noise, which does not compress.
+    unit_noise = None
     for s in scenes:
-        data = np.asarray(s["sensor"])
-        pick = np.linspace(0, data.shape[0] - 1, N_SENSOR_TRACES).astype(int)
-        d = data[pick][:, cut]
-        sensor.append(_quantise(d / (np.abs(d).max() or 1.0), 20000).ravel())
-    header["sensor"] = packer.add(np.concatenate(sensor), np.int16)
-    header["n_sensor_traces"] = N_SENSOR_TRACES
+        raw = (s["sensor"] - s["leadfield"] @ s["true_tcs"]) / s["noise_scale"]
+        if unit_noise is None:
+            unit_noise = raw
+        else:
+            np.testing.assert_allclose(raw, unit_noise, atol=1e-9)
+    noise_max = float(np.abs(unit_noise[:, cut]).max()) or 1.0
+    header["noise"] = packer.add(
+        _quantise(unit_noise[:, cut] / noise_max, 20000), np.int16
+    )
 
-    # The field over the whole array at one instant, for the topography. The
-    # instant is the peak of the global field power inside the window the panel
-    # draws, so the map and the marker on the traces refer to the same moment.
+    mix, noise_gain = [], []
+    for s, k in zip(scenes, true_scale, strict=True):
+        sensor_max = float(np.abs(s["sensor"][:, cut]).max()) or 1.0
+        mix.append((s["leadfield"] * k / sensor_max).ravel())
+        noise_gain.append(s["noise_scale"] * noise_max / sensor_max)
+    header["mix"] = packer.add(_quantise(np.concatenate(mix), 20000), np.int16)
+    header["noise_gain"] = [round(v, 6) for v in noise_gain]
+
     header["sensor_pos"] = packer.add(_quantise(sensor_pos, 20000), np.int16)
     header["n_channels"] = int(sensor_pos.shape[0])
+
+    # The field over the whole array at one instant, for the topography.
     topo, topo_time = [], []
     for s in scenes:
         data = np.asarray(s["sensor"])[:, cut]

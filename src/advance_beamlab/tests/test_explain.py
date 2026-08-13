@@ -98,3 +98,69 @@ def test_unknown_method_raises(sphere):
     info, fwd = sphere
     with pytest.raises(ValueError, match="method"):
         constraint_demo(info, fwd, method="wiener")
+
+
+@pytest.mark.parametrize("n_sources", [1, 2, 3])
+def test_source_count_is_respected(sphere, n_sources):
+    """The constraint table grows with the number of sources."""
+    info, fwd = sphere
+    demo = constraint_demo(
+        info, fwd, method="mcmv", n_sources=n_sources, correlation=0.9, snr=5.0
+    )
+    assert len(demo.sources) == n_sources
+    assert demo.gains.shape == (n_sources, n_sources)
+    assert demo.true_tcs.shape[0] == n_sources
+    assert demo.reconstructed.shape[0] == n_sources
+    # MCMV constrains the whole table whatever its size, which is the point.
+    np.testing.assert_allclose(demo.gains, np.eye(n_sources), atol=1e-6)
+
+
+def test_requested_correlation_holds_for_three_sources(sphere):
+    """The phase shift could only do two; the shared-factor mixture does any n."""
+    info, fwd = sphere
+    for r in (0.0, 0.5, 0.9):
+        demo = constraint_demo(
+            info, fwd, method="lcmv", n_sources=3, correlation=r, snr=5.0
+        )
+        off = np.corrcoef(demo.true_tcs)[np.triu_indices(3, k=1)]
+        np.testing.assert_allclose(off, r, atol=0.02)
+
+
+def test_transient_morphology_is_actually_transient(sphere):
+    """A burst train is peaky where an oscillation is not."""
+    info, fwd = sphere
+    kurtosis = {}
+    for morphology in ("oscillation", "transient"):
+        demo = constraint_demo(
+            info, fwd, method="lcmv", morphology=morphology, correlation=0.5, snr=5.0
+        )
+        x = demo.true_tcs[0]
+        x = (x - x.mean()) / x.std()
+        kurtosis[morphology] = float((x**4).mean())
+        assert demo.extra["morphology"] == morphology
+    assert kurtosis["transient"] > 2 * kurtosis["oscillation"]
+
+
+def test_unknown_morphology_raises(sphere):
+    info, fwd = sphere
+    with pytest.raises(ValueError, match="morphology"):
+        constraint_demo(info, fwd, morphology="sawtooth")
+
+
+def test_the_noise_field_is_shared_between_scenes(sphere):
+    """What lets the panel rebuild a recording from a single stored field.
+
+    The noise is drawn from a generator seeded independently of the waveforms,
+    so every scene sees the same realisation scaled differently. Two scenes must
+    therefore have noise that agrees exactly once each is divided by its own
+    recorded scale.
+    """
+    info, fwd = sphere
+    fields = []
+    for correlation, snr in ((0.2, 2.0), (0.95, 8.0)):
+        demo = constraint_demo(
+            info, fwd, method="lcmv", correlation=correlation, snr=snr
+        )
+        clean = demo.extra["leadfield"] @ demo.true_tcs
+        fields.append((demo.sensor_data - clean) / demo.extra["noise_scale"])
+    np.testing.assert_allclose(fields[0], fields[1], atol=1e-9)

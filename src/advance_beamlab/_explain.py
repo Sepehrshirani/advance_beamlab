@@ -48,6 +48,7 @@ import numpy as np
 from mne.utils import _check_option, logger, verbose
 
 _METHODS = ("lcmv", "mcmv", "recipsiicos", "abmc")
+_MORPHOLOGIES = ("oscillation", "transient")
 
 
 @dataclass
@@ -63,10 +64,12 @@ class ConstraintDemo:
     positions : ndarray, shape (n_sources, 3)
         Their positions in head coordinates, in metres.
     separation : float
-        Distance between the two simulated sources, in metres.
+        Mean distance between the simulated sources, in metres. Zero for a
+        single source.
     correlation : float
-        Correlation actually achieved between the simulated time courses, which
-        is what should be quoted rather than the requested value.
+        Mean pairwise correlation actually achieved between the simulated time
+        courses, which is what should be quoted rather than the requested
+        value. Zero for a single source, where it has no meaning.
     times : ndarray, shape (n_times,)
         Time axis in seconds.
     true_tcs : ndarray, shape (n_sources, n_times)
@@ -91,6 +94,11 @@ class ConstraintDemo:
     peak_errors : ndarray, shape (n_sources,)
         Distance from each true source to the nearest of the map's strongest
         peaks, in metres.
+    extra : dict
+        ``'morphology'`` and ``'n_sources'`` as requested, the ``'leadfield'``
+        columns of the simulated sources and the ``'noise_scale'`` applied to
+        the shared noise field. The last two are what let a viewer rebuild
+        ``sensor_data`` without storing it.
     """
 
     method: str
@@ -117,40 +125,92 @@ class ConstraintDemo:
         )
 
 
-def _pick_pair(forward, separation, seed=0):
-    """Two grid indices about ``separation`` metres apart, deterministically."""
+def _pick_sources(forward, n_sources, separation, seed=0):
+    """``n_sources`` grid indices, mutually about ``separation`` metres apart.
+
+    The first sits near the middle of the grid so the rest stay inside it
+    whatever separation is asked for. Each further source is the grid point at
+    about ``separation`` from the centre that is also not too close to anything
+    already placed, which keeps three sources spread out instead of stacked.
+    """
     rr = forward["source_rr"]
-    rng = np.random.default_rng(seed)
-    # Start from a source near the centre of the grid so that both members of
-    # the pair stay inside it whatever the separation asked for.
     centre = int(np.argmin(np.linalg.norm(rr - rr.mean(0), axis=1)))
-    distances = np.linalg.norm(rr - rr[centre], axis=1)
-    partner = int(np.argmin(np.abs(distances - separation)))
-    if partner == centre:  # pragma: no cover - only if the grid is degenerate
-        partner = int(rng.integers(len(rr)))
-    return [centre, partner]
+    chosen = [centre]
+    for _ in range(1, int(n_sources)):
+        score = np.abs(np.linalg.norm(rr - rr[centre], axis=1) - separation)
+        for placed in chosen[1:]:
+            score = score + np.maximum(
+                0.0, separation - np.linalg.norm(rr - rr[placed], axis=1)
+            )
+        score[chosen] = np.inf
+        chosen.append(int(np.argmin(score)))
+    return chosen
 
 
-def _simulate(gain, sources, correlation, snr, n_times, sfreq, seed):
-    """Two correlated sources at ``correlation``, plus sensor noise at ``snr``."""
-    rng = np.random.default_rng(seed)
+def _smooth_noise(rng, n_times, sfreq, width):
+    """Smooth zero-mean unit-variance noise, for amplitude envelopes.
+
+    The kernel is clamped to stay shorter than the signal. ``np.convolve`` with
+    ``'same'`` returns the length of the *longer* input, so a smoothing width
+    that exceeds the segment silently returns an array of the wrong length.
+    """
+    n = int(max(1, min(round(width * sfreq), max(1, (n_times - 1) // 6))))
+    kernel = np.exp(-0.5 * (np.arange(-3 * n, 3 * n + 1) / n) ** 2)
+    kernel /= kernel.sum()
+    x = np.convolve(rng.standard_normal(n_times), kernel, "same")
+    return (x - x.mean()) / (x.std() or 1.0)
+
+
+def _morphology_waveform(morphology, rng, n_times, sfreq):
+    """One waveform of the requested kind, with independent randomness."""
     t = np.arange(n_times) / sfreq
-    # Two 10 Hz oscillations phase shifted by arccos(rho) correlate at exactly
-    # rho, which is what makes the requested correlation reproducible.
-    phi = np.arccos(np.clip(correlation, -1.0, 1.0))
-    amplitude = 20e-9  # 20 nA m, a normal cortical source
-    true_tcs = np.stack(
-        [
-            np.sin(2 * np.pi * 10 * t) * amplitude,
-            np.sin(2 * np.pi * 10 * t + phi) * amplitude,
-        ]
+    if morphology == "oscillation":
+        envelope = 1.0 + 0.6 * _smooth_noise(rng, n_times, sfreq, 0.5)
+        return np.sin(2 * np.pi * 10 * t + rng.uniform(0, 2 * np.pi)) * envelope
+    # A train of short bursts: the transient, spike-like regime, which is what
+    # ABMC is aimed at and where an oscillation is a poor model of the data.
+    x = np.zeros(n_times)
+    width = max(2.0, 0.02 * sfreq)
+    for onset in rng.uniform(0, n_times, max(3, int(n_times / sfreq * 1.5))):
+        x += np.exp(-0.5 * ((np.arange(n_times) - onset) / width) ** 2)
+    return x - x.mean()
+
+
+def _simulate(
+    gain, sources, correlation, snr, n_times, sfreq, seed, morphology="oscillation"
+):
+    """``len(sources)`` sources at ``correlation``, plus sensor noise at ``snr``.
+
+    One shared factor and one private factor per source, orthonormalised and
+    mixed as sqrt(r) and sqrt(1 - r), give every pair exactly ``correlation``
+    for any number of sources and any morphology. The phase shift this used to
+    rely on is exact for two sinusoids and has no counterpart beyond that: three
+    waveforms cannot be pairwise correlated at an arbitrary r by phase alone.
+    """
+    rng = np.random.default_rng(seed)
+    n = len(sources)
+    basis = np.stack(
+        [_morphology_waveform(morphology, rng, n_times, sfreq) for _ in range(n + 1)]
     )
+    basis -= basis.mean(axis=1, keepdims=True)
+    orthonormal = np.linalg.qr(basis.T)[0].T
+    r = float(np.clip(correlation, 0.0, 1.0))
+    true_tcs = np.sqrt(r) * orthonormal[0] + np.sqrt(1.0 - r) * orthonormal[1 : n + 1]
+    amplitude = 20e-9  # 20 nA m, a normal cortical source
+    true_tcs = true_tcs / (np.abs(true_tcs).max() or 1.0) * amplitude
+
     clean = gain[:, sources] @ true_tcs
-    noise = rng.standard_normal(clean.shape)
-    # Scale the noise to the requested ratio of standard deviations, which is a
+    # A separate generator for the noise, seeded independently of how much
+    # randomness the waveforms happened to consume. The realisation is then the
+    # same in every scene, so comparisons across correlation, separation and
+    # morphology are paired rather than confounded by a different noise draw,
+    # and the panel can reconstruct the recording exactly from one stored field.
+    noise = np.random.default_rng(seed + 10007).standard_normal(clean.shape)
+    # Scale to the requested ratio of standard deviations, which is a
     # sensor-level SNR rather than a source-level one.
-    noise *= clean.std() / (snr * noise.std())
-    return t, true_tcs, clean + noise, noise
+    scale = clean.std() / (snr * noise.std())
+    times = np.arange(n_times) / sfreq
+    return times, true_tcs, clean + scale * noise, scale * noise, scale
 
 
 def _measure_gains(apply_fn, gain, sources, n_times):
@@ -177,10 +237,12 @@ def constraint_demo(
     forward,
     *,
     method="lcmv",
+    n_sources=2,
+    morphology="oscillation",
     separation=0.04,
     correlation=0.9,
     snr=3.0,
-    n_times=200,
+    n_times=1000,
     sfreq=200.0,
     reg=0.05,
     seed=0,
@@ -188,7 +250,7 @@ def constraint_demo(
     recipsiicos_rank=None,
     verbose=None,
 ):
-    """Simulate a two-source scene and reconstruct it with one method.
+    """Simulate a multi-source scene and reconstruct it with one method.
 
     Everything the interactive panel shows comes from here, so that the panel
     and the local explorer cannot drift apart.
@@ -201,6 +263,14 @@ def constraint_demo(
         Fixed-orientation forward solution.
     method : str
         ``'lcmv'``, ``'mcmv'``, ``'recipsiicos'`` or ``'abmc'``.
+    n_sources : int
+        How many sources to simulate. One has nothing to cancel against and is
+        the control case; two is the classic correlated pair; three shows what
+        happens when a beamformer is given fewer constraints than there are
+        active sources.
+    morphology : str
+        ``'oscillation'`` for a modulated 10 Hz rhythm, or ``'transient'`` for a
+        train of short bursts, which is the regime ABMC is aimed at.
     separation : float
         Requested distance between the two sources, in metres. The nearest
         available pair on the grid is used, and the achieved distance is
@@ -211,7 +281,10 @@ def constraint_demo(
     snr : float
         Ratio of clean sensor standard deviation to noise standard deviation.
     n_times : int
-        Samples to simulate.
+        Samples to simulate. The covariance is estimated from these, so it wants
+        to be several times the channel count: below about five samples per
+        channel the estimate is rank deficient, MNE says so, and the numbers
+        move with it.
     sfreq : float
         Sampling frequency in Hz.
     reg : float
@@ -252,22 +325,43 @@ def constraint_demo(
     from ._recipsiicos import make_recipsiicos_lcmv, recipsiicos_rank_curve
 
     _check_option("method", method, _METHODS)
+    _check_option("morphology", morphology, _MORPHOLOGIES)
+    if int(n_sources) < 1:
+        raise ValueError(f"n_sources must be at least 1, got {n_sources}")
     gain = forward["sol"]["data"]
     rr = forward["source_rr"]
-    sources = _pick_pair(forward, separation, seed=seed)
-    achieved_sep = float(np.linalg.norm(rr[sources[0]] - rr[sources[1]]))
+    sources = _pick_sources(forward, int(n_sources), separation, seed=seed)
+    if len(sources) > 1:
+        pairs = [
+            float(np.linalg.norm(rr[a] - rr[b]))
+            for i, a in enumerate(sources)
+            for b in sources[i + 1 :]
+        ]
+        achieved_sep = float(np.mean(pairs))
+    else:
+        achieved_sep = 0.0
 
-    times, true_tcs, sensor, noise = _simulate(
-        gain, sources, correlation, snr, n_times, sfreq, seed
+    times, true_tcs, sensor, noise, noise_scale = _simulate(
+        gain, sources, correlation, snr, n_times, sfreq, seed, morphology
     )
-    achieved_r = float(np.corrcoef(true_tcs)[0, 1])
+    if len(sources) > 1:
+        off = np.corrcoef(true_tcs)[np.triu_indices(len(sources), k=1)]
+        achieved_r = float(np.mean(off))
+    else:
+        achieved_r = 0.0
     logger.info(
-        f"    constraint_demo: {method}, separation {achieved_sep * 100:.1f} cm, "
-        f"r = {achieved_r:.3f}, SNR {snr:g}."
+        f"    constraint_demo: {method}, {len(sources)} {morphology} source(s), "
+        f"separation {achieved_sep * 100:.1f} cm, r = {achieved_r:.3f}, SNR {snr:g}."
     )
 
     def _cov(x):
-        ep = mne.EpochsArray(x[None], info, tmin=0.0, verbose=False)
+        # ``.copy()`` is load bearing. EpochsArray applies the info's projectors
+        # to the array it is handed, in place and without copying first, so
+        # without this the simulated recording is average referenced behind the
+        # caller's back and no longer equals its own leadfield times its own
+        # source waveforms plus noise. The covariance is unaffected either way,
+        # since EpochsArray projects its own copy regardless.
+        ep = mne.EpochsArray(x[None].copy(), info, tmin=0.0, verbose=False)
         return mne.compute_covariance(ep, method="empirical", verbose=False)
 
     data_cov, noise_cov = _cov(sensor), _cov(noise)
@@ -319,15 +413,33 @@ def constraint_demo(
         # of it is dominated by one deep source and everything else normalises
         # to nothing. The display map therefore comes from a unit-noise-gain
         # filter, which is depth normalised, exactly as MNE's own examples do.
-        display = make_lcmv(
-            info,
-            forward,
-            data_cov,
-            reg=reg,
-            noise_cov=noise_cov,
-            weight_norm="unit-noise-gain",
-            verbose=False,
-        )
+        #
+        # It has to be the *same method's* filter, though. Building this one with
+        # plain ``make_lcmv`` for both branches, which is what this did at first,
+        # gave ReciPSIICOS a localiser identical to LCMV's: correlation 1.000 and
+        # the same twenty strongest grid points, because the projected covariance
+        # never entered the map at all.
+        if method == "lcmv":
+            display = make_lcmv(
+                info,
+                forward,
+                data_cov,
+                reg=reg,
+                noise_cov=noise_cov,
+                weight_norm="unit-noise-gain",
+                verbose=False,
+            )
+        else:
+            display = make_recipsiicos_lcmv(
+                info,
+                forward,
+                data_cov,
+                rank=rank,
+                noise_cov=noise_cov,
+                reg=reg,
+                weight_norm="unit-noise-gain",
+                verbose=False,
+            )
         power_map = np.asarray(
             apply_lcmv_cov(data_cov, display, verbose=False).data
         ).ravel()
@@ -404,6 +516,17 @@ def constraint_demo(
         amplitude_ratio=ratio,
         power_map=power_map,
         peak_errors=peak_errors,
+        extra=dict(
+            morphology=morphology,
+            n_sources=len(sources),
+            # Enough to rebuild the recording exactly: the leadfield columns of
+            # the simulated sources, and the factor the shared noise field was
+            # scaled by. The web panel uses these instead of storing 203
+            # channels per scene, which would be megabytes of incompressible
+            # noise.
+            leadfield=gain[:, sources],
+            noise_scale=float(noise_scale),
+        ),
     )
 
 
@@ -473,7 +596,9 @@ def _draw(axes, demo, forward):
 
     # 3. What comes back out.
     ax_tc.clear()
-    for i, colour in enumerate(("C0", "C3")):
+    palette = ("C0", "C3", "C2", "C1", "C4")
+    for i in range(demo.true_tcs.shape[0]):
+        colour = palette[i % len(palette)]
         ax_tc.plot(
             demo.times,
             demo.true_tcs[i] * 1e9,
@@ -493,8 +618,9 @@ def _draw(axes, demo, forward):
         xlabel="time (s)",
         ylabel="amplitude (nA m)",
         title=(
-            f"Recovered {demo.amplitude_ratio[0]:.2f} and "
-            f"{demo.amplitude_ratio[1]:.2f} of the truth"
+            "Recovered "
+            + " and ".join(f"{v:.2f}" for v in demo.amplitude_ratio)
+            + " of the truth"
         ),
     )
     ax_tc.legend(fontsize=7, ncol=2)

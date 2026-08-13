@@ -59,10 +59,26 @@ dashed line joins each estimate to the source it missed. Watching the crosses
 walk away from the rings as the correlation rises is the localisation half of the
 story, and the amplitude collapse in the waveform panel is the other half.
 
-The bottom panel sweeps the whole correlation axis at the current separation and
-signal-to-noise ratio, for all four methods at once, with a marker where the
-sliders are. The sliders show one point; that chart shows the curve those points
-lie on, which is a fairer way to judge a method than any single setting.
+The bottom panel sweeps the whole correlation axis at the current settings, for
+all four methods at once, with a marker where the sliders are. The sliders show
+one point; that chart shows the curve those points lie on, which is a fairer way
+to judge a method than any single setting.
+
+Two further controls change the scene rather than the method. **Sources** puts
+one, two or three of them on the cortex. One is the control case and worth
+starting from: there is nothing to cancel against, so LCMV keeps its amplitude
+and the off-diagonal question does not arise. Three is the case where a
+two-source constraint is no longer enough, and MCMV has to be told about all of
+them. **Morphology** switches between a modulated 10 Hz rhythm and a train of
+short bursts. The second is the regime ABMC was designed for, since its extra
+term rewards output matching a known waveform, and it is worth comparing the two
+with ABMC selected.
+
+The correlation is exact for any number of sources. Two sinusoids can be given
+any correlation by a phase shift, but three cannot, so the simulation instead
+mixes one shared factor and one private factor per source in proportions
+:math:`\sqrt{r}` and :math:`\sqrt{1-r}`. Every pair then correlates at exactly
+:math:`r` whatever the morphology or the count.
 
 A few things worth knowing about what you are looking at.
 
@@ -87,21 +103,38 @@ filter and reading what filter :math:`i` returns, which is
 their weights in different spaces, so their stored arrays are not comparable;
 what comes out of the public apply path is.
 
-The localiser map is coloured by rank rather than by value. The four methods
-produce wildly different distributions, and any scaling that suits one of them
-flattens another into a single shade. Rank is the honest compromise and the
-colour bar says so. The markers on the two simulated sources are drawn as
-unfilled rings for the same reason: a filled marker sitting on a peak hides the
-one thing you are trying to check.
+The localiser map is normalised to its own range and then compressed by a cube
+root. That combination took two attempts. Colouring by rank was the first, on the
+grounds that the four methods produce value distributions no common scale can
+show at once, and it was wrong: a rank map is a uniform ramp whatever the
+underlying shape, so all four rendered identically. Measured, the fraction of the
+grid above half the display maximum was 0.500 for every method. Normalising
+without compression goes too far the other way and leaves two bright dots on an
+empty brain. The cube root sits between and separates them, and the same
+measurement now reads 6.5, 0.6, 3.6 and 13.5 per cent.
 
-The sensor panel shows a field map beside the traces rather than traces alone.
-Twenty stacked gradiometers tell you there is signal; the topography tells you
-where on the helmet it sits, and how little that pattern changes when you move
-the sources a couple of centimetres. Both refer to the same instant, the peak of
-the global field power inside the drawn window, and the vertical line on the
-traces marks it. The map is interpolated in the browser from the array's own
-sensor positions, and it is diverging rather than sequential because the field
-has a sign.
+The markers on the simulated sources are drawn as unfilled rings for a related
+reason: a filled marker sitting on a peak hides the one thing you are trying to
+check.
+
+The sensor panel shows a field map beside the traces. The traces carry all 203
+gradiometers, not a summary of them: drag to scroll through channels and time, or
+use the sliders beside them. The topography says where on the helmet the signal
+sits, and how little that pattern changes when you move the sources a couple of
+centimetres. Both refer to the same instant, the peak of the global field power
+inside the drawn window, and the vertical line on the traces marks it. The map is
+interpolated in the browser from the array's own sensor positions, drawn with
+iso-contours because a smooth wash of colour is hard to read a gradient from, and
+it is diverging rather than sequential because the field has a sign.
+
+That recording is rebuilt in the browser rather than stored. It is exactly
+:math:`\mathbf{G}\mathbf{s} + \sigma\boldsymbol{\varepsilon}`, and the simulation
+draws :math:`\boldsymbol{\varepsilon}` from a generator seeded independently of
+the waveforms, so every scene shares one noise realisation and differs only in
+:math:`\sigma`. Storing that field once with the leadfield columns costs about
+300 kB where storing 203 channels for all 180 scenes would have been several
+megabytes of noise, which does not compress. It also makes the comparisons paired:
+switching morphology or correlation changes the signal and nothing else.
 
 Finally, the amplitude. The true and recovered waveforms are drawn on one shared
 scale per scene, so a reconstruction that lost half its amplitude looks like it

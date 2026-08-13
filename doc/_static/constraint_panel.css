@@ -90,17 +90,38 @@ html[data-theme="dark"] .cp-root {
   color: var(--cp-text);
 }
 
+/* Two equal columns wherever there is room. Cards stretch to the tallest in
+   their row, so a short card no longer leaves a ragged edge beside a tall one. */
 .cp-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
   gap: 1rem;
 }
 
+@media (max-width: 780px) {
+  .cp-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .cp-card {
+  display: flex;
+  flex-direction: column;
   background: var(--cp-panel);
   border: 1px solid var(--cp-border);
   border-radius: 8px;
   padding: 0.75rem 0.85rem 0.85rem;
+}
+
+/* The hint text is the part that varies in length between cards; letting it
+   grow pushes every canvas onto the same baseline. */
+.cp-card p.cp-hint {
+  flex: 1 0 auto;
+}
+
+.cp-half {
+  grid-column: span 1;
 }
 
 .cp-card h4 {
@@ -276,9 +297,35 @@ html[data-theme="dark"] .cp-root {
    the traces say what it does over time. */
 .cp-sensor-row {
   display: grid;
-  grid-template-columns: minmax(170px, 1fr) minmax(220px, 2.2fr);
+  grid-template-columns: minmax(200px, 1fr) minmax(260px, 2.4fr);
   gap: 0.75rem;
   align-items: start;
+}
+
+.cp-scrollers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin-top: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--cp-muted);
+}
+
+.cp-scrollers label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 1 1 140px;
+}
+
+.cp-scrollers input[type="range"] {
+  flex: 1 1 auto;
+  accent-color: var(--cp-accent);
+}
+
+.cp-control input[type="range"]:disabled {
+  opacity: 0.4;
 }
 
 .cp-key {
