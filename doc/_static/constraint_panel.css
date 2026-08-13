@@ -46,6 +46,13 @@ html[data-theme="dark"] .cp-root {
   min-width: 170px;
 }
 
+/* The source list carries ten entries, several with long names. Given a normal
+   control's width they wrapped into a tall stack and the last few were easy to
+   miss entirely. */
+.cp-control.cp-control-wide {
+  flex: 3 1 460px;
+}
+
 .cp-control > label {
   display: block;
   font-size: 0.78rem;

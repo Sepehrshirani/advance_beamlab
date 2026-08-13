@@ -239,8 +239,9 @@
       tSpan: Math.min(250, nT),
     };
 
-    function chip(id, label) {
-      return '<div class="cp-control"><label>' + label + "</label>" +
+    function chip(id, label, wide) {
+      return '<div class="cp-control' + (wide ? " cp-control-wide" : "") +
+        '"><label>' + label + "</label>" +
         '<div class="cp-methods" id="' + id + '"></div></div>';
     }
     function slider(id, label, n) {
@@ -252,7 +253,7 @@
     root.innerHTML =
       '<div class="cp-controls">' +
       chip("cp-methods", "Method") +
-      chip("cp-layout", "Sources") +
+      chip("cp-layout", "Sources", true) +
       chip("cp-morph", "Activity") +
       chip("cp-head", "Head model") +
       slider("cp-corr", "Source correlation", P.correlations.length) +
@@ -462,7 +463,7 @@
     }
 
     function drawBrain() {
-      var c = fitCanvas(brain, 300);
+      var c = fitCanvas(brain, 340);
       var ctx = c.ctx;
       var cur = current();
       var res = P.results[cur.result];
@@ -517,38 +518,63 @@
       for (i = 0; i < n; i++) truth.push(at(truePos, posOff[cur.scene] / 3 + i));
       var est = res.peaks.map(function (s) { return at(pos, s); });
 
-      ctx.setLineDash([4, 3]);
-      ctx.strokeStyle = css(root, "--cp-muted");
-      ctx.lineWidth = 1;
+      /* Markers are drawn at their own depth rather than on top of everything.
+       * Painted last regardless of depth, a hippocampus reads as sitting on the
+       * surface of the brain and the left and right of a pair look inconsistent
+       * as you rotate, because whichever is behind is still drawn in front. */
+      function depthOf(q) {
+        return Math.max(0, Math.min(1, (q[1] - minD) / (maxD - minD || 1)));
+      }
+      var markers = [];
+      truth.forEach(function (t) {
+        markers.push({ d: t[1], kind: "truth", p: t });
+      });
+      est.forEach(function (e) {
+        markers.push({ d: e[1], kind: "estimate", p: e });
+      });
       truth.forEach(function (t) {
         var best = null, bestD = Infinity;
         est.forEach(function (e) {
-          var d = (X(e) - X(t)) * (X(e) - X(t)) + (Y(e) - Y(t)) * (Y(e) - Y(t));
-          if (d < bestD) { bestD = d; best = e; }
+          var dd = (X(e) - X(t)) * (X(e) - X(t)) + (Y(e) - Y(t)) * (Y(e) - Y(t));
+          if (dd < bestD) { bestD = dd; best = e; }
         });
         if (best && bestD > 30) {
+          markers.push({ d: Math.min(t[1], best[1]), kind: "link", p: t, q: best });
+        }
+      });
+      markers.sort(function (u, v) { return u.d - v.d; });
+      markers.forEach(function (mk) {
+        // Behind the middle of the head: dimmer and thinner, so depth reads.
+        var front = depthOf([0, mk.d]);
+        ctx.globalAlpha = 0.3 + 0.7 * front;
+        if (mk.kind === "link") {
+          ctx.setLineDash([4, 3]);
+          ctx.strokeStyle = css(root, "--cp-muted");
+          ctx.lineWidth = 1;
           ctx.beginPath();
-          ctx.moveTo(X(t), Y(t));
-          ctx.lineTo(X(best), Y(best));
+          ctx.moveTo(X(mk.p), Y(mk.p));
+          ctx.lineTo(X(mk.q), Y(mk.q));
+          ctx.stroke();
+          ctx.setLineDash([]);
+        } else if (mk.kind === "truth") {
+          ctx.strokeStyle = css(root, "--cp-true");
+          ctx.lineWidth = 1.4 + 1.4 * front;
+          ctx.beginPath();
+          ctx.arc(X(mk.p), Y(mk.p), 6 + 4 * front, 0, 6.2832);
+          ctx.stroke();
+        } else {
+          ctx.strokeStyle = methodColour();
+          ctx.lineWidth = 1.6 + 1.4 * front;
+          var r0 = 4 + 3 * front;
+          ctx.beginPath();
+          ctx.moveTo(X(mk.p) - r0, Y(mk.p) - r0);
+          ctx.lineTo(X(mk.p) + r0, Y(mk.p) + r0);
+          ctx.moveTo(X(mk.p) + r0, Y(mk.p) - r0);
+          ctx.lineTo(X(mk.p) - r0, Y(mk.p) + r0);
           ctx.stroke();
         }
       });
-      ctx.setLineDash([]);
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = css(root, "--cp-true");
-      truth.forEach(function (t) {
-        ctx.beginPath();
-        ctx.arc(X(t), Y(t), 9, 0, 6.2832);
-        ctx.stroke();
-      });
-      ctx.strokeStyle = methodColour();
-      ctx.lineWidth = 2.4;
-      est.forEach(function (e) {
-        ctx.beginPath();
-        ctx.moveTo(X(e) - 6, Y(e) - 6); ctx.lineTo(X(e) + 6, Y(e) + 6);
-        ctx.moveTo(X(e) + 6, Y(e) - 6); ctx.lineTo(X(e) - 6, Y(e) + 6);
-        ctx.stroke();
-      });
+      ctx.globalAlpha = 1;
       ctx.fillStyle = css(root, "--cp-muted");
       ctx.font = "12px system-ui, sans-serif";
       ctx.fillText(
