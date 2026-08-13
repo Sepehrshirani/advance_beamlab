@@ -6,9 +6,9 @@ module turns it into a number anyone can read.
 
 The quantity that matters is the filter's gain at each source,
 :math:`\mathbf{w}_i^{\mathsf T}\mathbf{g}_j`: what the filter for source
-:math:`i` passes of source :math:`j`. Written out for a two-source scene it is a
-2x2 table, and the four methods differ in it exactly as their equations say they
-should:
+:math:`i` passes of source :math:`j`. Written out for an ``n``-source scene it is
+an ``n`` by ``n`` table, and the four methods differ in it exactly as their
+equations say they should:
 
 * **LCMV** fixes the diagonal, :math:`\mathbf{w}_i^{\mathsf T}\mathbf{g}_i = 1`,
   and leaves the off-diagonal to whatever minimises output power. When the two
@@ -48,7 +48,27 @@ import numpy as np
 from mne.utils import _check_option, logger, verbose
 
 _METHODS = ("lcmv", "mcmv", "recipsiicos", "abmc")
-_MORPHOLOGIES = ("oscillation", "transient")
+# Rhythms people actually study, plus the transient case ABMC is aimed at.
+_MORPHOLOGIES = ("theta", "alpha", "beta", "transient")
+_BAND = {"theta": 6.0, "alpha": 10.0, "beta": 20.0}
+# How much of the interference is ongoing brain activity rather than sensor
+# noise. Real localisation error is dominated by the former, and a simulation
+# with only white sensor noise puts the peak exactly on the true grid node
+# essentially every time.
+_BRAIN_FRACTION = 0.75
+_N_BACKGROUND = 300
+# How different the true source is from the nearest point the beamformer can
+# scan, as the correlation between their leadfields.
+#
+# Distance is the wrong knob here. On a folded cortex with fixed orientation two
+# vertices a millimetre apart can sit on opposite walls of a sulcus with nearly
+# orthogonal normals, so selecting by distance alone gave a "1 mm" offset that
+# cost a single source 89 per cent of its amplitude. Leadfield correlation is the
+# quantity that actually governs how much a filter pointed at the node still
+# passes, and it is bounded away from 1 so the source is never exactly
+# representable.
+_LEADFIELD_MATCH = (0.95, 0.995)
+_OFFSET_SEARCH = 0.012
 
 
 @dataclass
@@ -161,12 +181,36 @@ def _smooth_noise(rng, n_times, sfreq, width):
     return (x - x.mean()) / (x.std() or 1.0)
 
 
+def _pink(rng, n, n_times):
+    """``n`` unit-variance signals with a 1/f spectrum, as ongoing activity has."""
+    spectrum = np.fft.rfft(rng.standard_normal((n, n_times)), axis=1)
+    freq = np.arange(spectrum.shape[1], dtype=float)
+    freq[0] = 1.0
+    out = np.fft.irfft(spectrum / np.sqrt(freq), n=n_times, axis=1)
+    return out / (out.std(axis=1, keepdims=True) + 1e-30)
+
+
+def _background(gain, rng, n_times, exclude):
+    """Ongoing cortical activity everywhere else on the grid.
+
+    This is what a beamformer is really working against. With only white sensor
+    noise the peak of the localiser sits exactly on the true grid node in almost
+    every configuration, which flatters every method equally and teaches the
+    reader nothing about localisation error.
+    """
+    n_grid = gain.shape[1]
+    pool = np.setdiff1d(np.arange(n_grid), np.asarray(exclude))
+    picked = rng.choice(pool, size=min(_N_BACKGROUND, pool.size), replace=False)
+    return gain[:, picked] @ _pink(rng, picked.size, n_times)
+
+
 def _morphology_waveform(morphology, rng, n_times, sfreq):
     """One waveform of the requested kind, with independent randomness."""
     t = np.arange(n_times) / sfreq
-    if morphology == "oscillation":
+    if morphology in _BAND:
         envelope = 1.0 + 0.6 * _smooth_noise(rng, n_times, sfreq, 0.5)
-        return np.sin(2 * np.pi * 10 * t + rng.uniform(0, 2 * np.pi)) * envelope
+        freq = _BAND[morphology]
+        return np.sin(2 * np.pi * freq * t + rng.uniform(0, 2 * np.pi)) * envelope
     # A train of short bursts: the transient, spike-like regime, which is what
     # ABMC is aimed at and where an oscillation is a poor model of the data.
     x = np.zeros(n_times)
@@ -177,7 +221,14 @@ def _morphology_waveform(morphology, rng, n_times, sfreq):
 
 
 def _simulate(
-    gain, sources, correlation, snr, n_times, sfreq, seed, morphology="oscillation"
+    true_gain,
+    correlation,
+    snr,
+    n_times,
+    sfreq,
+    seed,
+    morphology="alpha",
+    background_gain=None,
 ):
     """``len(sources)`` sources at ``correlation``, plus sensor noise at ``snr``.
 
@@ -188,7 +239,7 @@ def _simulate(
     waveforms cannot be pairwise correlated at an arbitrary r by phase alone.
     """
     rng = np.random.default_rng(seed)
-    n = len(sources)
+    n = true_gain.shape[1]
     basis = np.stack(
         [_morphology_waveform(morphology, rng, n_times, sfreq) for _ in range(n + 1)]
     )
@@ -199,16 +250,27 @@ def _simulate(
     amplitude = 20e-9  # 20 nA m, a normal cortical source
     true_tcs = true_tcs / (np.abs(true_tcs).max() or 1.0) * amplitude
 
-    clean = gain[:, sources] @ true_tcs
-    # A separate generator for the noise, seeded independently of how much
+    clean = true_gain @ true_tcs
+    if background_gain is None:
+        background_gain = true_gain
+    # A separate generator for the interference, seeded independently of how much
     # randomness the waveforms happened to consume. The realisation is then the
     # same in every scene, so comparisons across correlation, separation and
-    # morphology are paired rather than confounded by a different noise draw,
-    # and the panel can reconstruct the recording exactly from one stored field.
-    noise = np.random.default_rng(seed + 10007).standard_normal(clean.shape)
+    # morphology are paired rather than confounded by a different draw, and the
+    # panel can reconstruct the recording exactly from one stored field.
+    #
+    # The interference is mostly other brain activity rather than sensor noise,
+    # which is both realistic and the thing that makes localisation error behave
+    # like it does on real data.
+    interference_rng = np.random.default_rng(seed + 10007)
+    brain = _background(background_gain, interference_rng, n_times, ())
+    white = interference_rng.standard_normal(clean.shape)
+    brain /= brain.std() or 1.0
+    white /= white.std() or 1.0
+    noise = _BRAIN_FRACTION * brain + (1.0 - _BRAIN_FRACTION) * white
     # Scale to the requested ratio of standard deviations, which is a
     # sensor-level SNR rather than a source-level one.
-    scale = clean.std() / (snr * noise.std())
+    scale = clean.std() / (snr * (noise.std() or 1.0))
     times = np.arange(n_times) / sfreq
     return times, true_tcs, clean + scale * noise, scale * noise, scale
 
@@ -238,7 +300,8 @@ def constraint_demo(
     *,
     method="lcmv",
     n_sources=2,
-    morphology="oscillation",
+    sources=None,
+    morphology="alpha",
     separation=0.04,
     correlation=0.9,
     snr=3.0,
@@ -246,6 +309,8 @@ def constraint_demo(
     sfreq=200.0,
     reg=0.05,
     seed=0,
+    true_forward=None,
+    off_grid_sources=True,
     template_p=0.03,
     recipsiicos_rank=None,
     verbose=None,
@@ -263,16 +328,21 @@ def constraint_demo(
         Fixed-orientation forward solution.
     method : str
         ``'lcmv'``, ``'mcmv'``, ``'recipsiicos'`` or ``'abmc'``.
+    sources : array-like of int | None
+        Grid indices to place the sources at, overriding ``n_sources`` and
+        ``separation``. Use it to put them in named anatomical regions.
     n_sources : int
-        How many sources to simulate. One has nothing to cancel against and is
+        How many sources to simulate, ignored when ``sources`` is given. One has
+        nothing to cancel against and is
         the control case; two is the classic correlated pair; three shows what
         happens when a beamformer is given fewer constraints than there are
         active sources.
     morphology : str
-        ``'oscillation'`` for a modulated 10 Hz rhythm, or ``'transient'`` for a
-        train of short bursts, which is the regime ABMC is aimed at.
+        ``'theta'``, ``'alpha'`` or ``'beta'`` for a modulated rhythm at 6, 10 or
+        20 Hz, or ``'transient'`` for a train of short bursts, which is the
+        regime ABMC is aimed at.
     separation : float
-        Requested distance between the two sources, in metres. The nearest
+        Requested distance between the sources, in metres. The nearest
         available pair on the grid is used, and the achieved distance is
         reported.
     correlation : float
@@ -290,7 +360,21 @@ def constraint_demo(
     reg : float
         Covariance regularisation passed to the beamformer.
     seed : int
-        Seed for the sensor noise and the pair choice.
+        Seed for the interference and the source choice.
+    true_forward : mne.Forward | None
+        A finer forward the simulated sources are taken from, while ``forward``
+        stays the grid the beamformer scans. Without it the sources sit exactly
+        on scanned grid nodes and the same leadfield generates and inverts the
+        data, which is an inverse crime: the localiser then peaks on the true
+        node almost every time and reports zero error. Supplying the
+        undecimated forward puts the sources where no method can scan them,
+        which is the situation on real data. It is also the grid the ongoing
+        background activity is drawn from, whether or not the sources move.
+    off_grid_sources : bool
+        Whether ``true_forward`` moves the sources as well as supplying the
+        background. Setting it ``False`` keeps the sources on scanned grid
+        points, which is the only way to see what the constraint itself does,
+        while leaving the background identical so the two cases stay comparable.
     template_p : float
         ``P`` for ABMC. Ignored by the other methods.
     recipsiicos_rank : int | None
@@ -330,7 +414,10 @@ def constraint_demo(
         raise ValueError(f"n_sources must be at least 1, got {n_sources}")
     gain = forward["sol"]["data"]
     rr = forward["source_rr"]
-    sources = _pick_sources(forward, int(n_sources), separation, seed=seed)
+    if sources is None:
+        sources = _pick_sources(forward, int(n_sources), separation, seed=seed)
+    else:
+        sources = [int(v) for v in sources]
     if len(sources) > 1:
         pairs = [
             float(np.linalg.norm(rr[a] - rr[b]))
@@ -341,8 +428,51 @@ def constraint_demo(
     else:
         achieved_sep = 0.0
 
+    # Where the sources really are. Taken from a finer forward when one is
+    # supplied, so they sit between the points the beamformer scans rather than
+    # exactly on them. Without this the localiser peaks on the true node in
+    # essentially every configuration and reports 0 mm, which is an artefact of
+    # the simulation rather than a property of any method.
+    if true_forward is not None:
+        fine_rr = true_forward["source_rr"]
+        fine_gain = true_forward["sol"]["data"]
+        # The background comes from the fine grid either way. Drawing it from
+        # different grids in the two cases would give them different
+        # interference, and the comparison between them is the whole point.
+        background_gain = fine_gain
+    else:
+        background_gain = gain
+
+    if true_forward is not None and off_grid_sources:
+        place = np.random.default_rng(seed + 991)
+        true_idx = []
+        for s in sources:
+            offsets = np.linalg.norm(fine_rr - rr[s], axis=1)
+            near = np.flatnonzero((offsets > 1e-6) & (offsets < _OFFSET_SEARCH))
+            column = gain[:, s]
+            column = column / (np.linalg.norm(column) or 1.0)
+            others = fine_gain[:, near]
+            others = others / (np.linalg.norm(others, axis=0) + 1e-30)
+            match = np.abs(column @ others)
+            ok = near[(match >= _LEADFIELD_MATCH[0]) & (match <= _LEADFIELD_MATCH[1])]
+            if ok.size == 0:  # pragma: no cover - only on a very coarse mesh
+                ok = near[np.argsort(np.abs(match - np.mean(_LEADFIELD_MATCH)))[:1]]
+            true_idx.append(int(place.choice(ok)))
+        true_gain = fine_gain[:, true_idx]
+        true_positions = fine_rr[true_idx]
+    else:
+        true_gain = gain[:, sources]
+        true_positions = rr[sources]
+
     times, true_tcs, sensor, noise, noise_scale = _simulate(
-        gain, sources, correlation, snr, n_times, sfreq, seed, morphology
+        true_gain,
+        correlation,
+        snr,
+        n_times,
+        sfreq,
+        seed,
+        morphology,
+        background_gain,
     )
     if len(sources) > 1:
         off = np.corrcoef(true_tcs)[np.triu_indices(len(sources), k=1)]
@@ -498,14 +628,16 @@ def constraint_demo(
     ratio = np.sqrt((reconstructed**2).mean(axis=1) / (true_tcs**2).mean(axis=1))
 
     peaks = np.argsort(power_map)[::-1][: len(sources)]
+    # Measured from where the source actually is, not from the grid node that
+    # stands in for it.
     peak_errors = np.array(
-        [float(np.linalg.norm(rr[peaks] - rr[s], axis=1).min()) for s in sources]
+        [float(np.linalg.norm(rr[peaks] - p, axis=1).min()) for p in true_positions]
     )
 
     return ConstraintDemo(
         method=method,
         sources=list(sources),
-        positions=rr[sources],
+        positions=true_positions,
         separation=achieved_sep,
         correlation=achieved_r,
         times=times,
@@ -524,7 +656,8 @@ def constraint_demo(
             # scaled by. The web panel uses these instead of storing 203
             # channels per scene, which would be megabytes of incompressible
             # noise.
-            leadfield=gain[:, sources],
+            leadfield=true_gain,
+            true_positions=true_positions,
             noise_scale=float(noise_scale),
         ),
     )

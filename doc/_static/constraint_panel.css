@@ -341,8 +341,10 @@ html[data-theme="dark"] .cp-root {
   height: 11px;
 }
 
+/* Grey, not a method colour: the ring is the truth, and the truth is the same
+   whichever method is selected. */
 .cp-ring {
-  border: 2px solid var(--cp-warm);
+  border: 2px solid var(--cp-true);
   border-radius: 50%;
 }
 
@@ -358,7 +360,8 @@ html[data-theme="dark"] .cp-root {
   top: 4px;
   width: 11px;
   height: 2px;
-  background: var(--cp-text);
+  /* Set from the selected method's colour, so the key matches the plot. */
+  background: var(--cp-cross-colour, var(--cp-text));
 }
 
 .cp-cross::before {
@@ -373,4 +376,16 @@ html[data-theme="dark"] .cp-root {
   .cp-sensor-row {
     grid-template-columns: 1fr;
   }
+}
+
+/* Shown when the head model is deliberately wrong, so a reader does not read
+   the collapsed amplitude contrast as a property of the methods. */
+.cp-eq-note {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  border-left: 3px solid var(--cp-warm);
+  background: var(--cp-bg);
+  border-radius: 0 5px 5px 0;
+  font-size: 0.85rem;
+  color: var(--cp-text);
 }

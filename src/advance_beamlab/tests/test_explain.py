@@ -69,14 +69,12 @@ def test_lcmv_cancels_and_mcmv_does_not(sphere):
     assert off["mcmv", 0.0] < 1e-6
     assert off["mcmv", 0.99] < 1e-6
     # And the amplitude follows. Measured on this fixture, the recovered root
-    # mean square runs 0.854 / 0.412 / 0.234 for LCMV at correlation 0 / 0.9 /
-    # 0.99 and 0.854 / 0.856 / 0.856 for MCMV, so the test is that LCMV loses
-    # most of it while MCMV is flat. The baseline is 0.854 rather than 1.0
-    # because the reconstruction carries filtered noise and the covariance is
-    # regularised; that offset is common to both methods and is not the effect.
-    assert ratio["lcmv", 0.99] < 0.4
-    assert ratio["mcmv", 0.99] > 0.8
-    assert ratio["lcmv", 0.99] < 0.5 * ratio["mcmv", 0.99]
+    # mean square runs 0.988 / 0.601 / 0.487 for LCMV at correlation 0 / 0.9 /
+    # 0.99 and 0.988 / 0.982 / 0.984 for MCMV, so the test is that LCMV loses
+    # half of it while MCMV is flat.
+    assert ratio["lcmv", 0.99] < 0.55
+    assert ratio["mcmv", 0.99] > 0.9
+    assert ratio["lcmv", 0.99] < 0.6 * ratio["mcmv", 0.99]
     # The sharpest statement of the constraint: correlation barely moves MCMV.
     assert abs(ratio["mcmv", 0.99] - ratio["mcmv", 0.0]) < 0.05
     assert ratio["lcmv", 0.0] - ratio["lcmv", 0.99] > 0.4
@@ -127,10 +125,10 @@ def test_requested_correlation_holds_for_three_sources(sphere):
 
 
 def test_transient_morphology_is_actually_transient(sphere):
-    """A burst train is peaky where an oscillation is not."""
+    """A burst train is peaky where a rhythm is not."""
     info, fwd = sphere
     kurtosis = {}
-    for morphology in ("oscillation", "transient"):
+    for morphology in ("alpha", "transient"):
         demo = constraint_demo(
             info, fwd, method="lcmv", morphology=morphology, correlation=0.5, snr=5.0
         )
@@ -138,7 +136,7 @@ def test_transient_morphology_is_actually_transient(sphere):
         x = (x - x.mean()) / x.std()
         kurtosis[morphology] = float((x**4).mean())
         assert demo.extra["morphology"] == morphology
-    assert kurtosis["transient"] > 2 * kurtosis["oscillation"]
+    assert kurtosis["transient"] > 2 * kurtosis["alpha"]
 
 
 def test_unknown_morphology_raises(sphere):
@@ -164,3 +162,40 @@ def test_the_noise_field_is_shared_between_scenes(sphere):
         clean = demo.extra["leadfield"] @ demo.true_tcs
         fields.append((demo.sensor_data - clean) / demo.extra["noise_scale"])
     np.testing.assert_allclose(fields[0], fields[1], atol=1e-9)
+
+
+def test_sources_off_the_scan_grid_give_a_real_localisation_error(sphere):
+    """Without this the localiser reports 0 mm almost everywhere.
+
+    A source sitting exactly on a scanned grid node, generated with the very
+    leadfield being inverted, is an inverse crime: the matched filter peaks on
+    that node whatever the noise. Taking the sources from a finer forward puts
+    them where no method can scan them, which is the situation on real data.
+    """
+    info, fwd = sphere
+    fine_src = mne.setup_volume_source_space(
+        sphere=mne.make_sphere_model("auto", "auto", info, verbose=False),
+        pos=8.0,
+        verbose=False,
+    )
+    fine = mne.make_forward_solution(
+        info,
+        trans=None,
+        src=fine_src,
+        bem=mne.make_sphere_model("auto", "auto", info, verbose=False),
+        eeg=True,
+        meg=False,
+        verbose=False,
+    )
+    fine = mne.convert_forward_solution(
+        fine, force_fixed=True, use_cps=False, verbose=False
+    )
+
+    on_grid = constraint_demo(info, fwd, method="lcmv", n_sources=1, snr=5.0)
+    off_grid = constraint_demo(
+        info, fwd, method="lcmv", n_sources=1, snr=5.0, true_forward=fine
+    )
+    assert on_grid.peak_errors[0] == 0.0
+    assert off_grid.peak_errors[0] > 0.001
+    # And the reported position is the true one, not the grid node.
+    assert not np.allclose(off_grid.positions[0], fwd["source_rr"][off_grid.sources[0]])

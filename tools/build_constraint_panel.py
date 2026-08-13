@@ -38,11 +38,52 @@ from advance_beamlab import constraint_demo
 
 # The axes a reader can move. Every combination is precomputed.
 METHODS = ("lcmv", "mcmv", "recipsiicos", "abmc")
-CORRELATIONS = (0.0, 0.5, 0.8, 0.95, 0.99)
-SEPARATIONS = (0.02, 0.06)
-SNRS = (1.0, 3.0, 10.0)
-N_SOURCES = (1, 2, 3)
-MORPHOLOGIES = ("oscillation", "transient")
+CORRELATIONS = (0.0, 0.5, 0.9, 0.99)
+MORPHOLOGIES = ("theta", "alpha", "beta", "transient")
+
+# Whether the beamformer's model is right. "matched" puts the sources on points
+# the beamformer scans, which is the only way to see what the constraint itself
+# does; "realistic" takes them from a finer forward so they sit where no method
+# can scan them, which is what real data looks like. The difference between the
+# two is the panel's clearest statement of how much a head model is worth.
+HEAD_MODELS = ("matched", "realistic")
+
+# Where the sources sit. The geometric layouts control separation directly; the
+# anatomical ones put a bilateral pair in a named region, which is the shape most
+# real questions take. The cortical source space has no hippocampus, so the
+# medial-temporal layout uses parahippocampal cortex, its nearest neighbour in
+# this model, and the panel says so rather than mislabelling it.
+LAYOUTS = (
+    dict(key="single", label="one source", kind="geometric", n=1, sep=0.0),
+    dict(key="near", label="pair, 2 cm apart", kind="geometric", n=2, sep=0.02),
+    dict(key="far", label="pair, 6 cm apart", kind="geometric", n=2, sep=0.06),
+    dict(key="triple", label="three sources", kind="geometric", n=3, sep=0.04),
+    dict(
+        key="auditory",
+        label="auditory L/R",
+        kind="anatomical",
+        labels=("transversetemporal-lh", "transversetemporal-rh"),
+    ),
+    dict(
+        key="visual",
+        label="visual L/R",
+        kind="anatomical",
+        labels=("pericalcarine-lh", "pericalcarine-rh"),
+    ),
+    dict(
+        key="medial-temporal",
+        label="medial temporal L/R",
+        kind="anatomical",
+        labels=("parahippocampal-lh", "parahippocampal-rh"),
+    ),
+)
+
+# The signal-to-noise axis, expressed as the thing an experimenter controls.
+# A single trial of an evoked MEG response sits well below unit sensor SNR;
+# averaging N trials buys a factor of sqrt(N).
+SINGLE_TRIAL_SNR = 0.2
+TRIALS = (1, 10, 100)
+SNRS = tuple(round(SINGLE_TRIAL_SNR * t**0.5, 4) for t in TRIALS)
 
 # Ten seconds at 200 Hz. The covariance is estimated from these samples, and at
 # 203 gradiometers anything shorter is rank deficient: at 200 samples MNE reports
@@ -51,13 +92,17 @@ MORPHOLOGIES = ("oscillation", "transient")
 # -0.88 at 2000). A panel whose whole content is the numbers cannot be built on
 # that, so the simulation is long even though only a slice of it is drawn.
 N_TIMES = 2000
-DISPLAY_SAMPLES = 250
+# What the sensor viewer can scroll over, and the shorter window the waveform
+# panel draws. Two and a half seconds rather than one: at 250 samples the traces
+# were too short to read as anything but flat lines.
+DISPLAY_SAMPLES = 500
+WAVE_SAMPLES = 250
 SFREQ = 200.0
 SEED = 0
 # Every 8th source-space vertex. 938 sources keeps ReciPSIICOS, whose Gram is
 # quadratic in the source count, at about two seconds per configuration while
 # still being a real cortex rather than a sphere.
-DECIMATION = 8
+DECIMATION = 10
 N_BACKDROP = 4000
 
 # Warnings that mean the numbers cannot be trusted. The build stops on these
@@ -97,21 +142,80 @@ def build_forward(verbose=True):
     cortex = np.vstack([s["rr"][s["vertno"]] for s in fwd["src"]])
     cortex = cortex[:: max(1, len(cortex) // N_BACKDROP)]
 
+    fine = fwd
     verts = [s["vertno"][::DECIMATION] for s in fwd["src"]]
     n = sum(len(v) for v in verts)
     stc = mne.SourceEstimate(np.ones((n, 1)), verts, tmin=0, tstep=1, subject="sample")
     fwd = mne.forward.restrict_forward_to_stc(fwd, stc)
     if verbose:
+        rr = fwd["source_rr"]
+        gaps = [
+            np.sort(np.linalg.norm(rr - rr[i], axis=1))[1] * 1000
+            for i in range(0, len(rr), 41)
+        ]
         print(
-            f"forward: {fwd['sol']['data'].shape[1]} sources, "
-            f"{fwd['nchan']} gradiometers; backdrop {len(cortex)} points"
+            f"scan grid: {fwd['sol']['data'].shape[1]} sources at "
+            f"{np.median(gaps):.1f} mm; truth taken from "
+            f"{fine['sol']['data'].shape[1]}; {fwd['nchan']} gradiometers; "
+            f"backdrop {len(cortex)} points"
         )
-    return info, fwd, cortex
+    return info, fwd, fine, cortex
 
 
-def _one_scene(info, fwd, combo, verbose):
+def resolve_layouts(fwd, verbose=True):
+    """Grid indices for each layout, anatomical ones from the parcellation."""
+    subjects_dir = mne.datasets.sample.data_path() / "subjects"
+    parc = {
+        lab.name: lab
+        for lab in mne.read_labels_from_annot(
+            "sample", "aparc", subjects_dir=subjects_dir, verbose=False
+        )
+    }
+    src = fwd["src"]
+    rr = fwd["source_rr"]
+    resolved = []
+    for layout in LAYOUTS:
+        entry = dict(layout)
+        if layout["kind"] == "anatomical":
+            indices = []
+            for name in layout["labels"]:
+                label = parc[name]
+                hemi = 0 if label.hemi == "lh" else 1
+                offset = 0 if hemi == 0 else src[0]["nuse"]
+                shared = np.intersect1d(src[hemi]["vertno"], label.vertices)
+                idx = np.array(
+                    [
+                        offset + int(np.flatnonzero(src[hemi]["vertno"] == v)[0])
+                        for v in shared
+                    ]
+                )
+                # Nearest grid point to the label's spatial centroid. Taking the
+                # median of positions *in* the vertex array instead orders by
+                # FreeSurfer vertex number and lands outside the label.
+                pos = rr[idx]
+                pick = int(idx[np.argmin(np.linalg.norm(pos - pos.mean(0), axis=1))])
+                vertex = src[hemi]["vertno"][pick - offset]
+                assert vertex in label.vertices, f"{name} representative escaped"
+                indices.append(pick)
+            entry["sources"] = indices
+            entry["n"] = len(indices)
+            if verbose:
+                d = np.linalg.norm(rr[indices[0]] - rr[indices[1]]) * 100
+                print(f"  {layout['label']:>22}: {indices}, {d:.1f} cm apart")
+        else:
+            entry["sources"] = None
+        resolved.append(entry)
+    return resolved
+
+
+def _one_scene(info, fwd, fine, rank, combo, verbose):
     """All four methods on one scene, with the scene itself returned once."""
-    sep, corr, snr, n_src, morph = combo
+    layout, corr, trials, morph, head_model = combo
+    snr = SINGLE_TRIAL_SNR * trials**0.5
+    # The fine forward is always supplied: it provides the ongoing background
+    # activity in both cases, so the two head models see identical interference
+    # and differ only in where the sources are.
+    off_grid = head_model == "realistic"
     scene, rows = None, []
     for method in METHODS:
         t0 = time.time()
@@ -121,14 +225,22 @@ def _one_scene(info, fwd, combo, verbose):
                 info,
                 fwd,
                 method=method,
-                n_sources=n_src,
+                sources=layout["sources"],
+                n_sources=layout.get("n", 2),
+                separation=layout.get("sep", 0.04),
                 morphology=morph,
-                separation=sep,
                 correlation=corr,
                 snr=snr,
                 n_times=N_TIMES,
                 sfreq=SFREQ,
                 seed=SEED,
+                # The rank curve is a property of the forward, not of the data,
+                # so it is computed once and handed in. Left to default it is
+                # recomputed for every ReciPSIICOS configuration, which cost
+                # about thirty seconds each and dominated the whole build.
+                recipsiicos_rank=rank,
+                true_forward=fine,
+                off_grid_sources=off_grid,
             )
         fatal = sorted(
             {
@@ -139,8 +251,8 @@ def _one_scene(info, fwd, combo, verbose):
         )
         if fatal:
             raise RuntimeError(
-                f"{method} at separation {sep}, correlation {corr}, SNR {snr}, "
-                f"{n_src} {morph} source(s) produced a covariance that cannot "
+                f"{method} on layout {layout['key']}, correlation {corr}, "
+                f"{trials} trial(s), {morph} produced a covariance that cannot "
                 "be trusted:\n  " + "\n  ".join(fatal)
             )
         if scene is None:
@@ -148,11 +260,18 @@ def _one_scene(info, fwd, combo, verbose):
                 sources=[int(v) for v in demo.sources],
                 separation=float(demo.separation),
                 correlation=float(demo.correlation),
-                requested=dict(sep=sep, corr=corr, snr=snr, n=n_src, morph=morph),
+                requested=dict(
+                    layout=layout["key"],
+                    corr=corr,
+                    trials=trials,
+                    morph=morph,
+                    head=head_model,
+                ),
                 true_tcs=demo.true_tcs,
                 sensor=demo.sensor_data,
                 leadfield=demo.extra["leadfield"],
                 noise_scale=demo.extra["noise_scale"],
+                true_positions=demo.extra["true_positions"],
             )
         else:
             # The comparison is only fair if the data are identical.
@@ -177,39 +296,54 @@ def _one_scene(info, fwd, combo, verbose):
             )
         )
         if verbose:
+            n_src = len(demo.sources)
             off = demo.gains[0, 1] if n_src > 1 else float("nan")
             print(
-                f"  {method:>11} {n_src} {morph[:4]}  "
-                f"sep {demo.separation * 100:4.1f} cm  r {demo.correlation:+.2f}  "
-                f"snr {snr:>4}  off-diag {off:+.3f}  "
-                f"recovered {demo.amplitude_ratio[0]:.3f}  [{time.time() - t0:.1f}s]"
+                f"  {method:>11} {layout['key']:>15} {morph:>9} {head_model:>9} "
+                f"r {corr:+.2f} "
+                f"{trials:>4} trial  off-diag {off:+.3f}  "
+                f"recovered {demo.amplitude_ratio[0]:.3f}  "
+                f"error {demo.peak_errors[0] * 1000:5.1f} mm  "
+                f"[{time.time() - t0:.1f}s]"
             )
     return scene, rows
 
 
-def run_grid(info, fwd, verbose=True):
+def recipsiicos_rank(info, fwd, verbose=True):
+    """Return the projection rank, a property of the forward not of the data."""
+    from advance_beamlab import recipsiicos_rank_curve
+
+    _, _, _, k_opt = recipsiicos_rank_curve(
+        fwd, info, method="whitened", return_optimal=True, verbose=False
+    )
+    if verbose:
+        print(f"ReciPSIICOS rank K* = {k_opt}, computed once for the whole grid")
+    return int(k_opt)
+
+
+def run_grid(info, fwd, fine, layouts, rank, verbose=True):
     """Every (scene, method) combination, as plain arrays.
 
-    A scene is a separation, a correlation, a signal-to-noise ratio, a number of
-    sources and a morphology. The simulated data depend on those and on the seed
-    but not on the method, so the four methods in one scene really are handed
-    identical data; that is asserted rather than assumed, because the whole
-    comparison rests on it.
+    A scene is a layout, a correlation, a number of averaged trials and a
+    morphology. The simulated data depend on those and on the seed but not on
+    the method, so the four methods in one scene really are handed identical
+    data; that is asserted rather than assumed, because the whole comparison
+    rests on it.
     """
     combos = [
-        (sep, corr, snr, n_src, morph)
+        (layout, corr, trials, morph, head_model)
+        for head_model in HEAD_MODELS
+        for layout in layouts
         for morph in MORPHOLOGIES
-        for n_src in N_SOURCES
-        for sep in SEPARATIONS
         for corr in CORRELATIONS
-        for snr in SNRS
+        for trials in TRIALS
     ]
     scenes, results = [], []
     t_start = time.time()
     for i, combo in enumerate(combos):
         if verbose:
             print(f"scene {i + 1}/{len(combos)}")
-        scene, rows = _one_scene(info, fwd, combo, verbose)
+        scene, rows = _one_scene(info, fwd, fine, rank, combo, verbose)
         index = len(scenes)
         scenes.append(scene)
         for row in rows:
@@ -263,11 +397,17 @@ def pack(scenes, results, positions, cortex, sensor_pos, verbose=True):
     header = dict(
         methods=list(METHODS),
         correlations=list(CORRELATIONS),
-        separations=list(SEPARATIONS),
+        trials=list(TRIALS),
         snrs=list(SNRS),
-        source_counts=list(N_SOURCES),
+        single_trial_snr=SINGLE_TRIAL_SNR,
         morphologies=list(MORPHOLOGIES),
+        head_models=list(HEAD_MODELS),
+        layouts=[
+            dict(key=lay["key"], label=lay["label"], kind=lay["kind"])
+            for lay in LAYOUTS
+        ],
         n_times=DISPLAY_SAMPLES,
+        wave_times=WAVE_SAMPLES,
         n_times_simulated=N_TIMES,
         sfreq=SFREQ,
         n_sources=int(positions.shape[0]),
@@ -310,11 +450,12 @@ def pack(scenes, results, positions, cortex, sensor_pos, verbose=True):
         ),
         np.int16,
     )
+    wave_cut = slice(None, WAVE_SAMPLES)
     header["reconstructed"] = packer.add(
         np.concatenate(
             [
                 _quantise(
-                    r["reconstructed"][:, cut] / true_scale[r["scene"]], 20000
+                    r["reconstructed"][:, wave_cut] / true_scale[r["scene"]], 20000
                 ).ravel()
                 for r in results
             ]
@@ -372,6 +513,15 @@ def pack(scenes, results, positions, cortex, sensor_pos, verbose=True):
         )
         for s in scenes
     ]
+    # Where the sources really are, which is not a grid point. Kept so the panel
+    # can draw the truth at its actual position rather than at the node that
+    # stands in for it.
+    header["true_positions"] = packer.add(
+        _quantise(
+            np.concatenate([(s["true_positions"] - centre) * 1000 for s in scenes]), 10
+        ),
+        np.int16,
+    )
     header["results"] = [
         dict(
             scene=r["scene"],
@@ -402,8 +552,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
     verbose = not args.quiet
 
-    info, fwd, cortex = build_forward(verbose)
-    scenes, results = run_grid(info, fwd, verbose)
+    info, fwd, fine, cortex = build_forward(verbose)
+    layouts = resolve_layouts(fwd, verbose)
+    rank = recipsiicos_rank(info, fwd, verbose)
+    scenes, results = run_grid(info, fwd, fine, layouts, rank, verbose)
     header, blob = pack(
         scenes, results, fwd["source_rr"], cortex, sensor_layout(info), verbose
     )

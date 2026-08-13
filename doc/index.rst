@@ -22,10 +22,10 @@ Where to go next
       :link: panel
       :link-type: doc
 
-      An interactive panel. Place two correlated sources on a cortex and watch
-      the constraint table while you move the correlation: LCMV's off-diagonal
-      gain runs away and takes the amplitude with it, MCMV's stays pinned at
-      zero.
+      An interactive panel. Put one, two or three sources on a cortex, pick a
+      rhythm and how correlated they are, and watch the constraint table: LCMV's
+      off-diagonal gain runs away and takes the amplitude with it, MCMV's stays
+      pinned at zero.
 
    .. grid-item-card:: Examples
       :link: auto_examples/index
