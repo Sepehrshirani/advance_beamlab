@@ -50,7 +50,11 @@ from mne.utils import _check_option, logger, verbose
 _METHODS = ("lcmv", "mcmv", "recipsiicos", "abmc")
 # Rhythms people actually study, plus the transient case ABMC is aimed at.
 _MORPHOLOGIES = ("theta", "alpha", "beta", "transient")
-_BAND = {"theta": 6.0, "alpha": 10.0, "beta": 20.0}
+# Band edges, not centre frequencies. A real rhythm is a band-limited process
+# with a wandering phase and amplitude, not a pure tone: a modulated sinusoid
+# reads as obviously synthetic and makes the sensor traces look like textbook
+# figures rather than a recording.
+_BAND = {"theta": (4.0, 8.0), "alpha": (8.0, 13.0), "beta": (15.0, 25.0)}
 # How much of the interference is ongoing brain activity rather than sensor
 # noise. Real localisation error is dominated by the former, and a simulation
 # with only white sensor noise puts the peak exactly on the true grid node
@@ -206,13 +210,17 @@ def _background(gain, rng, n_times, exclude):
 
 def _morphology_waveform(morphology, rng, n_times, sfreq):
     """One waveform of the requested kind, with independent randomness."""
-    t = np.arange(n_times) / sfreq
     if morphology in _BAND:
-        envelope = 1.0 + 0.6 * _smooth_noise(rng, n_times, sfreq, 0.5)
-        freq = _BAND[morphology]
-        return np.sin(2 * np.pi * freq * t + rng.uniform(0, 2 * np.pi)) * envelope
+        low, high = _BAND[morphology]
+        spectrum = np.fft.rfft(rng.standard_normal(n_times))
+        freqs = np.fft.rfftfreq(n_times, 1.0 / sfreq)
+        spectrum[(freqs < low) | (freqs > high)] = 0.0
+        band = np.fft.irfft(spectrum, n=n_times)
+        return band / (band.std() or 1.0)
     # A train of short bursts: the transient, spike-like regime, which is what
     # ABMC is aimed at and where an oscillation is a poor model of the data.
+    t = np.arange(n_times) / sfreq
+    del t
     x = np.zeros(n_times)
     width = max(2.0, 0.02 * sfreq)
     for onset in rng.uniform(0, n_times, max(3, int(n_times / sfreq * 1.5))):

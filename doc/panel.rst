@@ -61,18 +61,33 @@ nothing to cancel against and every method should keep its amplitude; two at
 2 cm and at 6 cm bracket the range where cancellation matters; three is the case
 where a two-source constraint is no longer enough.
 
-The anatomical layouts put a bilateral pair in a named region, which is the
-shape most real questions take. One caveat is worth stating plainly rather than
-burying: this is a **cortical surface source space, and it contains no
-hippocampus**. The medial-temporal layout therefore uses parahippocampal cortex,
-which is the nearest thing the model has. If you want hippocampal theta proper
-you need a volume or mixed source space, and neither this panel nor the forward
-behind it provides one.
+The region layouts put a bilateral pair in a named area: hippocampus, auditory,
+visual, motor, ventromedial prefrontal and lateral prefrontal cortex. The
+cortical ones are the centroid grid point of the matching parcellation label,
+chosen in space rather than by vertex number, and the build asserts that each
+representative really falls inside the label it is named for.
 
-**Activity** switches the rhythm: theta at 6 Hz, alpha at 10 Hz, beta at 20 Hz,
-or a train of short bursts. The last is the regime ABMC was designed for, since
-its extra term rewards output matching a known waveform, and it is worth
-comparing the four methods there.
+The hippocampus needs a word, because a cortical surface has none. The source
+space here is **mixed**: the surface plus discrete sources inside the
+subcortical labels of the subject's ``aseg``, four millimetres apart, giving 54
+and 58 sources in the left and right hippocampus. Every one of them is kept in
+the scan grid rather than decimated away, so the structure is genuinely
+searchable rather than a cortical stand-in.
+
+That comes with a modelling choice worth stating. A volume source carries no
+surface normal, so a fixed-orientation forward cannot be built from one
+directly. Each subcortical source is given the short principal axis of its own
+structure as an orientation, which for the hippocampus approximates the
+somato-dendritic direction its pyramidal cells are organised along. It is a
+simplification, and a real hippocampal study would want to think harder about
+it.
+
+**Activity** switches the rhythm: theta, alpha or beta, or a train of short
+bursts. The rhythms are band-limited processes rather than modulated sinusoids,
+because a pure tone is not what a rhythm looks like and it makes every trace on
+the page read as a textbook figure rather than a recording. The bursts are the
+regime ABMC was designed for, since its extra term rewards output matching a
+known waveform, and it is worth comparing the four methods there.
 
 **Head model** switches between the two regimes described below, and it is worth
 moving it with LCMV and MCMV in turn.
@@ -81,9 +96,9 @@ moving it with LCMV and MCMV in turn.
 experimenter actually controls. A single trial of an evoked MEG response sits
 well below unit sensor signal-to-noise; this panel takes 0.2 as the single-trial
 value, and averaging :math:`N` trials buys a factor of :math:`\sqrt{N}`, so the
-three settings are 0.20, 0.63 and 2.0. Watching the localisation error fall as
-you average is the most honest argument for collecting more trials that this
-page can make.
+two settings are 0.20 and 2.0. Watching the localisation error fall as you
+average is the most honest argument for collecting more trials that this page
+can make.
 
 The correlation is exact for any number of sources. Two sinusoids can be given
 any correlation by a phase shift, but three cannot, so the simulation instead
@@ -98,11 +113,14 @@ Two things about it are worth knowing, because they decide whether the numbers
 mean anything.
 
 **The interference is mostly brain, not sensor noise.** Three hundred sources
-spread over the cortex carry 1/f activity, and that accounts for three quarters
-of the interference; white sensor noise is the remaining quarter. This is closer
-to a real recording, and it changes the answers: LCMV's recovered amplitude at
-:math:`r = 0.99` moved from 0.23 to 0.49 when the background was added, because
-the covariance the filter optimises against is a different matrix.
+spread over the brain carry 1/f activity, and that accounts for three quarters
+of the interference; white sensor noise is the remaining quarter. This is what
+makes the sensor traces look like resting MEG rather than a clean simulation,
+and it changes the answers: LCMV's recovered amplitude at :math:`r = 0.99` moved
+from 0.23 to 0.49 when the background was added, because the covariance the
+filter optimises against is a different matrix. At one trial the background
+dominates the traces, which is the honest picture of what a single trial of MEG
+looks like.
 
 **The head model control decides whether the sources are where the beamformer
 looks**, and the two settings exist because no single choice can show everything.

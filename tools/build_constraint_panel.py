@@ -48,16 +48,31 @@ MORPHOLOGIES = ("theta", "alpha", "beta", "transient")
 # two is the panel's clearest statement of how much a head model is worth.
 HEAD_MODELS = ("matched", "realistic")
 
+# Subcortical structures to add to the source space. The cortical surface has no
+# hippocampus, and hippocampal theta is one of the things people most want to
+# ask about, so the source space is mixed: the surface plus discrete sources
+# inside these aseg labels.
+SUBCORTICAL = (
+    "Left-Hippocampus",
+    "Right-Hippocampus",
+    "Left-Amygdala",
+    "Right-Amygdala",
+)
+
 # Where the sources sit. The geometric layouts control separation directly; the
-# anatomical ones put a bilateral pair in a named region, which is the shape most
-# real questions take. The cortical source space has no hippocampus, so the
-# medial-temporal layout uses parahippocampal cortex, its nearest neighbour in
-# this model, and the panel says so rather than mislabelling it.
+# region layouts put a bilateral pair in a named area, which is the shape most
+# real questions take.
 LAYOUTS = (
     dict(key="single", label="one source", kind="geometric", n=1, sep=0.0),
     dict(key="near", label="pair, 2 cm apart", kind="geometric", n=2, sep=0.02),
     dict(key="far", label="pair, 6 cm apart", kind="geometric", n=2, sep=0.06),
     dict(key="triple", label="three sources", kind="geometric", n=3, sep=0.04),
+    dict(
+        key="hippocampus",
+        label="hippocampus L/R",
+        kind="subcortical",
+        labels=("Left-Hippocampus", "Right-Hippocampus"),
+    ),
     dict(
         key="auditory",
         label="auditory L/R",
@@ -71,10 +86,22 @@ LAYOUTS = (
         labels=("pericalcarine-lh", "pericalcarine-rh"),
     ),
     dict(
-        key="medial-temporal",
-        label="medial temporal L/R",
+        key="motor",
+        label="motor L/R",
         kind="anatomical",
-        labels=("parahippocampal-lh", "parahippocampal-rh"),
+        labels=("precentral-lh", "precentral-rh"),
+    ),
+    dict(
+        key="vmpfc",
+        label="vmPFC L/R",
+        kind="anatomical",
+        labels=("medialorbitofrontal-lh", "medialorbitofrontal-rh"),
+    ),
+    dict(
+        key="dlpfc",
+        label="lateral PFC L/R",
+        kind="anatomical",
+        labels=("rostralmiddlefrontal-lh", "rostralmiddlefrontal-rh"),
     ),
 )
 
@@ -82,7 +109,7 @@ LAYOUTS = (
 # A single trial of an evoked MEG response sits well below unit sensor SNR;
 # averaging N trials buys a factor of sqrt(N).
 SINGLE_TRIAL_SNR = 0.2
-TRIALS = (1, 10, 100)
+TRIALS = (1, 100)
 SNRS = tuple(round(SINGLE_TRIAL_SNR * t**0.5, 4) for t in TRIALS)
 
 # Ten seconds at 200 Hz. The covariance is estimated from these samples, and at
@@ -96,13 +123,13 @@ N_TIMES = 2000
 # panel draws. Two and a half seconds rather than one: at 250 samples the traces
 # were too short to read as anything but flat lines.
 DISPLAY_SAMPLES = 500
-WAVE_SAMPLES = 250
+WAVE_SAMPLES = 150
 SFREQ = 200.0
 SEED = 0
 # Every 8th source-space vertex. 938 sources keeps ReciPSIICOS, whose Gram is
 # quadratic in the source count, at about two seconds per configuration while
 # still being a real cortex rather than a sphere.
-DECIMATION = 10
+DECIMATION = 14
 N_BACKDROP = 4000
 
 # Warnings that mean the numbers cannot be trusted. The build stops on these
@@ -125,45 +152,100 @@ def sensor_layout(info):
 
 
 def build_forward(verbose=True):
-    """Return the ``sample`` subject's gradiometer forward, decimated."""
+    """Return the scan grid, the finer forward behind it, and a backdrop.
+
+    The source space is mixed: the cortical surface plus discrete sources inside
+    the subcortical labels of the aseg. Volume sources carry no normal, so a
+    fixed-orientation forward cannot be made from them directly; they are
+    rebuilt as a discrete source space with an orientation assigned per
+    structure, the short principal axis of the label. For the hippocampus that
+    approximates the somato-dendritic direction its pyramidal cells are
+    organised along. It is a simplification, and the documentation says so.
+    """
     data_path = mne.datasets.sample.data_path()
+    subjects_dir = data_path / "subjects"
     meg = data_path / "MEG" / "sample"
+    bem = str(subjects_dir / "sample" / "bem" / "sample-5120-bem-sol.fif")
+    trans = str(meg / "sample_audvis_raw-trans.fif")
+
     info = mne.io.read_info(meg / "sample_audvis-ave.fif")
     info = mne.pick_info(
         info, mne.pick_types(info, meg="grad", eeg=False, exclude="bads")
     )
-    fwd = mne.read_forward_solution(meg / "sample_audvis-meg-oct-6-fwd.fif")
-    fwd = mne.convert_forward_solution(fwd, force_fixed=True, use_cps=True)
-    fwd = mne.pick_channels_forward(fwd, info["ch_names"], ordered=True)
 
-    # The anatomical backdrop the panel draws behind the source grid. Thinned to
-    # a few thousand points: it only has to read as a brain, and the browser
-    # redraws every point on every rotation frame.
-    cortex = np.vstack([s["rr"][s["vertno"]] for s in fwd["src"]])
+    surface = mne.setup_source_space(
+        "sample",
+        spacing="oct6",
+        subjects_dir=subjects_dir,
+        add_dist=False,
+        verbose=False,
+    )
+    volume = mne.setup_volume_source_space(
+        "sample",
+        pos=4.0,
+        mri="aseg.mgz",
+        volume_label=list(SUBCORTICAL),
+        subjects_dir=subjects_dir,
+        bem=bem,
+        add_interpolator=False,
+        verbose=False,
+    )
+    points, normals, groups = [], [], []
+    for space in volume:
+        pts = space["rr"][space["vertno"]]
+        axes = np.linalg.svd(pts - pts.mean(0), full_matrices=False)[2]
+        points.append(pts)
+        normals.append(np.tile(axes[2], (len(pts), 1)))
+        groups.append((space["seg_name"], len(pts)))
+    discrete = mne.setup_volume_source_space(
+        pos=dict(rr=np.concatenate(points), nn=np.concatenate(normals)),
+        verbose=False,
+    )
+
+    fine = mne.make_forward_solution(
+        info,
+        trans=trans,
+        src=surface + discrete,
+        bem=bem,
+        meg=True,
+        eeg=False,
+        n_jobs=-1,
+        verbose=False,
+    )
+    fine = mne.convert_forward_solution(
+        fine, force_fixed=True, use_cps=True, verbose=False
+    )
+
+    cortex = np.vstack([s["rr"][s["vertno"]] for s in fine["src"][:2]])
     cortex = cortex[:: max(1, len(cortex) // N_BACKDROP)]
 
-    fine = fwd
-    verts = [s["vertno"][::DECIMATION] for s in fwd["src"]]
+    # Decimate the cortex but keep every subcortical source, so the structures
+    # the layouts name are all actually scannable.
+    verts = [s["vertno"][::DECIMATION] for s in fine["src"][:2]]
+    verts += [s["vertno"] for s in fine["src"][2:]]
     n = sum(len(v) for v in verts)
-    stc = mne.SourceEstimate(np.ones((n, 1)), verts, tmin=0, tstep=1, subject="sample")
-    fwd = mne.forward.restrict_forward_to_stc(fwd, stc)
+    stc = mne.MixedSourceEstimate(
+        np.ones((n, 1)), verts, tmin=0, tstep=1, subject="sample"
+    )
+    fwd = mne.forward.restrict_forward_to_stc(fine, stc)
+
     if verbose:
         rr = fwd["source_rr"]
         gaps = [
             np.sort(np.linalg.norm(rr - rr[i], axis=1))[1] * 1000
-            for i in range(0, len(rr), 41)
+            for i in range(0, sum(len(v) for v in verts[:2]), 41)
         ]
         print(
-            f"scan grid: {fwd['sol']['data'].shape[1]} sources at "
-            f"{np.median(gaps):.1f} mm; truth taken from "
-            f"{fine['sol']['data'].shape[1]}; {fwd['nchan']} gradiometers; "
-            f"backdrop {len(cortex)} points"
+            f"scan grid: {fwd['sol']['data'].shape[1]} sources "
+            f"({len(verts[0]) + len(verts[1])} cortical at {np.median(gaps):.1f} mm, "
+            f"{len(verts[2])} subcortical); truth from "
+            f"{fine['sol']['data'].shape[1]}; {fwd['nchan']} gradiometers"
         )
-    return info, fwd, fine, cortex
+    return info, fwd, fine, cortex, groups
 
 
-def resolve_layouts(fwd, verbose=True):
-    """Grid indices for each layout, anatomical ones from the parcellation."""
+def resolve_layouts(fwd, groups, verbose=True):
+    """Grid indices for each layout, from the parcellation or the aseg."""
     subjects_dir = mne.datasets.sample.data_path() / "subjects"
     parc = {
         lab.name: lab
@@ -173,6 +255,24 @@ def resolve_layouts(fwd, verbose=True):
     }
     src = fwd["src"]
     rr = fwd["source_rr"]
+    n_cortical = src[0]["nuse"] + src[1]["nuse"]
+
+    # Where each subcortical structure's sources sit in the concatenated grid.
+    subcortical = {}
+    offset = n_cortical
+    for name, count in groups:
+        subcortical[name] = np.arange(offset, offset + count)
+        offset += count
+
+    def centroid_index(indices):
+        """Return the grid point nearest a set's centroid, chosen in space.
+
+        Taking the median of positions *in* the index array instead orders by
+        vertex number and lands somewhere unrelated.
+        """
+        pos = rr[indices]
+        return int(indices[np.argmin(np.linalg.norm(pos - pos.mean(0), axis=1))])
+
     resolved = []
     for layout in LAYOUTS:
         entry = dict(layout)
@@ -181,29 +281,30 @@ def resolve_layouts(fwd, verbose=True):
             for name in layout["labels"]:
                 label = parc[name]
                 hemi = 0 if label.hemi == "lh" else 1
-                offset = 0 if hemi == 0 else src[0]["nuse"]
+                base = 0 if hemi == 0 else src[0]["nuse"]
                 shared = np.intersect1d(src[hemi]["vertno"], label.vertices)
                 idx = np.array(
                     [
-                        offset + int(np.flatnonzero(src[hemi]["vertno"] == v)[0])
+                        base + int(np.flatnonzero(src[hemi]["vertno"] == v)[0])
                         for v in shared
                     ]
                 )
-                # Nearest grid point to the label's spatial centroid. Taking the
-                # median of positions *in* the vertex array instead orders by
-                # FreeSurfer vertex number and lands outside the label.
-                pos = rr[idx]
-                pick = int(idx[np.argmin(np.linalg.norm(pos - pos.mean(0), axis=1))])
-                vertex = src[hemi]["vertno"][pick - offset]
+                pick = centroid_index(idx)
+                vertex = src[hemi]["vertno"][pick - base]
                 assert vertex in label.vertices, f"{name} representative escaped"
                 indices.append(pick)
             entry["sources"] = indices
-            entry["n"] = len(indices)
-            if verbose:
-                d = np.linalg.norm(rr[indices[0]] - rr[indices[1]]) * 100
-                print(f"  {layout['label']:>22}: {indices}, {d:.1f} cm apart")
+        elif layout["kind"] == "subcortical":
+            entry["sources"] = [
+                centroid_index(subcortical[name]) for name in layout["labels"]
+            ]
         else:
             entry["sources"] = None
+        if entry["sources"] is not None:
+            entry["n"] = len(entry["sources"])
+            if verbose:
+                d = np.linalg.norm(rr[entry["sources"][0]] - rr[entry["sources"][1]])
+                print(f"  {layout['label']:>22}: {entry['sources']}, {d * 100:.1f} cm")
         resolved.append(entry)
     return resolved
 
@@ -391,6 +492,16 @@ def _quantise(array, scale):
     return np.clip(np.round(np.asarray(array) * scale), -32767, 32767)
 
 
+def _quantise8(array):
+    """Signed 8-bit, for data that is only ever drawn as a line.
+
+    A waveform plotted a few hundred pixels tall cannot show more than about one
+    part in 200, so 8 bits is invisible here and halves the biggest blocks in the
+    payload.
+    """
+    return np.clip(np.round(np.asarray(array) * 127), -127, 127)
+
+
 def pack(scenes, results, positions, cortex, sensor_pos, verbose=True):
     """Quantise everything into one gzipped buffer plus a JSON header."""
     packer = Packer()
@@ -444,25 +555,26 @@ def pack(scenes, results, positions, cortex, sensor_pos, verbose=True):
     header["true_tcs"] = packer.add(
         np.concatenate(
             [
-                _quantise(s["true_tcs"][:, cut] / k, 20000).ravel()
+                _quantise8(s["true_tcs"][:, cut] / k).ravel()
                 for s, k in zip(scenes, true_scale, strict=True)
             ]
         ),
-        np.int16,
+        np.int8,
     )
     wave_cut = slice(None, WAVE_SAMPLES)
     header["reconstructed"] = packer.add(
         np.concatenate(
             [
-                _quantise(
-                    r["reconstructed"][:, wave_cut] / true_scale[r["scene"]], 20000
+                _quantise8(
+                    r["reconstructed"][:, wave_cut] / true_scale[r["scene"]]
                 ).ravel()
                 for r in results
             ]
         ),
-        np.int16,
+        np.int8,
     )
     header["waveform_scale"] = 20000.0
+    header["byte_scale"] = 127.0
 
     # The sensor recording is not stored. It is exactly
     # ``leadfield @ true_tcs + noise_scale * noise``, and because the noise is
@@ -478,9 +590,7 @@ def pack(scenes, results, positions, cortex, sensor_pos, verbose=True):
         else:
             np.testing.assert_allclose(raw, unit_noise, atol=1e-9)
     noise_max = float(np.abs(unit_noise[:, cut]).max()) or 1.0
-    header["noise"] = packer.add(
-        _quantise(unit_noise[:, cut] / noise_max, 20000), np.int16
-    )
+    header["noise"] = packer.add(_quantise8(unit_noise[:, cut] / noise_max), np.int8)
 
     mix, noise_gain = [], []
     for s, k in zip(scenes, true_scale, strict=True):
@@ -552,8 +662,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     verbose = not args.quiet
 
-    info, fwd, fine, cortex = build_forward(verbose)
-    layouts = resolve_layouts(fwd, verbose)
+    info, fwd, fine, cortex, groups = build_forward(verbose)
+    layouts = resolve_layouts(fwd, groups, verbose)
     rank = recipsiicos_rank(info, fwd, verbose)
     scenes, results = run_grid(info, fwd, fine, layouts, rank, verbose)
     header, blob = pack(

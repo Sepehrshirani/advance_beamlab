@@ -122,11 +122,17 @@
   }
 
   /* Diverging, through near-white, because the field has a sign and a
-   * sequential map would invent a polarity that is not there. */
+   * sequential map would invent a polarity that is not there.
+   *
+   * The exponent matters more than the endpoints. Interpolating between sensors
+   * pulls values towards the mean, so a linear mapping leaves most of the head
+   * washed out and two small saturated spots; raising |v| to a power below one
+   * expands the mid range, which is where the pattern actually lives and where a
+   * reader compares one source configuration against another. */
   function fieldColour(v) {
     v = Math.max(-1, Math.min(1, v));
-    var lo = [33, 102, 172], mid = [247, 247, 247], hi = [178, 24, 43];
-    var a = v < 0 ? lo : hi, f = Math.abs(v);
+    var lo = [21, 76, 149], mid = [252, 252, 250], hi = [158, 12, 30];
+    var a = v < 0 ? lo : hi, f = Math.pow(Math.abs(v), 0.55);
     return [
       Math.round(mid[0] + f * (a[0] - mid[0])),
       Math.round(mid[1] + f * (a[1] - mid[1])),
@@ -162,7 +168,7 @@
   }
 
   function build(root, P, buf) {
-    var TYPES = { int16: Int16Array, uint8: Uint8Array };
+    var TYPES = { int16: Int16Array, int8: Int8Array, uint8: Uint8Array };
     function view(entry) {
       var T = TYPES[entry.dtype];
       if (!T) throw new Error("unknown array type '" + entry.dtype + "'");
@@ -181,6 +187,8 @@
     var truePos = view(P.true_positions);
     var gscale = P.geometry_scale;
     var wscale = P.waveform_scale;
+    // Waveforms are stored as bytes; everything else keeps 16 bits.
+    var bscale = P.byte_scale;
     var nT = P.n_times;
     var nW = P.wave_times;
     var nSrc = P.n_sources;
@@ -436,9 +444,9 @@
       var n = nOf(scene), v = 0;
       for (var i = 0; i < n; i++) {
         v += (mix[mixOff[scene] + channel * n + i] / wscale) *
-          (trueTcs[trueOff[scene] + i * nT + t] / wscale);
+          (trueTcs[trueOff[scene] + i * nT + t] / bscale);
       }
-      return v + P.noise_gain[scene] * (noise[channel * nT + t] / wscale);
+      return v + P.noise_gain[scene] * (noise[channel * nT + t] / bscale);
     }
 
     function rotated(x, y, z) {
@@ -577,7 +585,7 @@
             for (var mm = 0; mm < nCh; mm++) {
               var ex = dx - sensorPos[mm * 2] / wscale;
               var ey = dy + sensorPos[mm * 2 + 1] / wscale;
-              var w = 1 / (ex * ex + ey * ey + 0.0015);
+              var w = 1 / (ex * ex + ey * ey + 0.0006);
               num += w * vals[mm];
               den += w;
             }
@@ -600,7 +608,7 @@
        * the lines are what make a field map legible. */
       ctx.strokeStyle = "rgba(0,0,0,0.4)";
       ctx.lineWidth = 0.9;
-      [-0.75, -0.5, -0.25, 0.25, 0.5, 0.75].forEach(function (level) {
+      [-0.8, -0.6, -0.4, -0.2, 0.2, 0.4, 0.6, 0.8].forEach(function (level) {
         ctx.beginPath();
         for (var y = 0; y < cache.H - 1; y++) {
           for (var x = 0; x < cache.W - 1; x++) {
@@ -730,7 +738,7 @@
           ctx.strokeStyle = spec[2];
           ctx.lineWidth = spec[3];
           for (var t = 0; t < nW; t++) {
-            var v = spec[0][spec[1] + t] / wscale;
+            var v = spec[0][spec[1] + t] / bscale;
             var x = pad + (t / (nW - 1)) * (c.w - 2 * pad);
             var y = pad + lane * (k + 0.5) - v * lane * 0.42;
             if (t === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);

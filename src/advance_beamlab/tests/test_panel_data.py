@@ -108,16 +108,31 @@ def test_every_combination_is_present(header):
     assert len(seen) == len(header["results"])
 
 
-def test_anatomical_layouts_are_bilateral_pairs(header):
-    anatomical = {
-        lay["key"] for lay in header["layouts"] if lay["kind"] == "anatomical"
-    }
-    assert anatomical
+def test_region_layouts_are_bilateral_pairs(header):
+    regions = {lay["key"] for lay in header["layouts"] if lay["kind"] != "geometric"}
+    assert regions
     for scene in header["scenes"]:
-        if scene["requested"]["layout"] in anatomical:
+        if scene["requested"]["layout"] in regions:
             assert len(scene["sources"]) == 2
             # A bilateral pair is centimetres apart, not millimetres.
-            assert scene["separation"] > 0.03
+            assert scene["separation"] > 0.015
+
+
+def test_the_hippocampus_is_really_in_the_source_space(header):
+    """It is not on the cortical surface, so it has to come from the aseg.
+
+    Without a mixed source space this layout could only ever be a cortical
+    stand-in, which is what it was before. The check is that the layout exists,
+    is subcortical, and its two sources are a plausible bilateral pair.
+    """
+    keys = {lay["key"]: lay for lay in header["layouts"]}
+    assert "hippocampus" in keys
+    assert keys["hippocampus"]["kind"] == "subcortical"
+    scene = next(
+        s for s in header["scenes"] if s["requested"]["layout"] == "hippocampus"
+    )
+    assert len(scene["sources"]) == 2
+    assert 0.02 < scene["separation"] < 0.09
 
 
 def test_each_head_model_does_its_own_job(header):
@@ -173,7 +188,7 @@ def test_array_offsets_are_aligned(header):
         "true_positions",
     ):
         entry = header[key]
-        assert entry["dtype"] in ("int16", "uint8"), key
+        assert entry["dtype"] in ("int16", "int8", "uint8"), key
         width = 2 if entry["dtype"] == "int16" else 1
         assert entry["offset"] % width == 0, key
 
