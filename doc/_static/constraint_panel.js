@@ -330,9 +330,40 @@
     var methodsBox = chips("cp-methods", P.methods, "method", function (m) {
       return METHOD_LABEL[m] || m;
     });
-    var layoutBox = chips("cp-layout", P.layouts, "layout", function (l) {
-      return l.label;
-    });
+    /* Grouped rather than one long row. Seventeen entries in a flat list is a
+     * wall of buttons; the groups say what kind of question each answers. */
+    var GROUP_LABEL = {
+      geometry: "geometry",
+      bilateral: "same region, both sides",
+      circuit: "circuits",
+    };
+    var layoutBox = (function () {
+      var box = root.querySelector("#cp-layout");
+      var buttons = [];
+      var order = ["geometry", "bilateral", "circuit"];
+      order.forEach(function (group) {
+        var members = P.layouts
+          .map(function (l, i) { return { l: l, i: i }; })
+          .filter(function (e) { return e.l.group === group; });
+        if (!members.length) return;
+        var head = document.createElement("span");
+        head.className = "cp-group-label";
+        head.textContent = GROUP_LABEL[group] || group;
+        box.appendChild(head);
+        members.forEach(function (e) {
+          var b = document.createElement("button");
+          b.type = "button";
+          b.textContent = e.l.label;
+          b.addEventListener("click", function () {
+            state.layout = e.i;
+            render();
+          });
+          box.appendChild(b);
+          buttons[e.i] = b;
+        });
+      });
+      return { children: buttons };
+    })();
     var morphBox = chips("cp-morph", P.morphologies, "morph", function (m) {
       return MORPH_LABEL[m] || m;
     });
@@ -456,10 +487,16 @@
       var ce = Math.cos(state.el), se = Math.sin(state.el);
       return [X, Y * ce - z * se, Y * se + z * ce];
     }
+    /* Screen x, screen y, depth -- in that order, for everything that gets
+     * drawn. ``rotated`` returns x, depth, height, and the point cloud used to
+     * reorder it on the way into its own array while the markers did not, so
+     * every ring and cross was positioned vertically by its *depth*. An
+     * anterior structure like vmPFC then drew above the top of the head. */
     function at(arr, i) {
-      return rotated(
+      var p = rotated(
         arr[i * 3] / gscale, arr[i * 3 + 1] / gscale, arr[i * 3 + 2] / gscale
       );
+      return [p[0], p[2], p[1]];
     }
 
     function drawBrain() {
@@ -473,12 +510,12 @@
       var pts = [], i, p;
       for (i = 0; i < cortex.length / 3; i++) {
         p = at(cortex, i);
-        pts.push([p[0], p[2], p[1], -1, 0]);
+        pts.push([p[0], p[1], p[2], -1, 0]);
       }
       var base = cur.result * nSrc;
       for (i = 0; i < nSrc; i++) {
         p = at(pos, i);
-        pts.push([p[0], p[2], p[1], i, maps[base + i] / 255]);
+        pts.push([p[0], p[1], p[2], i, maps[base + i] / 255]);
       }
       var xs = pts.map(function (v) { return v[0]; });
       var ys = pts.map(function (v) { return v[1]; });
@@ -527,10 +564,10 @@
       }
       var markers = [];
       truth.forEach(function (t) {
-        markers.push({ d: t[1], kind: "truth", p: t });
+        markers.push({ d: t[2], kind: "truth", p: t });
       });
       est.forEach(function (e) {
-        markers.push({ d: e[1], kind: "estimate", p: e });
+        markers.push({ d: e[2], kind: "estimate", p: e });
       });
       truth.forEach(function (t) {
         var best = null, bestD = Infinity;
@@ -539,7 +576,7 @@
           if (dd < bestD) { bestD = dd; best = e; }
         });
         if (best && bestD > 30) {
-          markers.push({ d: Math.min(t[1], best[1]), kind: "link", p: t, q: best });
+          markers.push({ d: Math.min(t[2], best[2]), kind: "link", p: t, q: best });
         }
       });
       markers.sort(function (u, v) { return u.d - v.d; });

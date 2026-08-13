@@ -38,7 +38,7 @@ from advance_beamlab import constraint_demo
 
 # The axes a reader can move. Every combination is precomputed.
 METHODS = ("lcmv", "mcmv", "recipsiicos", "abmc")
-CORRELATIONS = (0.0, 0.5, 0.9, 0.99)
+CORRELATIONS = (0.0, 0.9, 0.99)
 MORPHOLOGIES = ("theta", "alpha", "beta", "transient")
 
 # Whether the beamformer's model is right. "matched" puts the sources on points
@@ -57,51 +57,131 @@ SUBCORTICAL = (
     "Right-Hippocampus",
     "Left-Amygdala",
     "Right-Amygdala",
+    "Left-Thalamus-Proper",
+    "Right-Thalamus-Proper",
 )
 
-# Where the sources sit. The geometric layouts control separation directly; the
-# region layouts put a bilateral pair in a named area, which is the shape most
-# real questions take.
+# Where the sources sit, in three groups.
+#
+# The geometric layouts are the abstract cases: they control separation directly
+# and are the cleanest way to see what a constraint does. The bilateral ones put
+# the same structure in both hemispheres. The circuits are pairs that
+# computational psychiatry and clinical neurophysiology actually study, so that
+# a reader can ask their own question rather than a synthetic one -- hippocampal
+# to prefrontal theta, amygdala to ventromedial prefrontal coupling,
+# thalamocortical drive, the frontoparietal and salience networks and the
+# default mode. Each is a left-hemisphere pair unless it says otherwise, because
+# a within-hemisphere circuit is the usual object of study.
 LAYOUTS = (
-    dict(key="single", label="one source", kind="geometric", n=1, sep=0.0),
-    dict(key="near", label="pair, 2 cm apart", kind="geometric", n=2, sep=0.02),
-    dict(key="far", label="pair, 6 cm apart", kind="geometric", n=2, sep=0.06),
-    dict(key="triple", label="three sources", kind="geometric", n=3, sep=0.04),
+    dict(
+        key="single",
+        label="one source",
+        group="geometry",
+        kind="geometric",
+        n=1,
+        sep=0.0,
+    ),
+    dict(
+        key="near",
+        label="pair, 2 cm apart",
+        group="geometry",
+        kind="geometric",
+        n=2,
+        sep=0.02,
+    ),
+    dict(
+        key="far",
+        label="pair, 6 cm apart",
+        group="geometry",
+        kind="geometric",
+        n=2,
+        sep=0.06,
+    ),
+    dict(
+        key="triple",
+        label="three sources",
+        group="geometry",
+        kind="geometric",
+        n=3,
+        sep=0.04,
+    ),
     dict(
         key="hippocampus",
-        label="hippocampus L/R",
-        kind="subcortical",
+        label="hippocampus",
+        group="bilateral",
         labels=("Left-Hippocampus", "Right-Hippocampus"),
     ),
     dict(
+        key="amygdala",
+        label="amygdala",
+        group="bilateral",
+        labels=("Left-Amygdala", "Right-Amygdala"),
+    ),
+    dict(
+        key="thalamus",
+        label="thalamus",
+        group="bilateral",
+        labels=("Left-Thalamus-Proper", "Right-Thalamus-Proper"),
+    ),
+    dict(
         key="auditory",
-        label="auditory L/R",
-        kind="anatomical",
+        label="auditory cortex",
+        group="bilateral",
         labels=("transversetemporal-lh", "transversetemporal-rh"),
     ),
     dict(
         key="visual",
-        label="visual L/R",
-        kind="anatomical",
+        label="visual cortex",
+        group="bilateral",
         labels=("pericalcarine-lh", "pericalcarine-rh"),
     ),
     dict(
         key="motor",
-        label="motor L/R",
-        kind="anatomical",
+        label="motor cortex",
+        group="bilateral",
         labels=("precentral-lh", "precentral-rh"),
     ),
     dict(
-        key="vmpfc",
-        label="vmPFC L/R",
-        kind="anatomical",
-        labels=("medialorbitofrontal-lh", "medialorbitofrontal-rh"),
+        key="dlpfc",
+        label="lateral PFC",
+        group="bilateral",
+        labels=("rostralmiddlefrontal-lh", "rostralmiddlefrontal-rh"),
     ),
     dict(
-        key="dlpfc",
-        label="lateral PFC L/R",
-        kind="anatomical",
-        labels=("rostralmiddlefrontal-lh", "rostralmiddlefrontal-rh"),
+        key="hpc-mpfc",
+        label="hippocampus \u2013 mPFC",
+        group="circuit",
+        labels=("Left-Hippocampus", "superiorfrontal-lh"),
+    ),
+    dict(
+        key="amy-vmpfc",
+        label="amygdala \u2013 vmPFC",
+        group="circuit",
+        labels=("Left-Amygdala", "medialorbitofrontal-lh"),
+    ),
+    dict(
+        key="thal-motor",
+        label="thalamus \u2013 motor",
+        group="circuit",
+        labels=("Left-Thalamus-Proper", "precentral-lh"),
+    ),
+    dict(
+        key="fronto-parietal",
+        label="lateral PFC \u2013 parietal",
+        group="circuit",
+        labels=("rostralmiddlefrontal-lh", "superiorparietal-lh"),
+    ),
+    dict(
+        key="salience",
+        label="ACC \u2013 insula",
+        group="circuit",
+        labels=("caudalanteriorcingulate-lh", "insula-lh"),
+    ),
+    dict(
+        key="default-mode",
+        label="mPFC \u2013 precuneus",
+        group="circuit",
+        labels=("superiorfrontal-lh", "precuneus-lh"),
     ),
 )
 
@@ -131,6 +211,15 @@ SEED = 0
 # still being a real cortex rather than a sphere.
 DECIMATION = 14
 N_BACKDROP = 4000
+# Subcortical sampling. The fine space is sampled densely and the scan grid
+# takes every Nth of it, exactly as the cortex is treated. Keeping every
+# subcortical source in the scan grid, which is what this did at first, leaves
+# the realistic head model with nothing to displace a deep source *to*: the fine
+# and scan grids hold the same points, so a quarter of all localisation errors
+# came back as exactly zero and picking the hippocampus reproduced the inverse
+# crime the realistic setting exists to avoid.
+SUBCORTICAL_SPACING = 3.0
+SUBCORTICAL_DECIMATION = 5
 
 # Warnings that mean the numbers cannot be trusted. The build stops on these
 # rather than printing them into a log nobody reads.
@@ -182,7 +271,7 @@ def build_forward(verbose=True):
     )
     volume = mne.setup_volume_source_space(
         "sample",
-        pos=4.0,
+        pos=SUBCORTICAL_SPACING,
         mri="aseg.mgz",
         volume_label=list(SUBCORTICAL),
         subjects_dir=subjects_dir,
@@ -190,13 +279,13 @@ def build_forward(verbose=True):
         add_interpolator=False,
         verbose=False,
     )
-    points, normals, groups = [], [], []
+    points, normals, fine_groups = [], [], []
     for space in volume:
         pts = space["rr"][space["vertno"]]
         axes = np.linalg.svd(pts - pts.mean(0), full_matrices=False)[2]
         points.append(pts)
         normals.append(np.tile(axes[2], (len(pts), 1)))
-        groups.append((space["seg_name"], len(pts)))
+        fine_groups.append((space["seg_name"], len(pts)))
     discrete = mne.setup_volume_source_space(
         pos=dict(rr=np.concatenate(points), nn=np.concatenate(normals)),
         verbose=False,
@@ -222,7 +311,7 @@ def build_forward(verbose=True):
     # Decimate the cortex but keep every subcortical source, so the structures
     # the layouts name are all actually scannable.
     verts = [s["vertno"][::DECIMATION] for s in fine["src"][:2]]
-    verts += [s["vertno"] for s in fine["src"][2:]]
+    verts += [s["vertno"][::SUBCORTICAL_DECIMATION] for s in fine["src"][2:]]
     n = sum(len(v) for v in verts)
     stc = mne.MixedSourceEstimate(
         np.ones((n, 1)), verts, tmin=0, tstep=1, subject="sample"
@@ -241,11 +330,29 @@ def build_forward(verbose=True):
             f"{len(verts[2])} subcortical); truth from "
             f"{fine['sol']['data'].shape[1]}; {fwd['nchan']} gradiometers"
         )
+    # How many of each structure survived into the scan grid, in the same order.
+    kept = fwd["src"][2]["vertno"]
+    groups, start = [], 0
+    for name, count in fine_groups:
+        stop = start + count
+        groups.append((name, int(((kept >= start) & (kept < stop)).sum())))
+        start = stop
+    if verbose:
+        print(
+            "  subcortical in the scan grid: "
+            + ", ".join(f"{n} {c}" for n, c in groups)
+        )
     return info, fwd, fine, cortex, groups
 
 
 def resolve_layouts(fwd, groups, verbose=True):
-    """Grid indices for each layout, from the parcellation or the aseg."""
+    """Grid indices for each layout, from the parcellation or the aseg.
+
+    A layout names its targets by string, and each is resolved wherever it
+    lives: ``Left-Hippocampus`` in the subcortical segmentation, ``insula-lh``
+    in the cortical parcellation. That lets a circuit pair a deep structure with
+    a cortical one, which is what most of them are.
+    """
     subjects_dir = mne.datasets.sample.data_path() / "subjects"
     parc = {
         lab.name: lab
@@ -257,9 +364,7 @@ def resolve_layouts(fwd, groups, verbose=True):
     rr = fwd["source_rr"]
     n_cortical = src[0]["nuse"] + src[1]["nuse"]
 
-    # Where each subcortical structure's sources sit in the concatenated grid.
-    subcortical = {}
-    offset = n_cortical
+    subcortical, offset = {}, n_cortical
     for name, count in groups:
         subcortical[name] = np.arange(offset, offset + count)
         offset += count
@@ -273,38 +378,39 @@ def resolve_layouts(fwd, groups, verbose=True):
         pos = rr[indices]
         return int(indices[np.argmin(np.linalg.norm(pos - pos.mean(0), axis=1))])
 
+    def resolve(name):
+        if name in subcortical:
+            return centroid_index(subcortical[name]), "subcortical"
+        label = parc[name]
+        hemi = 0 if label.hemi == "lh" else 1
+        base = 0 if hemi == 0 else src[0]["nuse"]
+        shared = np.intersect1d(src[hemi]["vertno"], label.vertices)
+        if shared.size == 0:
+            raise RuntimeError(f"{name} has no grid point after decimation")
+        idx = np.array(
+            [base + int(np.flatnonzero(src[hemi]["vertno"] == v)[0]) for v in shared]
+        )
+        pick = centroid_index(idx)
+        vertex = src[hemi]["vertno"][pick - base]
+        assert vertex in label.vertices, f"{name} representative escaped its label"
+        return pick, "cortical"
+
     resolved = []
     for layout in LAYOUTS:
         entry = dict(layout)
-        if layout["kind"] == "anatomical":
-            indices = []
-            for name in layout["labels"]:
-                label = parc[name]
-                hemi = 0 if label.hemi == "lh" else 1
-                base = 0 if hemi == 0 else src[0]["nuse"]
-                shared = np.intersect1d(src[hemi]["vertno"], label.vertices)
-                idx = np.array(
-                    [
-                        base + int(np.flatnonzero(src[hemi]["vertno"] == v)[0])
-                        for v in shared
-                    ]
-                )
-                pick = centroid_index(idx)
-                vertex = src[hemi]["vertno"][pick - base]
-                assert vertex in label.vertices, f"{name} representative escaped"
-                indices.append(pick)
-            entry["sources"] = indices
-        elif layout["kind"] == "subcortical":
-            entry["sources"] = [
-                centroid_index(subcortical[name]) for name in layout["labels"]
-            ]
-        else:
+        if layout["group"] == "geometry":
             entry["sources"] = None
-        if entry["sources"] is not None:
-            entry["n"] = len(entry["sources"])
+        else:
+            picks, kinds = zip(*(resolve(n) for n in layout["labels"]), strict=True)
+            entry["sources"] = list(picks)
+            entry["n"] = len(picks)
+            entry["kind"] = "subcortical" if "subcortical" in kinds else "anatomical"
             if verbose:
-                d = np.linalg.norm(rr[entry["sources"][0]] - rr[entry["sources"][1]])
-                print(f"  {layout['label']:>22}: {entry['sources']}, {d * 100:.1f} cm")
+                d = np.linalg.norm(rr[picks[0]] - rr[picks[1]]) * 100
+                print(
+                    f"  {layout['group']:>9} {layout['label']:>26}: "
+                    f"{list(picks)}, {d:.1f} cm apart"
+                )
         resolved.append(entry)
     return resolved
 
@@ -502,7 +608,7 @@ def _quantise8(array):
     return np.clip(np.round(np.asarray(array) * 127), -127, 127)
 
 
-def pack(scenes, results, positions, cortex, sensor_pos, verbose=True):
+def pack(scenes, results, positions, cortex, sensor_pos, layouts, verbose=True):
     """Quantise everything into one gzipped buffer plus a JSON header."""
     packer = Packer()
     header = dict(
@@ -514,8 +620,13 @@ def pack(scenes, results, positions, cortex, sensor_pos, verbose=True):
         morphologies=list(MORPHOLOGIES),
         head_models=list(HEAD_MODELS),
         layouts=[
-            dict(key=lay["key"], label=lay["label"], kind=lay["kind"])
-            for lay in LAYOUTS
+            dict(
+                key=lay["key"],
+                label=lay["label"],
+                group=lay["group"],
+                kind=lay.get("kind", "region"),
+            )
+            for lay in layouts
         ],
         n_times=DISPLAY_SAMPLES,
         wave_times=WAVE_SAMPLES,
@@ -667,7 +778,13 @@ def main(argv=None):
     rank = recipsiicos_rank(info, fwd, verbose)
     scenes, results = run_grid(info, fwd, fine, layouts, rank, verbose)
     header, blob = pack(
-        scenes, results, fwd["source_rr"], cortex, sensor_layout(info), verbose
+        scenes,
+        results,
+        fwd["source_rr"],
+        cortex,
+        sensor_layout(info),
+        layouts,
+        verbose,
     )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)

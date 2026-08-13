@@ -55,17 +55,33 @@ reward for output that resembles a known waveform, traded off by :math:`P`.
 The controls, and what they are for
 -----------------------------------
 
-**Sources** chooses the scene. The geometric layouts control separation
-directly: one source is the control case worth starting from, since there is
-nothing to cancel against and every method should keep its amplitude; two at
-2 cm and at 6 cm bracket the range where cancellation matters; three is the case
-where a two-source constraint is no longer enough.
+**Sources** chooses the scene, and the options come in three groups.
 
-The region layouts put a bilateral pair in a named area: hippocampus, auditory,
-visual, motor, ventromedial prefrontal and lateral prefrontal cortex. The
-cortical ones are the centroid grid point of the matching parcellation label,
-chosen in space rather than by vertex number, and the build asserts that each
-representative really falls inside the label it is named for.
+The **geometry** group is the abstract case, where separation is set directly:
+one source is the control worth starting from, since there is nothing to cancel
+against and every method should keep its amplitude; two at 2 cm and at 6 cm
+bracket the range where cancellation matters; three is the case where a
+two-source constraint is no longer enough.
+
+The **bilateral** group puts the same structure in both hemispheres:
+hippocampus, amygdala, thalamus, auditory, visual and motor cortex, and lateral
+prefrontal cortex.
+
+The **circuits** group is the one most likely to match a real question. Each is
+a within-hemisphere pair that computational psychiatry and clinical
+neurophysiology actually study: hippocampus to medial prefrontal cortex, which
+is the classic theta-coupling circuit in memory and anxiety; amygdala to
+ventromedial prefrontal cortex, for emotion regulation; thalamus to motor
+cortex, for thalamocortical drive, spindles and Parkinsonian beta; lateral
+prefrontal to superior parietal, the frontoparietal executive network; anterior
+cingulate to insula, the salience network; and medial prefrontal to precuneus,
+the core of the default mode. Setting the correlation slider on one of these is
+asking exactly the question a coupling analysis asks, and the constraint table
+then shows what your beamformer will do to the answer.
+
+Cortical targets are the grid point nearest the spatial centroid of the matching
+parcellation label, and the build asserts each representative really falls inside
+the label it is named for. Subcortical targets come from the segmentation.
 
 The hippocampus needs a word, because a cortical surface has none. The source
 space here is **mixed**: the surface plus discrete sources inside the
@@ -82,8 +98,8 @@ somato-dendritic direction its pyramidal cells are organised along. It is a
 simplification, and a real hippocampal study would want to think harder about
 it.
 
-**Activity** switches the rhythm: theta, alpha or beta, or a train of short
-bursts. The rhythms are band-limited processes rather than modulated sinusoids,
+The rhythms are chosen to go with them. **Activity** switches between theta,
+alpha and beta, or a train of short bursts. The rhythms are band-limited processes rather than modulated sinusoids,
 because a pure tone is not what a rhythm looks like and it makes every trace on
 the page read as a textbook figure rather than a recording. The bursts are the
 regime ABMC was designed for, since its extra term rewards output matching a

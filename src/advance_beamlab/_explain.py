@@ -73,6 +73,8 @@ _N_BACKGROUND = 300
 # representable.
 _LEADFIELD_MATCH = (0.95, 0.995)
 _OFFSET_SEARCH = 0.012
+# Closer than this to a scanned grid point and a source counts as sitting on it.
+_ON_GRID_TOLERANCE = 0.001
 
 
 @dataclass
@@ -465,7 +467,16 @@ def constraint_demo(
             ok = near[(match >= _LEADFIELD_MATCH[0]) & (match <= _LEADFIELD_MATCH[1])]
             if ok.size == 0:  # pragma: no cover - only on a very coarse mesh
                 ok = near[np.argsort(np.abs(match - np.mean(_LEADFIELD_MATCH)))[:1]]
-            true_idx.append(int(place.choice(ok)))
+            # Reject any candidate that is itself a point the beamformer scans.
+            # The finer forward overlaps the scan grid wherever the scan grid was
+            # taken from it, so without this a "true" source lands on a scanned
+            # node often enough to bring the inverse crime back: it accounted for
+            # one localisation error in seven coming out at exactly zero.
+            gap = np.linalg.norm(fine_rr[ok][:, None, :] - rr[None, :, :], axis=2).min(
+                axis=1
+            )
+            off_grid = ok[gap > _ON_GRID_TOLERANCE]
+            true_idx.append(int(place.choice(off_grid if off_grid.size else ok)))
         true_gain = fine_gain[:, true_idx]
         true_positions = fine_rr[true_idx]
     else:

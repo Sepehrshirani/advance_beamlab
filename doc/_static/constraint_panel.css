@@ -396,3 +396,18 @@ html[data-theme="dark"] .cp-root {
   font-size: 0.85rem;
   color: var(--cp-text);
 }
+
+/* Group headings inside the source control, so seventeen entries read as three
+   kinds of question rather than one wall of buttons. */
+.cp-group-label {
+  flex: 0 0 100%;
+  margin: 0.35rem 0 0.1rem;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--cp-muted);
+}
+
+.cp-group-label:first-child {
+  margin-top: 0;
+}
