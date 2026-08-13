@@ -1,0 +1,194 @@
+/* Styling for the interactive constraint panel. Colours follow the pydata
+   theme, which stamps data-theme on <html>, so the panel changes with the rest
+   of the page rather than staying stubbornly light. */
+
+.cp-root {
+  --cp-bg: #ffffff;
+  --cp-panel: #f7f7f9;
+  --cp-border: #d5d7de;
+  --cp-text: #202124;
+  --cp-muted: #63666e;
+  --cp-grid: #c9ccd4;
+  --cp-true: #6b7078;
+  --cp-accent: #0072b2;
+  --cp-warm: #c8452e;
+  --cp-cool: #2166ac;
+  margin: 1.5rem 0;
+  color: var(--cp-text);
+}
+
+html[data-theme="dark"] .cp-root {
+  --cp-bg: #14181c;
+  --cp-panel: #1c2128;
+  --cp-border: #333a44;
+  --cp-text: #e6e8eb;
+  --cp-muted: #9aa0aa;
+  --cp-grid: #39404a;
+  --cp-true: #9aa0aa;
+  --cp-accent: #4aa3df;
+  --cp-warm: #e2705a;
+  --cp-cool: #6b9fd4;
+}
+
+.cp-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  padding: 0.85rem 1rem;
+  background: var(--cp-panel);
+  border: 1px solid var(--cp-border);
+  border-radius: 8px;
+  margin-bottom: 1rem;
+}
+
+.cp-control {
+  flex: 1 1 190px;
+  min-width: 170px;
+}
+
+.cp-control > label {
+  display: block;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--cp-muted);
+  margin-bottom: 0.35rem;
+}
+
+.cp-methods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.cp-methods button {
+  flex: 1 1 auto;
+  padding: 0.35rem 0.5rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--cp-text);
+  background: var(--cp-bg);
+  border: 1px solid var(--cp-border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.cp-methods button[aria-pressed="true"] {
+  background: var(--cp-accent);
+  border-color: var(--cp-accent);
+  color: #fff;
+}
+
+.cp-control input[type="range"] {
+  width: 100%;
+  accent-color: var(--cp-accent);
+}
+
+.cp-value {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
+  color: var(--cp-text);
+}
+
+.cp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1rem;
+}
+
+.cp-card {
+  background: var(--cp-panel);
+  border: 1px solid var(--cp-border);
+  border-radius: 8px;
+  padding: 0.75rem 0.85rem 0.85rem;
+}
+
+.cp-card h4 {
+  margin: 0 0 0.15rem;
+  font-size: 0.95rem;
+}
+
+.cp-card p.cp-hint {
+  margin: 0 0 0.6rem;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--cp-muted);
+}
+
+.cp-card canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 4px;
+  touch-action: none;
+}
+
+.cp-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+
+.cp-table th,
+.cp-table td {
+  border: 1px solid var(--cp-border);
+  padding: 0.5rem 0.4rem;
+  text-align: center;
+  font-size: 0.9rem;
+}
+
+.cp-table th {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--cp-muted);
+  background: var(--cp-bg);
+}
+
+.cp-readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem 1.5rem;
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.cp-readout div {
+  flex: 1 1 120px;
+}
+
+.cp-readout span {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--cp-muted);
+}
+
+.cp-readout strong {
+  font-size: 1.15rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.cp-legend {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--cp-muted);
+}
+
+.cp-legend .cp-ramp {
+  flex: 1 1 auto;
+  height: 9px;
+  border-radius: 5px;
+  border: 1px solid var(--cp-border);
+}
+
+.cp-status {
+  padding: 1rem;
+  border: 1px dashed var(--cp-border);
+  border-radius: 8px;
+  color: var(--cp-muted);
+  font-size: 0.9rem;
+}

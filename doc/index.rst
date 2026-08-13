@@ -18,6 +18,15 @@ Where to go next
       actually demonstrates for each method, including the cases where a
       plain LCMV is the better answer.
 
+   .. grid-item-card:: What a constraint does
+      :link: panel
+      :link-type: doc
+
+      An interactive panel. Place two correlated sources on a cortex and watch
+      the constraint table while you move the correlation: LCMV's off-diagonal
+      gain runs away and takes the amplitude with it, MCMV's stays pinned at
+      zero.
+
    .. grid-item-card:: Examples
       :link: auto_examples/index
       :link-type: doc
@@ -51,6 +60,7 @@ Where to go next
    :maxdepth: 2
 
    Which method should I use? <choosing>
+   What a constraint does <panel>
    Examples <auto_examples/index>
    Mathematical background <background>
    Parameter tuning <tuning>
