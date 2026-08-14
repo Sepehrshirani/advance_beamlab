@@ -265,6 +265,89 @@ changes the source placement and nothing else. Read the realistic errors as a
 lower bound even so: the head model is still exact, the coregistration is still
 perfect, and the noise is still stationary.
 
+The same four methods on a real recording
+-----------------------------------------
+
+Everything above is simulated, which is the only reason any of it can be checked
+against a truth. The **Dataset** control switches to MNE's ``sample`` dataset,
+the same 203 gradiometers and the same subject, and runs the identical four
+filters on data that was recorded from a person rather than generated.
+
+The bilateral auditory N100 is the reason this is worth doing. Left and right
+auditory cortex respond together to a binaural click, which makes them exactly
+the correlated pair the whole page is about, and the correlation is not a
+setting here: it is measured, at :math:`r = 0.87` through the joint filter. Read
+it off per-source LCMV traces instead and the same pair reads as *uncorrelated*,
+through the very filter whose cancellation the correlation is meant to explain,
+which is a good reason to distrust a correlation estimated with a filter that
+cancels.
+
+What the recording shows, averaged over every epoch, is the effect at full
+strength. LCMV's off-diagonal reaches :math:`-1.03` and it delivers 0.56 of the
+amplitude; MCMV holds the table at zero and delivers 1.00; ReciPSIICOS and ABMC
+control it too, at :math:`+0.04` and :math:`+0.03`. The localiser peaks tell the
+same story from the other side: MCMV, ReciPSIICOS and ABMC all peak within
+6 to 10 mm of the dipole fit, and LCMV 15 mm away. Nothing here was tuned to
+produce that; it is the published example's own preprocessing, run through the
+same code path as the simulation.
+
+**There is no truth, and nothing here pretends otherwise.** Three of the panel's
+readouts need one and are therefore absent: no localisation error, no known
+waveform beside the recovered one, no head-model switch. What survives is what
+never needed a truth in the first place. The constraint table is the filters'
+response to the leadfields of the constrained locations, so it is exact on any
+data at all. In place of the error the panel reports the distance to an
+independent **dipole fit** -- two dipoles fitted one after the other, the second
+to what the first leaves behind, with their goodness of fit shown beside them.
+That is a different method with different assumptions, so read the distance as
+two estimates disagreeing rather than as one of them being wrong, and read the
+rings on the cortex as a reference rather than an answer key.
+
+Three things about how it is computed are worth stating, because each one was
+got wrong first.
+
+**The locations are chosen at full resolution and only then decimated.** The
+simulated half scans a 797-point grid, and on that grid the right auditory peak
+of this recording lands in parietal cortex: the pair stops being correlated and
+LCMV's off-diagonal reads :math:`+0.03`, which is to say the effect disappears
+entirely. Choosing the pair on the undecimated 7498-vertex surface and *then*
+decimating the scan grid around it changes nothing at all -- the constraint
+table is identical to three decimals from 7498 sources down to 627 -- because
+LCMV, MCMV and ABMC each build a filter from one leadfield and the covariance,
+and the rest of the grid never enters. Only ReciPSIICOS spans the grid, and it
+is why the grid is decimated at all: its projector needs a factorisation over
+every scan point, which costs 0.6 s at 954 sources and over five minutes at
+7498.
+
+**The preprocessing is the published example's, exactly.** Shortening the
+baseline and adding amplitude rejection seems harmless and is not: it moved the
+right-hemisphere peak to a different vertex and LCMV's off-diagonal fell from
+:math:`-1.03` to :math:`-0.15`. The cancellation is a property of the pair that
+gets selected, so the analysis that selects it has to be one whose result is
+already on the record.
+
+**One noise covariance is pooled over every epoch in the session** rather than
+estimated per scene. That is the better estimate and standard practice, and it
+is also what makes a single ReciPSIICOS rank legitimate: the covariance sets the
+whitener, the whitener sets :math:`q`, and the rank is drawn out of
+:math:`q^2`. Per-scene estimation would give every scene its own :math:`q` and a
+precomputed rank would quietly mean something different in each one.
+
+The **trials averaged** control is real here in a way it cannot be in the
+simulation: it averages that many actual epochs. Watch it with LCMV selected.
+At one trial the off-diagonal is :math:`-0.52` and the filter delivers 0.82; by
+145 trials the off-diagonal has reached :math:`-1.03` and the delivered
+amplitude has fallen to 0.56. More data makes the cancellation *worse*, for the
+same reason it does in the simulation: the cancellation is a property of the
+clean covariance, and noise was the only thing preventing the filter from
+performing it.
+
+The **visual** conditions are there as a control, and they behave differently
+rather than identically. The two visual sources sit 3.8 cm apart against the
+auditory pair's 11.2 cm, and LCMV's off-diagonal comes out *positive*, around
+:math:`+0.47`: the neighbour is added rather than subtracted. It is the same
+failure to control the off-diagonal, in the other direction.
+
 What you are looking at
 -----------------------
 
