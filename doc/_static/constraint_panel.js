@@ -359,7 +359,46 @@
       resultOf[r.scene + "|" + r.method] = i;
     });
 
+    /* The recorded half. Everything about it is optional: a payload built with
+     * --simulation-only has none of these keys, and the panel then runs exactly
+     * as it did before the recordings were added. */
+    var HAS_REAL = !!(P.real_scenes && P.real_scenes.length);
+    var realPos = HAS_REAL ? view(P.real_positions) : null;
+    var realMaps = HAS_REAL ? view(P.real_maps) : null;
+    var realRecording = HAS_REAL ? view(P.real_recording) : null;
+    var realRecon = HAS_REAL ? view(P.real_recon) : null;
+    var nRealSrc = HAS_REAL ? P.n_real_sources : 0;
+    var nRealT = HAS_REAL ? P.real_n_times : 0;
+    var realSceneOf = {};
+    if (HAS_REAL) {
+      P.real_scenes.forEach(function (s, i) {
+        realSceneOf[[s.condition, s.window.join(","), s.trials].join("|")] = i;
+      });
+    }
+    var realResultOf = {};
+    if (HAS_REAL) {
+      P.real_results.forEach(function (r, i) {
+        realResultOf[r.scene + "|" + r.method] = i;
+      });
+    }
+    /* Trial counts are per condition -- a scene records what it actually
+     * averaged, which is capped by how many epochs survived rejection -- so the
+     * control lists what the chosen condition really offers. */
+    function realTrialsFor(conditionIndex) {
+      var key = P.real_conditions[conditionIndex].key;
+      var out = [];
+      P.real_scenes.forEach(function (s) {
+        if (s.condition === key && out.indexOf(s.trials) < 0) out.push(s.trials);
+      });
+      return out.sort(function (a, b) { return a - b; });
+    }
+    function recorded() { return HAS_REAL && state.dataset === 1; }
+
     var state = {
+      dataset: 0,
+      cond: 0,
+      win: 0,
+      rtrials: 0,
       method: 0,
       layout: Math.max(0, P.layouts.map(function (l) { return l.key; }).indexOf("far")),
       morph: Math.max(0, P.morphologies.indexOf("alpha")),
@@ -387,12 +426,22 @@
 
     root.innerHTML =
       '<div class="cp-controls">' +
+      (HAS_REAL ? chip("cp-dataset", "Dataset") : "") +
       chip("cp-methods", "Method") +
+      '<span class="cp-sim-only">' +
       chip("cp-layout", "Sources", true) +
       chip("cp-morph", "Activity") +
       chip("cp-head", "Head model") +
       slider("cp-corr", "Source correlation", P.correlations.length) +
       slider("cp-trials", "Trials averaged", P.trials.length) +
+      "</span>" +
+      (HAS_REAL
+        ? '<span class="cp-real-only">' +
+          chip("cp-cond", "Condition", true) +
+          chip("cp-win", "Covariance window") +
+          chip("cp-rtrials", "Trials averaged") +
+          "</span>"
+        : "") +
       "</div>" +
 
       '<div class="cp-card cp-eq" id="cp-equations"></div>' +
@@ -483,6 +532,25 @@
     var methodsBox = chips("cp-methods", P.methods, "method", function (m) {
       return METHOD_LABEL[m] || m;
     });
+    var datasetBox = null, condBox = null, winBox = null, rtrialsBox = null;
+    if (HAS_REAL) {
+      datasetBox = chips(
+        "cp-dataset",
+        ["Simulation", "Recorded MEG"],
+        "dataset",
+        function (d) { return d; }
+      );
+      condBox = chips(
+        "cp-cond",
+        P.real_conditions,
+        "cond",
+        function (c) { return c.label; }
+      );
+      winBox = chips("cp-win", P.real_windows, "win", function (w) {
+        return Math.round(w[0] * 1000) + "\u2013" + Math.round(w[1] * 1000) + " ms";
+      });
+      rtrialsBox = root.querySelector("#cp-rtrials");
+    }
     /* Grouped rather than one long row. Seventeen entries in a flat list is a
      * wall of buttons; the groups say what kind of question each answers. */
     var GROUP_LABEL = {
@@ -577,7 +645,8 @@
       );
       state.tStart = Math.max(
         0,
-        Math.min(nT - state.tSpan, state.tStart - Math.round((dx * state.tSpan) / 500))
+        Math.min(timeCount() - state.tSpan,
+                 state.tStart - Math.round((dx * state.tSpan) / 500))
       );
       root.querySelector("#cp-chan").value = state.chan0;
       drawSensor();
@@ -586,13 +655,13 @@
       e.preventDefault();
       var centre = state.tStart + state.tSpan / 2;
       state.tSpan = Math.max(
-        40, Math.min(nT, Math.round(state.tSpan * (e.deltaY > 0 ? 1.15 : 0.87)))
+        40, Math.min(timeCount(), Math.round(state.tSpan * (e.deltaY > 0 ? 1.15 : 0.87)))
       );
       state.tStart = Math.max(
-        0, Math.min(nT - state.tSpan, Math.round(centre - state.tSpan / 2))
+        0, Math.min(timeCount() - state.tSpan, Math.round(centre - state.tSpan / 2))
       );
       root.querySelector("#cp-zoom").value =
-        Math.round(100 * (1 - (state.tSpan - 40) / (nT - 40)));
+        Math.round(100 * (1 - (state.tSpan - 40) / (timeCount() - 40)));
       drawSensor();
     }, { passive: false });
 
@@ -603,14 +672,44 @@
     root.querySelector("#cp-zoom").addEventListener("input", function (e) {
       var f = parseInt(e.target.value, 10) / 100;
       var centre = state.tStart + state.tSpan / 2;
-      state.tSpan = Math.round(nT - f * (nT - 40));
+      state.tSpan = Math.round(timeCount() - f * (timeCount() - 40));
       state.tStart = Math.max(
-        0, Math.min(nT - state.tSpan, Math.round(centre - state.tSpan / 2))
+        0, Math.min(timeCount() - state.tSpan, Math.round(centre - state.tSpan / 2))
       );
       drawSensor();
     });
 
+    /* The recorded trial counts depend on the condition: a scene records what
+     * it actually averaged, and rejection leaves each condition a different
+     * number of epochs. Rebuilt whenever the condition changes. */
+    function rebuildRealTrials() {
+      if (!HAS_REAL) return;
+      var counts = realTrialsFor(state.cond);
+      state.rtrials = Math.min(state.rtrials, counts.length - 1);
+      rtrialsBox.innerHTML = "";
+      counts.forEach(function (n, i) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.textContent = n === 1 ? "1 trial" : n + " trials";
+        b.addEventListener("click", function () { state.rtrials = i; render(); });
+        rtrialsBox.appendChild(b);
+      });
+    }
+
     function current() {
+      if (recorded()) {
+        var counts = realTrialsFor(state.cond);
+        var rk = [
+          P.real_conditions[state.cond].key,
+          P.real_windows[state.win].join(","),
+          counts[Math.min(state.rtrials, counts.length - 1)],
+        ].join("|");
+        var rs = realSceneOf[rk];
+        return {
+          scene: rs,
+          result: realResultOf[rs + "|" + P.methods[state.method]],
+        };
+      }
       var key = [
         P.layouts[state.layout].key,
         P.correlations[state.corr],
@@ -621,17 +720,39 @@
       var s = sceneOf[key];
       return { scene: s, result: resultOf[s + "|" + P.methods[state.method]] };
     }
-    function nOf(scene) { return P.scenes[scene].sources.length; }
+    /* The active scene and result, whichever half is showing. */
+    function sceneRec(i) { return recorded() ? P.real_scenes[i] : P.scenes[i]; }
+    function resultRec(i) { return recorded() ? P.real_results[i] : P.results[i]; }
+    function nOf(scene) { return sceneRec(scene).sources.length; }
+    function gridPos() { return recorded() ? realPos : pos; }
+    function gridN() { return recorded() ? nRealSrc : nSrc; }
+    function gridMaps() { return recorded() ? realMaps : maps; }
     function methodColour() { return COLOURS[state.method]; }
 
-    /* The recording, rebuilt exactly as the build made it. */
+    /* The recording. A simulated one is rebuilt from its ingredients, which is
+     * what keeps the payload small; a recorded one has no such recipe and is
+     * stored. All the recorded traces share one scale, so averaging more trials
+     * visibly lowers the noise instead of each scene being renormalised to its
+     * own peak -- which is the whole point of that control. */
     function sensorAt(scene, channel, t) {
+      if (recorded()) {
+        var rec = P.real_scenes[scene].recording;
+        return (
+          realRecording[(rec * nCh + channel) * nRealT + t] /
+          P.real_recording_scale
+        );
+      }
       var n = nOf(scene), v = 0;
       for (var i = 0; i < n; i++) {
         v += (mix[mixOff[scene] + channel * n + i] / mscale) *
           (trueTcs[trueOff[scene] + i * nT + t] / bscale);
       }
       return v + P.noise_gain[scene] * (noise[channel * nT + t] / bscale);
+    }
+    /* How many samples the active recording has, and where its time axis starts. */
+    function timeCount() { return recorded() ? nRealT : nT; }
+    function timeAt(i) {
+      return recorded() ? P.real_time0 + i / P.real_sfreq : i / P.sfreq;
     }
 
     function rotated(x, y, z) {
@@ -651,12 +772,19 @@
       );
       return [p[0], p[2], p[1]];
     }
+    /* The same projection for a position that is not in a packed array. The
+     * dipole reference is stored per scene in the header, already centred and
+     * in millimetres, so it arrives as three numbers rather than an index. */
+    function atPoint(x, y, z) {
+      var p = rotated(x, y, z);
+      return [p[0], p[2], p[1]];
+    }
 
     function drawBrain() {
       var c = fitCanvas(brain, 340);
       var ctx = c.ctx;
       var cur = current();
-      var res = P.results[cur.result];
+      var res = resultRec(cur.result);
       ctx.fillStyle = css(root, "--cp-bg");
       ctx.fillRect(0, 0, c.w, c.h);
 
@@ -665,10 +793,11 @@
         p = at(cortex, i);
         pts.push([p[0], p[1], p[2], -1, 0]);
       }
-      var base = cur.result * nSrc;
-      for (i = 0; i < nSrc; i++) {
-        p = at(pos, i);
-        pts.push([p[0], p[1], p[2], i, maps[base + i] / 255]);
+      var gpos = gridPos(), gmaps = gridMaps(), gn = gridN();
+      var base = cur.result * gn;
+      for (i = 0; i < gn; i++) {
+        p = at(gpos, i);
+        pts.push([p[0], p[1], p[2], i, gmaps[base + i] / 255]);
       }
       var xs = pts.map(function (v) { return v[0]; });
       var ys = pts.map(function (v) { return v[1]; });
@@ -709,11 +838,22 @@
       }
       ctx.globalAlpha = 1;
 
-      // Truth at its real position, not at the grid node standing in for it.
+      /* Simulated: the truth, at its real position rather than at the grid node
+       * standing in for it. Recorded: there is no truth, so the rings mark an
+       * independent dipole fit instead -- another method's answer, not an
+       * answer key. Both are drawn the same way because they play the same
+       * role on the page: the thing the crosses are compared against. */
       var n = nOf(cur.scene);
       var truth = [];
-      for (i = 0; i < n; i++) truth.push(at(truePos, posOff[cur.scene] / 3 + i));
-      var est = res.peaks.map(function (s) { return at(pos, s); });
+      if (recorded()) {
+        var ref = P.real_scenes[cur.scene].reference;
+        for (i = 0; i < ref.length; i++) {
+          truth.push(atPoint(ref[i][0], ref[i][1], ref[i][2]));
+        }
+      } else {
+        for (i = 0; i < n; i++) truth.push(at(truePos, posOff[cur.scene] / 3 + i));
+      }
+      var est = res.peaks.map(function (s) { return at(gridPos(), s); });
 
       /* Markers are drawn at their own depth rather than on top of everything.
        * Painted last regardless of depth, a hippocampus reads as sitting on the
@@ -817,10 +957,46 @@
 
       ctx.fillStyle = css(root, "--cp-muted");
       ctx.font = "12px system-ui, sans-serif";
+      /* Simulated: distance to a known source, which is an error. Recorded:
+       * distance to a dipole fit, which is two methods disagreeing. The wording
+       * changes because the quantity does. */
       ctx.fillText(
-        "error " + res.peak_errors.map(function (v) { return v.toFixed(0); }).join(", ") +
-        " mm", 72, c.h - 12
+        recorded()
+          ? "to dipole fit " +
+            res.reference_distance.map(function (v) { return v.toFixed(0); }).join(", ") +
+            " mm"
+          : "error " +
+            res.peak_errors.map(function (v) { return v.toFixed(0); }).join(", ") +
+            " mm",
+        72, c.h - 12
       );
+    }
+
+    /* The instant the field map refers to. The simulated half has it
+     * precomputed; the recorded half carries its whole recording, so the same
+     * quantity -- the peak of the global field power -- is found here and
+     * cached, rather than stored twice. */
+    var realPeakCache = {};
+    function topoTime(scene) {
+      if (!recorded()) return P.topography_time[scene];
+      if (realPeakCache[scene] === undefined) {
+        var best = 0, bestV = -1;
+        for (var t = 0; t < nRealT; t++) {
+          var v = 0;
+          for (var k = 0; k < nCh; k++) {
+            var x = sensorAt(scene, k, t);
+            v += x * x;
+          }
+          if (v > bestV) { bestV = v; best = t; }
+        }
+        realPeakCache[scene] = best;
+      }
+      return realPeakCache[scene];
+    }
+    function topoValue(scene, channel) {
+      return recorded()
+        ? sensorAt(scene, channel, topoTime(scene))
+        : topo[scene * nCh + channel] / wscale;
     }
 
     var topoCache = {};
@@ -833,14 +1009,15 @@
       ctx.fillRect(0, 0, c.w, c.h);
       var R = Math.min(c.w, c.h) / 2 - 18;
       var ox = c.w / 2, oy = c.h / 2 + 4;
-      var key = cur.scene + "|" + Math.round(c.w) + "|" + Math.round(c.h);
+      var key = state.dataset + "|" + cur.scene + "|" +
+        Math.round(c.w) + "|" + Math.round(c.h);
 
       if (!topoCache[key]) {
         var W = Math.round(c.w), H = Math.round(c.h);
         var img = ctx.createImageData(W, H);
         var grid = new Float32Array(W * H);
         var vals = [];
-        for (var k = 0; k < nCh; k++) vals.push(topo[cur.scene * nCh + k] / wscale);
+        for (var k = 0; k < nCh; k++) vals.push(topoValue(cur.scene, k));
         for (var py = 0; py < H; py++) {
           for (var px = 0; px < W; px++) {
             var dx = (px - ox) / R, dy = (py - oy) / R;
@@ -923,7 +1100,7 @@
       ctx.fillStyle = css(root, "--cp-muted");
       ctx.font = "11px system-ui, sans-serif";
       ctx.fillText(
-        "field at " + ((P.topography_time[cur.scene] / sfreq) * 1000).toFixed(0) + " ms",
+        "field at " + (timeAt(topoTime(cur.scene)) * 1000).toFixed(0) + " ms",
         4, c.h - 4
       );
     }
@@ -937,7 +1114,7 @@
       var padL = 38, padR = 6, padT = 6, padB = 18;
       var shown = Math.min(state.chanShown, nCh - state.chan0);
       var lane = (c.h - padT - padB) / shown;
-      var t0 = state.tStart, t1 = Math.min(nT, state.tStart + state.tSpan);
+      var t0 = state.tStart, t1 = Math.min(timeCount(), state.tStart + state.tSpan);
 
       // One scale across the visible channels, so relative amplitude is real.
       var peak = 1e-9, k, t;
@@ -968,7 +1145,7 @@
         ctx.fillText("ch " + (state.chan0 + k + 1), 2, padT + lane * (k + 0.5) + 3);
       }
 
-      var tp = P.topography_time[cur.scene];
+      var tp = topoTime(cur.scene);
       if (tp >= t0 && tp < t1) {
         var tx = padL + ((tp - t0) / (t1 - t0 - 1 || 1)) * (c.w - padL - padR);
         ctx.strokeStyle = css(root, "--cp-accent");
@@ -979,8 +1156,10 @@
       }
       ctx.fillStyle = css(root, "--cp-muted");
       ctx.font = "11px system-ui, sans-serif";
-      ctx.fillText(((t0 / sfreq) * 1000).toFixed(0) + " ms", padL, c.h - 5);
-      ctx.fillText(((t1 / sfreq) * 1000).toFixed(0) + " ms", c.w - 50, c.h - 5);
+      // Recorded time is relative to stimulus onset and starts negative, so the
+      // axis has to come from the dataset rather than from a sample count.
+      ctx.fillText((timeAt(t0) * 1000).toFixed(0) + " ms", padL, c.h - 5);
+      ctx.fillText((timeAt(t1) * 1000).toFixed(0) + " ms", c.w - 50, c.h - 5);
       root.querySelector("#cp-chan-v").textContent =
         "channels " + (state.chan0 + 1) + "–" + (state.chan0 + shown) +
         " of " + nCh;
@@ -998,22 +1177,30 @@
       /* Each block is stored at its own scale so neither loses precision; they
        * are put back on one scale here, which is what makes a reconstruction
        * that lost half its amplitude look like it did. */
-      var tScale = P.true_scale[cur.scene];
-      var rScale = P.recon_scale[cur.result];
+      /* Recorded data has no simulated trace to draw beside the recovered one,
+       * so only the reconstruction is drawn, each source normalised to its own
+       * peak. There is nothing to compare an amplitude against here; what the
+       * filter did to it is the constraint table's business. */
+      var samples = recorded() ? nRealT : nW;
+      var tScale = recorded() ? 1 : P.true_scale[cur.scene];
+      var rScale = recorded() ? 1 : P.recon_scale[cur.result];
       var shared = Math.max(tScale, rScale);
       for (var k = 0; k < n; k++) {
-        [
-          [trueTcs, trueOff[cur.scene] + k * nT, css(root, "--cp-true"), 1.1,
-            tScale / shared],
-          [recon, reconOff[cur.result] + k * nW, methodColour(), 1.7,
-            rScale / shared],
-        ].forEach(function (spec) {
+        (recorded()
+          ? [[realRecon, (cur.result * n + k) * nRealT, methodColour(), 1.7, 1]]
+          : [
+              [trueTcs, trueOff[cur.scene] + k * nT, css(root, "--cp-true"), 1.1,
+                tScale / shared],
+              [recon, reconOff[cur.result] + k * nW, methodColour(), 1.7,
+                rScale / shared],
+            ]
+        ).forEach(function (spec) {
           ctx.beginPath();
           ctx.strokeStyle = spec[2];
           ctx.lineWidth = spec[3];
-          for (var t = 0; t < nW; t++) {
+          for (var t = 0; t < samples; t++) {
             var v = (spec[0][spec[1] + t] / bscale) * spec[4];
-            var x = pad + (t / (nW - 1)) * (c.w - 2 * pad);
+            var x = pad + (t / (samples - 1)) * (c.w - 2 * pad);
             var y = pad + lane * (k + 0.5) - v * lane * 0.42;
             if (t === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
           }
@@ -1024,12 +1211,18 @@
         ctx.fillText("source " + (k + 1), 8, pad + lane * k + 12);
       }
       root.querySelector("#cp-wave-key").innerHTML =
-        '<span class="cp-key"><i style="background:' + css(root, "--cp-true") +
-        ';width:14px;height:2px"></i>simulated</span>' +
+        (recorded()
+          ? ""
+          : '<span class="cp-key"><i style="background:' + css(root, "--cp-true") +
+            ';width:14px;height:2px"></i>simulated</span>') +
         '<span class="cp-key"><i style="background:' + methodColour() +
         ';width:14px;height:3px"></i>recovered by ' +
         (METHOD_LABEL[P.methods[state.method]]) + "</span>" +
-        '<span class="cp-key">' + (nW / sfreq).toFixed(2) + " s shown</span>";
+        '<span class="cp-key">' +
+        (recorded()
+          ? (nRealT / P.real_sfreq).toFixed(2) + " s shown, no truth to compare"
+          : (nW / sfreq).toFixed(2) + " s shown") +
+        "</span>";
     }
 
     function drawSweep() {
@@ -1039,21 +1232,40 @@
       ctx.fillRect(0, 0, c.w, c.h);
       var padL = 42, padR = 8, padT = 14, padB = 26;
       var half = (c.h - padT - padB - 16) / 2;
-      var n = P.correlations.length;
-      var xOf = function (i) { return padL + (i / (n - 1)) * (c.w - padL - padR); };
+      /* Simulated: the correlation axis, which is the page's main variable.
+       * Recorded: there is no correlation to set -- it is measured, not chosen
+       * -- so the axis becomes the one real control that does sweep, the number
+       * of trials averaged. */
+      var counts = recorded() ? realTrialsFor(state.cond) : null;
+      var n = recorded() ? counts.length : P.correlations.length;
+      var here = recorded() ? Math.min(state.rtrials, n - 1) : state.corr;
+      var xOf = function (i) { return padL + (i / (n - 1 || 1)) * (c.w - padL - padR); };
       var series = [], maxErr = 1;
       P.methods.forEach(function (mm, mi) {
         var amp = [], err = [];
         for (var i = 0; i < n; i++) {
-          var key = [
-            P.layouts[state.layout].key, P.correlations[i],
-            P.trials[state.trials], P.morphologies[state.morph],
-            P.head_models[state.head],
-          ].join("|");
-          var r = P.results[resultOf[sceneOf[key] + "|" + mm]];
+          var r;
+          if (recorded()) {
+            var rk = [
+              P.real_conditions[state.cond].key,
+              P.real_windows[state.win].join(","),
+              counts[i],
+            ].join("|");
+            r = P.real_results[realResultOf[realSceneOf[rk] + "|" + mm]];
+          } else {
+            var key = [
+              P.layouts[state.layout].key, P.correlations[i],
+              P.trials[state.trials], P.morphologies[state.morph],
+              P.head_models[state.head],
+            ].join("|");
+            r = P.results[resultOf[sceneOf[key] + "|" + mm]];
+          }
+          var e = recorded()
+            ? Math.min.apply(null, r.reference_distance)
+            : r.peak_errors[0];
           amp.push(r.amplitude_ratio[0]);
-          err.push(r.peak_errors[0]);
-          if (r.peak_errors[0] > maxErr) maxErr = r.peak_errors[0];
+          err.push(e);
+          if (e > maxErr) maxErr = e;
         }
         series.push({ mi: mi, amp: amp, err: err });
       });
@@ -1086,10 +1298,10 @@
           }
           ctx.stroke();
           if (on) {
-            var yc = top + height - Math.min(1, s[key][state.corr] / maxV) * height;
+            var yc = top + height - Math.min(1, s[key][here] / maxV) * height;
             ctx.fillStyle = COLOURS[s.mi];
             ctx.beginPath();
-            ctx.arc(xOf(state.corr), yc, 4.5, 0, 6.2832);
+            ctx.arc(xOf(here), yc, 4.5, 0, 6.2832);
             ctx.fill();
           }
           ctx.globalAlpha = 1;
@@ -1101,12 +1313,16 @@
       });
       ampTop = Math.ceil(ampTop * 10) / 10;
       panel(padT, half, "amp", ampTop, "amplitude");
-      panel(padT + half + 16, half, "err",
-        Math.max(10, Math.ceil(maxErr / 10) * 10), "error (mm)");
+      panel(padT + half + 16, half,
+        "err", Math.max(10, Math.ceil(maxErr / 10) * 10),
+        recorded() ? "to dipole (mm)" : "error (mm)");
       ctx.fillStyle = css(root, "--cp-muted");
       ctx.font = "10px system-ui, sans-serif";
       for (var i = 0; i < n; i++) {
-        ctx.fillText(P.correlations[i].toFixed(2), xOf(i) - 10, c.h - 8);
+        ctx.fillText(
+          recorded() ? String(counts[i]) : P.correlations[i].toFixed(2),
+          xOf(i) - 10, c.h - 8
+        );
       }
       root.querySelector("#cp-sweep-key").innerHTML = P.methods
         .map(function (mm, i) {
@@ -1118,7 +1334,7 @@
 
     function drawTable() {
       var cur = current();
-      var res = P.results[cur.result];
+      var res = resultRec(cur.result);
       var g = res.gains, n = g.length, i, j;
       var html = "<tr><th></th>";
       for (j = 0; j < n; j++) html += "<th>at " + (j + 1) + "</th>";
@@ -1159,14 +1375,18 @@
         "</strong></div>" +
         '<div><span>Amplitude delivered</span><strong>' +
         (res.amplitude_ratio[0] * 100).toFixed(0) + "%</strong></div>" +
-        '<div><span>Localisation error</span><strong>' +
-        res.peak_errors[0].toFixed(0) + " mm</strong></div>" +
+        (recorded()
+          ? '<div><span>Peak to dipole fit</span><strong>' +
+            Math.min.apply(null, res.reference_distance).toFixed(0) +
+            " mm</strong></div>"
+          : '<div><span>Localisation error</span><strong>' +
+            res.peak_errors[0].toFixed(0) + " mm</strong></div>") +
         '<div><span>Neighbour</span><strong>' + behaviour + "</strong></div>";
     }
 
     function drawEquations() {
       var cur = current();
-      var res = P.results[cur.result];
+      var res = resultRec(cur.result);
       var g = res.gains, n = g.length;
       var eq = EQUATIONS[P.methods[state.method]];
       var live = "w<sub>1</sub><sup>T</sup>g<sub>1</sub> = <b>" +
@@ -1185,8 +1405,12 @@
         '<p class="cp-hint">' + eq.note + "</p>" +
         '<div class="cp-eq-live">with the controls where they are: ' + live +
         " &nbsp;&rarr;&nbsp; " + (res.amplitude_ratio[0] * 100).toFixed(0) +
-        "% of the amplitude survives, peak " + res.peak_errors[0].toFixed(0) +
-        " mm from the source</div>" +
+        "% of the amplitude survives, peak " +
+        (recorded()
+          ? Math.min.apply(null, res.reference_distance).toFixed(0) +
+            " mm from the dipole fit"
+          : res.peak_errors[0].toFixed(0) + " mm from the source") +
+        "</div>" +
         '<p class="cp-note-block"><b>What &ldquo;amplitude delivered&rdquo; ' +
         "means.</b> It is what this filter does to the source's amplitude: each " +
         "constrained source's gain, weighted by how much of this source's " +
@@ -1204,11 +1428,41 @@
         "interference survives, so at one trial it reads about 570 per cent for " +
         "both LCMV and MCMV, separating them by two per cent where the filters " +
         "themselves differ by a factor of seven.</p>" +
-        '<div class="cp-eq-note">' + HEAD_NOTE[P.head_models[state.head]] +
+        '<div class="cp-eq-note">' +
+        (recorded()
+          ? "<b>Recorded MEG.</b> MNE's <code>sample</code> dataset, the " +
+            "condition and covariance window chosen above. There is no truth " +
+            "here and no head-model switch: the model is whatever the " +
+            "coregistration gives, which is the situation every real analysis " +
+            "is in. The constraint table is still exact, because it is the " +
+            "filters' response to leadfields rather than a comparison with " +
+            "anything. What is gone is the localisation error, and in its " +
+            "place is the distance to a dipole fit -- a different method with " +
+            "different assumptions, so read it as two estimates disagreeing " +
+            "rather than as one of them being wrong."
+          : HEAD_NOTE[P.head_models[state.head]]) +
         "</div>" +
         "<h5>The sizes of everything in that equation</h5>" +
         dimensions(P, n, P.methods[state.method]) +
-        (m
+        (recorded() && m
+          ? '<p class="cp-provenance">Recording: MNE\u2019s <code>' +
+            m.subject + "</code> dataset, " + m.channels + " " +
+            m.channel_type + ", " +
+            P.real_scenes[cur.scene].available +
+            " epochs available for this condition and " +
+            P.real_scenes[cur.scene].trials + " averaged. Sources chosen at " +
+            "full resolution from " + m.real_n_full + " vertices, scanned on " +
+            m.real_n_scan + " (1 in " + P.real_decimation + " of the surface, " +
+            "plus every constrained location). Covariance window " +
+            Math.round(P.real_scenes[cur.scene].window[0] * 1000) + "\u2013" +
+            Math.round(P.real_scenes[cur.scene].window[1] * 1000) +
+            " ms, baseline noise covariance pooled over every epoch in the " +
+            "session. Dipole fit goodness " +
+            P.real_scenes[cur.scene].reference_gof
+              .map(function (g) { return g.toFixed(0) + "%"; })
+              .join(" and ") + ".</p>"
+          : "") +
+        (!recorded() && m
           ? '<p class="cp-provenance">Head model: MNE\u2019s <code>' + m.subject +
             "</code> subject, " + m.bem + ", " + m.channels + " " +
             m.channel_type + ". Scan grid " + m.n_scan + " points: " +
@@ -1233,8 +1487,34 @@
           }
         }
       );
+      if (HAS_REAL) {
+        for (var d = 0; d < datasetBox.children.length; d++) {
+          datasetBox.children[d].setAttribute(
+            "aria-pressed", d === state.dataset ? "true" : "false"
+          );
+        }
+        root.classList.toggle("cp-showing-real", recorded());
+        [[condBox, "cond"], [winBox, "win"]].forEach(function (pair) {
+          for (var i = 0; i < pair[0].children.length; i++) {
+            pair[0].children[i].setAttribute(
+              "aria-pressed", i === state[pair[1]] ? "true" : "false"
+            );
+          }
+        });
+        rebuildRealTrials();
+        var picked = Math.min(state.rtrials, rtrialsBox.children.length - 1);
+        for (var t = 0; t < rtrialsBox.children.length; t++) {
+          rtrialsBox.children[t].setAttribute(
+            "aria-pressed", t === picked ? "true" : "false"
+          );
+        }
+        // The stored time axis differs between the two halves, so a window
+        // carried over from the other one can run past the end.
+        state.tSpan = Math.min(state.tSpan, timeCount());
+        state.tStart = Math.min(state.tStart, timeCount() - state.tSpan);
+      }
       var cur = current();
-      var scene = P.scenes[cur.scene];
+      var scene = sceneRec(cur.scene);
       var single = nOf(cur.scene) < 2;
       root.querySelector("#cp-corr").disabled = single;
       root.querySelector("#cp-corr-v").textContent = single
@@ -1253,10 +1533,10 @@
        * and with a fixed default window that instant fell outside it for most
        * scenes, so no marker was drawn and the map referred to something not on
        * screen. */
-      var tp = P.topography_time[cur.scene];
+      var tp = topoTime(cur.scene);
       if (tp < state.tStart || tp >= state.tStart + state.tSpan) {
         state.tStart = Math.max(
-          0, Math.min(nT - state.tSpan, Math.round(tp - state.tSpan / 2))
+          0, Math.min(timeCount() - state.tSpan, Math.round(tp - state.tSpan / 2))
         );
       }
       drawEquations();

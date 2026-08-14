@@ -487,3 +487,27 @@ html[data-theme="dark"] .cp-root {
 .cp-note-block b {
   color: var(--cp-text);
 }
+
+/* The two halves of the panel share one control strip. Whichever dataset is
+   showing, the other's controls are hidden rather than disabled: a greyed-out
+   "Source correlation" beside recorded data invites the reader to look for a
+   correlation they can set, and there is none.
+
+   ``display: contents`` on the visible group, not ``block``. The strip is a
+   flex row of controls, and a wrapper that stayed a flex item would put its
+   whole group into one cell instead of letting the controls flow. */
+.cp-sim-only {
+  display: contents;
+}
+
+.cp-real-only {
+  display: none;
+}
+
+.cp-root.cp-showing-real .cp-sim-only {
+  display: none;
+}
+
+.cp-root.cp-showing-real .cp-real-only {
+  display: contents;
+}
