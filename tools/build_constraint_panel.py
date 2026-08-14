@@ -151,7 +151,7 @@ LAYOUTS = (
         key="hpc-mpfc",
         label="hippocampus \u2013 mPFC",
         group="circuit",
-        labels=("Left-Hippocampus", "superiorfrontal-lh"),
+        labels=("Left-Hippocampus", "rostralanteriorcingulate-lh"),
     ),
     dict(
         key="amy-vmpfc",
@@ -181,7 +181,7 @@ LAYOUTS = (
         key="default-mode",
         label="mPFC \u2013 precuneus",
         group="circuit",
-        labels=("superiorfrontal-lh", "precuneus-lh"),
+        labels=("rostralanteriorcingulate-lh", "precuneus-lh"),
     ),
 )
 
@@ -206,9 +206,10 @@ DISPLAY_SAMPLES = 500
 WAVE_SAMPLES = 150
 SFREQ = 200.0
 SEED = 0
-# Every 8th source-space vertex. 938 sources keeps ReciPSIICOS, whose Gram is
-# quadratic in the source count, at about two seconds per configuration while
-# still being a real cortex rather than a sphere.
+# Every 14th source-space vertex, which leaves 586 cortical points at a median
+# spacing of 7.5 mm. That keeps ReciPSIICOS, whose Gram is quadratic in the
+# source count, at about two seconds per configuration while still being a real
+# cortex rather than a sphere.
 DECIMATION = 14
 N_BACKDROP = 4000
 # Subcortical sampling. The fine space is sampled densely and the scan grid
@@ -532,16 +533,304 @@ def _one_scene(info, fwd, fine, rank, combo, verbose):
     return scene, rows
 
 
-def recipsiicos_rank(info, fwd, verbose=True):
-    """Return the projection rank, a property of the forward not of the data."""
-    from advance_beamlab import recipsiicos_rank_curve
+def recipsiicos_rank(info, fwd, fine, layouts, verbose=True):
+    """Return the projection rank and the dimension of the space it lives in.
 
-    _, _, _, k_opt = recipsiicos_rank_curve(
-        fwd, info, method="whitened", return_optimal=True, verbose=False
+    The rank is computed once for the whole grid, from one representative scene,
+    rather than per configuration: it costs about thirty seconds and it is
+    stable across the grid, because every scene draws its interference from the
+    same field and differs only in how far that field is scaled, and a scalar on
+    the noise covariance cancels out of the whitened leadfield's spectrum.
+
+    Two things about this call are load bearing, and both were got wrong once.
+
+    It has to go through ``constraint_demo`` rather than call the rank curve
+    directly. Both the curve and the filter reduce the array to q virtual
+    sensors first, and q is a truncated SVD of the *whitened* leadfield, so a
+    curve built without the scenes' noise covariance lands on a different q:
+    that chose K* = 80 out of q^2 = 2401 and spent it out of 6084.
+
+    And it has to be handed the same forward the scenes get. ``true_forward``
+    decides which leadfield the background sources are projected through, so it
+    changes the interference, the noise covariance, the whitener and therefore q
+    again -- 78 without it against the 75 every scene in the grid actually uses.
+    A representative scene has to be representative in every argument that
+    reaches the covariance.
+    """
+    from advance_beamlab._explain import constraint_demo
+
+    layout = next(entry for entry in layouts if entry.get("n", 2) > 1)
+    demo = constraint_demo(
+        info,
+        fwd,
+        method="recipsiicos",
+        sources=layout["sources"],
+        n_sources=layout.get("n", 2),
+        separation=layout.get("sep", 0.04),
+        morphology="alpha",
+        correlation=CORRELATIONS[-1],
+        snr=SINGLE_TRIAL_SNR * TRIALS[-1] ** 0.5,
+        n_times=N_TIMES,
+        sfreq=SFREQ,
+        seed=SEED,
+        recipsiicos_rank=None,
+        true_forward=fine,
+        off_grid_sources=False,
+        verbose=False,
     )
+    k_opt = demo.extra["recipsiicos_rank"]
+    virtual = demo.extra["recipsiicos_virtual"]
+    if k_opt is None or virtual is None:
+        raise RuntimeError("constraint_demo did not report the rank it selected")
     if verbose:
-        print(f"ReciPSIICOS rank K* = {k_opt}, computed once for the whole grid")
-    return int(k_opt)
+        print(
+            f"ReciPSIICOS rank K* = {k_opt} of q^2 = {virtual**2} "
+            f"(q = {virtual} virtual sensors), chosen on the scenes' own "
+            "covariance and reused for the whole grid"
+        )
+    return int(k_opt), int(virtual)
+
+
+def algorithm_parameters():
+    """Every quantity each method actually forms, with its size.
+
+    The panel used to print one dimension table for all four methods, which was
+    only ever right for LCMV: switching to MCMV, ReciPSIICOS or ABMC changed the
+    equation above the table while the table itself stayed put, so the terms the
+    chosen method introduces -- the matrix MCMV inverts, the space ReciPSIICOS
+    projects in, the template ABMC matches, the iteration counts -- were never
+    given a size at all.
+
+    Sizes are written with placeholders the browser fills in from the current
+    selection: ``{C}`` channels, ``{V}`` scan points, ``{T}`` samples, ``{n}``
+    constrained sources, ``{K}`` projection rank, ``{q}`` virtual sensors and
+    ``{q2}`` for q squared. Defaults are read off the functions themselves so
+    that this cannot drift away from the code it describes.
+    """
+    import inspect
+
+    from advance_beamlab._abmc import make_abmc, sbl_covariance
+    from advance_beamlab._explain import constraint_demo
+
+    def default(fn, name):
+        return inspect.signature(fn).parameters[name].default
+
+    reg = default(constraint_demo, "reg")
+    template_p = default(constraint_demo, "template_p")
+    return dict(
+        lcmv=dict(
+            summary=(
+                "One scan point at a time. Every filter is solved on its own "
+                "and knows only its own location, so the problem is {V} "
+                "independent scalar constraints, never a system."
+            ),
+            rows=[
+                [
+                    "R<sup>-1</sup>g<sub>i</sub>",
+                    "one linear solve per scan point",
+                    "{C} &times; 1",
+                    "done {V} times, once per scanned point",
+                ],
+                [
+                    "g<sub>i</sub><sup>T</sup>R<sup>-1</sup>g<sub>i</sub>",
+                    "the denominator, and the whole constraint",
+                    "1 &times; 1",
+                    "a single number: the entire equation LCMV writes for a source",
+                ],
+                [
+                    "&lambda;",
+                    "diagonal loading",
+                    "1 &times; 1",
+                    f"regularisation {reg:g}, as a fraction of the mean eigenvalue "
+                    "of R",
+                ],
+            ],
+        ),
+        mcmv=dict(
+            summary=(
+                "All {n} constrained sources in one system. The locations have "
+                "to be known in advance, and the {n} &times; {n} matrix below "
+                "is what makes the whole constraint table an identity."
+            ),
+            rows=[
+                [
+                    "G<sub>s</sub>",
+                    "leadfields of the constrained set only",
+                    "{C} &times; {n}",
+                    "not the whole grid: only the sources named",
+                ],
+                [
+                    "A = R<sup>-1</sup>G<sub>s</sub>",
+                    "solve, all sources at once",
+                    "{C} &times; {n}",
+                    "one column per constrained source",
+                ],
+                [
+                    "B = G<sub>s</sub><sup>T</sup>R<sup>-1</sup>G<sub>s</sub>",
+                    "the matrix that is inverted",
+                    "{n} &times; {n}",
+                    "this inverse is the method. It grows with the number of "
+                    "sources, and it is what fails when two are too close to "
+                    "tell apart",
+                ],
+                [
+                    "I",
+                    "right-hand side",
+                    "{n} &times; {n}",
+                    "the constraint table is set equal to the identity, all "
+                    "{n2} entries of it at once",
+                ],
+                [
+                    "W = AB<sup>-1</sup>",
+                    "all filters together",
+                    "{C} &times; {n}",
+                    "solved jointly, so no filter can be built without the others",
+                ],
+                [
+                    "MAI map",
+                    "the search that finds the locations",
+                    "{V} &times; 1",
+                    "scan_mcmv adds one source at a time and rescans; the panel "
+                    "shows the first pass",
+                ],
+                [
+                    "&lambda;",
+                    "diagonal loading",
+                    "1 &times; 1",
+                    f"regularisation {reg:g}",
+                ],
+            ],
+        ),
+        recipsiicos=dict(
+            summary=(
+                "LCMV, but run on a covariance that has been edited first. The "
+                "edit happens in the space of vectorised covariances, which is "
+                "why the numbers below are so much larger than anything else on "
+                "this page."
+            ),
+            rows=[
+                [
+                    "vec(R)",
+                    "the covariance, unrolled into one vector",
+                    "{q2} &times; 1",
+                    "q = {q} virtual sensors after whitening, so this space has "
+                    "{q2} dimensions",
+                ],
+                [
+                    "G<sub>pwr</sub>",
+                    "the source-power subspace",
+                    "{q2} &times; {V}",
+                    "one column vec(g&thinsp;g<sup>T</sup>) per scan point: what a "
+                    "single uncorrelated source contributes to a covariance",
+                ],
+                [
+                    "U<sub>K</sub>",
+                    "its leading singular vectors",
+                    "{q2} &times; {K}",
+                    "K* = {K}, the 45-degree point of the retention curves. It "
+                    "depends on the noise covariance as well as the forward, "
+                    "because that is what sets q, so it is computed once on a "
+                    "representative scene rather than per configuration",
+                ],
+                [
+                    "P<sub>K</sub> = U<sub>K</sub>U<sub>K</sub><sup>T</sup>",
+                    "the projector",
+                    "{q2} &times; {q2}",
+                    "the largest array the whole page involves, and the reason "
+                    "the reduction to q virtual sensors happens first: at the "
+                    "full {C} channels this would be {C} squared on a side "
+                    "instead",
+                ],
+                [
+                    "R&#771;",
+                    "the projected covariance",
+                    "{q} &times; {q}",
+                    "folded back into a matrix, symmetrised, and handed to LCMV. "
+                    "Everything in the LCMV row set then applies to R&#771; "
+                    "instead of R",
+                ],
+            ],
+        ),
+        abmc=dict(
+            summary=(
+                "LCMV plus a second term that rewards output resembling a known "
+                "waveform. P sets what that resemblance is worth against staying "
+                "distortionless."
+            ),
+            rows=[
+                [
+                    "u",
+                    "the template waveform",
+                    "{T} &times; 1",
+                    "one time course, the thing the output is asked to look like",
+                ],
+                [
+                    "c",
+                    "template-constraint topography",
+                    "{C} &times; {V}",
+                    "one column per scan point: the sensor pattern that correlates "
+                    "with u at that location",
+                ],
+                [
+                    "lag search",
+                    "template alignment per scan point",
+                    "2&thinsp;&times;&thinsp;{T} &minus; 1 candidates",
+                    "each column picks its own lag before P is applied, so a "
+                    "sweep over P costs one solve rather than a rebuild",
+                ],
+                [
+                    "P",
+                    "constraint trade-off",
+                    "1 &times; 1",
+                    f"{template_p:g} here; at P = 0 this is exactly LCMV, and above "
+                    "a critical value the solution stops being stable",
+                ],
+                [
+                    "f",
+                    "distortionless target",
+                    "1 &times; 1",
+                    "g<sup>T</sup>w = f, the same unit-gain condition LCMV imposes",
+                ],
+                [
+                    "&beta;<sub>1</sub>",
+                    "the multiplier",
+                    "1 &times; 1",
+                    "one per scan point; &beta;<sub>2</sub> = P&thinsp;&beta;"
+                    "<sub>1</sub> is not free",
+                ],
+                [
+                    "w*",
+                    "the solution, in closed form",
+                    "{C} &times; 1",
+                    "f R<sup>-1</sup>(g + Pc) / g<sup>T</sup>R<sup>-1</sup>(g + Pc)",
+                ],
+                [
+                    "SBL covariance",
+                    "the R this method uses",
+                    "{C} &times; {C}",
+                    f"a sparse Bayesian estimate, up to "
+                    f"{default(sbl_covariance, 'max_iter')} iterations, tolerance "
+                    f"{default(sbl_covariance, 'tol'):g}",
+                ],
+                [
+                    "descent",
+                    "the paper's iteration",
+                    "{C} &times; {V} per step",
+                    f"available as method='iterative', up to "
+                    f"{default(make_abmc, 'max_iter'):,} steps at tolerance "
+                    f"{default(make_abmc, 'tol'):g}. The panel uses the closed form "
+                    "above, which is the point the descent converges to",
+                ],
+                [
+                    "template match",
+                    "the localiser",
+                    "{V} &times; 1",
+                    "scores resemblance to u, not power, so it is not comparable "
+                    "with the other three maps",
+                ],
+            ],
+        ),
+    )
 
 
 def run_grid(info, fwd, fine, layouts, rank, verbose=True):
@@ -609,19 +898,38 @@ class Packer:
         return b"".join(self.chunks)
 
 
-def _quantise(array, scale):
-    """Signed 16-bit, clipped, with the scale recorded by the caller."""
-    return np.clip(np.round(np.asarray(array) * scale), -32767, 32767)
+def _quantise(array, scale, name="array"):
+    """Signed 16-bit, with the scale recorded by the caller.
+
+    Saturation is an error rather than a clip. The mix block used to overflow a
+    fixed scale of 20000 in 67 of 816 scenes, which silently changed the sensor
+    recording the browser rebuilds.
+    """
+    out = np.round(np.asarray(array) * scale)
+    if np.abs(out).max(initial=0.0) > 32767:
+        raise ValueError(
+            f"{name} saturates int16 at scale {scale}: "
+            f"max |value| is {np.abs(np.asarray(array)).max():.6g}"
+        )
+    return out
 
 
-def _quantise8(array):
+def _quantise8(array, name="array"):
     """Signed 8-bit, for data that is only ever drawn as a line.
 
     A waveform plotted a few hundred pixels tall cannot show more than about one
     part in 200, so 8 bits is invisible here and halves the biggest blocks in the
-    payload.
+    payload. Saturation is an error: reconstructions were being scaled by the
+    *truth's* peak, so any that overshot were flattened to exactly the truth's
+    amplitude and became indistinguishable from a perfect recovery.
     """
-    return np.clip(np.round(np.asarray(array) * 127), -127, 127)
+    out = np.round(np.asarray(array) * 127)
+    if np.abs(out).max(initial=0.0) > 127:
+        raise ValueError(
+            f"{name} saturates int8: max |value| is "
+            f"{np.abs(np.asarray(array)).max():.6g}, which needs a larger scale"
+        )
+    return out
 
 
 def pack(scenes, results, positions, cortex, sensor_pos, layouts, model, verbose=True):
@@ -666,8 +974,9 @@ def pack(scenes, results, positions, cortex, sensor_pos, layouts, model, verbose
     # identically -- measured, the fraction of the grid above half the display
     # maximum was 0.500 for every one of them. Normalising alone is too peaky to
     # show any structure (0.2 per cent of the grid above half). The cube root
-    # sits between, and separates the methods: 1.9, 0.1, 8.7 and 5.7 per cent for
-    # LCMV, MCMV, ReciPSIICOS and ABMC on the same scene.
+    # sits between, and separates the methods: over the whole grid the fraction
+    # above half the display maximum is 4.6, 11.9, 33.2 and 29.2 per cent for
+    # LCMV, MCMV, ReciPSIICOS and ABMC.
     maps = []
     for r in results:
         m = np.asarray(r["power_map"], float)
@@ -677,30 +986,45 @@ def pack(scenes, results, positions, cortex, sensor_pos, layouts, model, verbose
     header["maps"] = packer.add(np.concatenate(maps), np.uint8)
 
     cut = slice(None, DISPLAY_SAMPLES)
+    wave_cut = slice(None, WAVE_SAMPLES)
     # Waveforms, variable in length because the scenes hold one, two or three
     # sources. The reader walks the same cumulative offsets from the scene list.
-    true_scale = [float(np.abs(s["true_tcs"]).max()) or 1.0 for s in scenes]
+    #
+    # Each block gets its own scale so that each uses the full 8-bit range, and
+    # the panel puts them back on a common footing when it draws them.
+    #
+    # Two wrong ways were tried first. Scaling the reconstruction by the truth's
+    # peak flattened any reconstruction that overshot the source to exactly the
+    # source's amplitude: 53 per cent of the one-trial traces were clipped, and
+    # a clipped trace cannot be told from a perfect recovery. Sharing one scale
+    # big enough for both then destroyed the truth's precision instead, since a
+    # reconstruction overshooting fifteenfold leaves the source three bits.
+    true_scale = [float(np.abs(s["true_tcs"][:, cut]).max()) or 1.0 for s in scenes]
+    recon_scale = [
+        float(np.abs(r["reconstructed"][:, wave_cut]).max()) or 1.0 for r in results
+    ]
     header["true_tcs"] = packer.add(
         np.concatenate(
             [
-                _quantise8(s["true_tcs"][:, cut] / k).ravel()
+                _quantise8(s["true_tcs"][:, cut] / k, "true_tcs").ravel()
                 for s, k in zip(scenes, true_scale, strict=True)
             ]
         ),
         np.int8,
     )
-    wave_cut = slice(None, WAVE_SAMPLES)
     header["reconstructed"] = packer.add(
         np.concatenate(
             [
-                _quantise8(
-                    r["reconstructed"][:, wave_cut] / true_scale[r["scene"]]
-                ).ravel()
-                for r in results
+                _quantise8(r["reconstructed"][:, wave_cut] / k, "reconstructed").ravel()
+                for r, k in zip(results, recon_scale, strict=True)
             ]
         ),
         np.int8,
     )
+    # Physical amplitudes, so the panel can draw truth and reconstruction on one
+    # scale per scene and keep the amplitude loss visible.
+    header["true_scale"] = [float(v) for v in true_scale]
+    header["recon_scale"] = [float(v) for v in recon_scale]
     header["waveform_scale"] = 20000.0
     header["byte_scale"] = 127.0
 
@@ -718,14 +1042,22 @@ def pack(scenes, results, positions, cortex, sensor_pos, layouts, model, verbose
         else:
             np.testing.assert_allclose(raw, unit_noise, atol=1e-9)
     noise_max = float(np.abs(unit_noise[:, cut]).max()) or 1.0
-    header["noise"] = packer.add(_quantise8(unit_noise[:, cut] / noise_max), np.int8)
+    header["noise"] = packer.add(
+        _quantise8(unit_noise[:, cut] / noise_max, "noise"), np.int8
+    )
 
     mix, noise_gain = [], []
     for s, k in zip(scenes, true_scale, strict=True):
         sensor_max = float(np.abs(s["sensor"][:, cut]).max()) or 1.0
         mix.append((s["leadfield"] * k / sensor_max).ravel())
         noise_gain.append(s["noise_scale"] * noise_max / sensor_max)
-    header["mix"] = packer.add(_quantise(np.concatenate(mix), 20000), np.int16)
+    # A scale taken from the data rather than a fixed one. At 20000 the mix
+    # block saturated int16 in 67 of 816 scenes, so the recording the browser
+    # rebuilt was not the recording that had been simulated.
+    flat_mix = np.concatenate(mix)
+    mix_scale = 32000.0 / max(float(np.abs(flat_mix).max()), 1e-30)
+    header["mix"] = packer.add(_quantise(flat_mix, mix_scale, "mix"), np.int16)
+    header["mix_scale"] = mix_scale
     header["noise_gain"] = [round(v, 6) for v in noise_gain]
 
     header["sensor_pos"] = packer.add(_quantise(sensor_pos, 20000), np.int16)
@@ -792,7 +1124,10 @@ def main(argv=None):
 
     info, fwd, fine, cortex, groups, model = build_forward(verbose)
     layouts = resolve_layouts(fwd, groups, verbose)
-    rank = recipsiicos_rank(info, fwd, verbose)
+    rank, virtual = recipsiicos_rank(info, fwd, fine, layouts, verbose)
+    model["algorithms"] = algorithm_parameters()
+    model["recipsiicos_rank"] = int(rank)
+    model["recipsiicos_virtual"] = int(virtual)
     scenes, results = run_grid(info, fwd, fine, layouts, rank, verbose)
     header, blob = pack(
         scenes,
