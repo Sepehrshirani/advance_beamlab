@@ -470,3 +470,20 @@ html[data-theme="dark"] .cp-root {
 .cp-provenance code {
   font-size: 0.95em;
 }
+
+/* Prose that explains the terms used in the sizes table. Kept inside the same
+   card, because the question it answers is raised by the table itself. */
+.cp-note-block {
+  margin: 0.7rem 0 0;
+  padding: 0.55rem 0.7rem;
+  background: var(--cp-bg);
+  border: 1px solid var(--cp-border);
+  border-radius: 5px;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--cp-muted);
+}
+
+.cp-note-block b {
+  color: var(--cp-text);
+}

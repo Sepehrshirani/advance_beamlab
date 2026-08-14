@@ -42,6 +42,16 @@ and readers reasonably ask: with a fixed-orientation model a single point's
 leadfield is one column of 203 numbers, not three, and the constraint table is
 only as big as the number of sources you have put down.
 
+Two terms in that table get explained underneath it, because both are load
+bearing and neither is obvious. A **constrained** source is one the method has
+been told about and writes an equation for, which is exactly what separates the
+first two methods: LCMV builds one filter per source, each knowing only its own
+location, while MCMV builds one system covering all of them. And **fixed** against
+**free** orientation decides whether a point contributes one leadfield column or
+three, which changes the size of every array downstream and is worth choosing
+deliberately: fixed when the cortical normal is a physiological statement you
+trust, free when it is not, as for a volume source that has no normal at all.
+
 The line that changes between the methods is short. LCMV minimises :math:`\mathbf{w}_1^{\mathsf T}
 \mathbf{R}\,\mathbf{w}_1` subject to one scalar equation. MCMV minimises
 :math:`\operatorname{tr}(\mathbf{W}^{\mathsf T}\mathbf{R}\,\mathbf{W})` subject

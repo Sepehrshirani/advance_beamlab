@@ -119,13 +119,15 @@
       ["G", "leadfield, whole scan grid", C + " &times; " + V,
         "channels &times; scanned points"],
       ["g<sub>i</sub>", "leadfield of one point", C + " &times; 1",
-        "one column, because the orientation is fixed; free orientation would " +
-        "make it " + C + " &times; 3"],
-      ["w<sub>i</sub>", "one filter", C + " &times; 1", "one weight per channel"],
-      ["W", "all filters here", C + " &times; " + n,
-        "one column per constrained source"],
+        "what one unit dipole at that point would put on every channel. One " +
+        "column here because this model is fixed orientation; see below"],
+      ["w<sub>i</sub>", "one filter", C + " &times; 1",
+        "one weight per channel. Its output at time t is a single number, " +
+        "w<sub>i</sub><sup>T</sup>x(t)"],
+      ["W", "the filters in play", C + " &times; " + n,
+        "one column per <em>constrained</em> source; see below"],
       ["W<sup>T</sup>G<sub>s</sub>", "constraint table", n + " &times; " + n,
-        "what the table on the right shows"],
+        "the table on the right: every filter's gain at every constrained source"],
       ["s&#770;", "reconstructed sources", n + " &times; " + T,
         "one row per source"],
       ["map", "localiser", V + " &times; 1", "one value per scanned point"],
@@ -139,7 +141,42 @@
             '</td><td class="cp-size">' + r[2] + "</td><td>" + r[3] + "</td></tr>";
         })
         .join("") +
-      "</table>"
+      "</table>" +
+      '<p class="cp-note-block"><b>&ldquo;Constrained&rdquo; source.</b> A source ' +
+      "the method is <em>told about</em> and writes an equation for. The " +
+      "distinction is the whole difference between the first two methods. LCMV " +
+      "constrains one at a time: it builds " + n + " separate filters, each " +
+      "knowing only its own location, so each carries a single equation and " +
+      "the scan grid's other " + (V - n) + " points are simply not mentioned. " +
+      "MCMV constrains all " + n + " jointly in one system, so it carries " +
+      n * n + " equations and has to be handed the locations in advance. " +
+      "Everything outside the constrained set is unconstrained for every method " +
+      "here, which is why the localiser is still free to peak in the wrong " +
+      "place.</p>" +
+      '<p class="cp-note-block"><b>Fixed against free orientation.</b> A dipole ' +
+      "has a direction as well as a position. <em>Fixed</em> assumes the " +
+      "direction is known, so a point contributes one leadfield column (" + C +
+      " &times; 1), its filter is one column, and its output is one number per " +
+      "sample. <em>Free</em> leaves the direction to be estimated, so the point " +
+      "contributes three orthogonal components (" + C + " &times; 3), the " +
+      "filter becomes " + C + " &times; 3, and the output is a three-vector " +
+      "that has to be reduced to a scalar, usually by taking the direction of " +
+      "maximum output power or the norm across the three.<br><br>" +
+      "Fixed is the better choice when the anatomy supplies a direction you " +
+      "trust. On a cortical surface it does: pyramidal cells run perpendicular " +
+      "to the sheet, so the surface normal is a physiological statement rather " +
+      "than a convenience. You get a third of the unknowns, a better " +
+      "conditioned problem, and a constraint table of " + n + " &times; " + n +
+      " instead of " + 3 * n + " &times; " + 3 * n + ".<br><br>" +
+      "Free is safer when that direction is not trustworthy: a coarse or " +
+      "poorly segmented surface, imperfect coregistration, or a volume source " +
+      "that has no normal at all. It costs three times the parameters and an " +
+      "orientation search that can chase noise at low signal-to-noise, and the " +
+      "amplitude it reports is a maximum over directions rather than a " +
+      "projection onto one. This panel is fixed throughout so that all four " +
+      "methods can be read off a single table of the same size, and the " +
+      "subcortical points, which genuinely have no normal, were each given the " +
+      "short principal axis of their own structure.</p>"
     );
   }
 
