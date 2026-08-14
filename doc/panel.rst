@@ -42,6 +42,24 @@ and readers reasonably ask: with a fixed-orientation model a single point's
 leadfield is one column of 203 numbers, not three, and the constraint table is
 only as big as the number of sources you have put down.
 
+That table comes in two parts, and the second changes with the method. The first
+holds what all four share: the recording, the covariance, the leadfields, the
+filters, the reconstruction. The second holds what the selected method adds on
+top, which is where the methods actually differ and where a single fixed table
+said nothing at all. Choose MCMV and it names the :math:`n \times n` matrix that
+is inverted, the one whose conditioning fails when two sources are too close to
+tell apart. Choose ReciPSIICOS and it gives the size of the space the projection
+happens in, which is neither the sensor space nor the source space but the space
+of vectorised covariances: :math:`q^2` dimensions for :math:`q` virtual sensors,
+with a projector :math:`q^2 \times q^2` on a side. That is the largest array
+anything on this page touches, and it is why the method reduces 203 channels to
+a few tens of virtual sensors before it starts. Choose ABMC and it names the
+template, the per-point lag search, the trade-off :math:`P`, the multiplier, and
+the iteration counts of both the sparse Bayesian covariance it uses and the
+gradient descent it replaces with a closed form. Every one of those numbers is
+written by the build from the functions themselves, so it cannot drift away from
+the code it describes.
+
 Two terms in that table get explained underneath it, because both are load
 bearing and neither is obvious. A **constrained** source is one the method has
 been told about and writes an equation for, which is exactly what separates the
@@ -60,6 +78,24 @@ objective with the rest of the table nailed down. ReciPSIICOS keeps LCMV's
 single constraint and replaces :math:`\mathbf{R}` with a projected
 :math:`\tilde{\mathbf{R}}`. ABMC keeps the distortionless constraint and adds a
 reward for output that resembles a known waveform, traded off by :math:`P`.
+
+ReciPSIICOS carries one free parameter, the projection rank, and it is worth
+knowing where the panel's came from. :math:`K^*` is chosen once by the 45-degree
+criterion of Kuznetsova et al., here **84 out of** :math:`q^2 = 5625`.
+
+The rank has to be chosen in the space it is spent in, and that is easier to get
+wrong than it looks. Both the selection curve and the filter first reduce the
+203 channels to :math:`q` virtual sensors by a truncated SVD of the *whitened*
+leadfield, so anything that changes the whitener changes :math:`q`, and a rank
+drawn from one :math:`q^2` and spent in another quietly stops meaning what it
+says. This page got it wrong twice. Selecting the rank from the forward alone,
+with no noise covariance, chose at :math:`q = 49` and spent at :math:`q = 78`.
+Selecting it from a scene that was missing the finer truth forward the rest of
+the grid uses changed which leadfield the interference was projected through,
+and so chose at :math:`q = 78` and spent at :math:`q = 75` -- 168 where the
+criterion wanted 84, a projector of twice the intended rank. The rank and its
+:math:`q` are now reported together in the sizes table, because neither number
+says anything on its own.
 
 .. raw:: html
 
@@ -101,10 +137,12 @@ the label it is named for. Subcortical targets come from the segmentation.
 
 The hippocampus needs a word, because a cortical surface has none. The source
 space here is **mixed**: the surface plus discrete sources inside the
-subcortical labels of the subject's ``aseg``, four millimetres apart, giving 54
-and 58 sources in the left and right hippocampus. Every one of them is kept in
-the scan grid rather than decimated away, so the structure is genuinely
-searchable rather than a cortical stand-in.
+subcortical labels of the subject's ``aseg``, three millimetres apart. That
+volume grid is decimated five to one for the scan, which still leaves 30 points
+in each hippocampus, 15 and 13 in the amygdalae and 59 and 64 in the thalami:
+211 subcortical points against 586 cortical ones. The structures are genuinely
+searchable rather than cortical stand-ins, and they are decimated far less
+aggressively than the surface because they are small.
 
 That comes with a modelling choice worth stating. A volume source carries no
 surface normal, so a fixed-orientation forward cannot be built from one
@@ -128,9 +166,19 @@ moving it with LCMV and MCMV in turn.
 experimenter actually controls. A single trial of an evoked MEG response sits
 well below unit sensor signal-to-noise; this panel takes 0.2 as the single-trial
 value, and averaging :math:`N` trials buys a factor of :math:`\sqrt{N}`, so the
-two settings are 0.20 and 2.0. Watching the localisation error fall as you
-average is the most honest argument for collecting more trials that this page
-can make.
+two settings are 0.20 and 2.0.
+
+This control moves two things in opposite directions, and that is worth sitting
+with rather than explaining away. Averaging always improves **localisation**:
+the median error over the correlated scenes falls from 9.5 mm to 0 mm with a
+matched model, and from 15.9 mm to 9.0 mm with a realistic one. But averaging
+makes LCMV's **cancellation worse**, not better: at :math:`r = 0.99` its
+delivered amplitude falls from 0.51 at one trial to 0.03 at a hundred. Nothing
+has broken. Cancellation is a property of the clean covariance, and at one trial
+the noise is large enough that the filter cannot adapt sharply enough to perform
+it. Averaging removes the noise that was accidentally protecting the source.
+More data buys a better answer about *where*, and a more sharply wrong answer
+about *how much*, unless the constraint is fixed.
 
 The correlation is exact for any number of sources. Two sinusoids can be given
 any correlation by a phase shift, but three cannot, so the simulation instead
@@ -146,43 +194,71 @@ mean anything.
 
 **The interference is mostly brain, not sensor noise.** Three hundred sources
 spread over the brain carry 1/f activity, and that accounts for three quarters
-of the interference; white sensor noise is the remaining quarter. This is what
-makes the sensor traces look like resting MEG rather than a clean simulation,
-and it changes the answers: LCMV's recovered amplitude at :math:`r = 0.99` moved
-from 0.23 to 0.49 when the background was added, because the covariance the
-filter optimises against is a different matrix. At one trial the background
-dominates the traces, which is the honest picture of what a single trial of MEG
-looks like.
+of the interference power; white sensor noise is the remaining quarter. This is
+what makes the sensor traces look like resting MEG rather than a clean
+simulation.
+
+How much it changes the numbers depends entirely on how much data you have. The
+comparison below is again one scene rather than the grid, because the panel does
+not store a background-free variant to read off: a realistic head model, a
+correlated pair 6 cm apart at :math:`r = 0.9`, alpha. Rerun with the background
+removed, LCMV's delivered amplitude at a hundred trials barely moves, 0.19
+against 0.18, because with that much averaging the filter is shaped by the
+sources rather than by the interference. At a single trial it moves a great
+deal: 0.16 without the background against 0.06 with it. Structured brain
+interference is the harder problem, and it is hardest exactly where real
+single-trial work lives.
 
 **The head model control decides whether the sources are where the beamformer
 looks**, and the two settings exist because no single choice can show everything.
 
 With **matched** selected, the sources sit exactly on points the beamformer
 scans and the data are generated with the very leadfield being inverted. That is
-an inverse crime, and its symptom is unmistakable: a single source is localised
-to 0 mm at every signal-to-noise ratio, because no amount of noise moves a
-matched filter off its own node. Read that zero as a property of the simulation,
-not a claim about any method. What the matched setting buys is the only clean
-view of what the *constraint* does, with everything else held exact: MCMV
-recovers about 1.6 times the amplitude LCMV does at high correlation, and that
-ratio is the whole point of the page.
+an inverse crime, and its symptom is unmistakable: LCMV, MCMV and ABMC localise
+every single matched source to exactly 0 mm, at both signal-to-noise settings,
+because nothing can move a matched filter off its own node. Read those zeros as
+a property of the simulation, not a claim about any method.
 
-With **realistic** selected, the sources are taken from the full 7498-vertex
-forward while the beamformer still scans a decimated 751-point grid, so they sit
-a few millimetres from anything any method can report. The localisation error
-becomes what a localiser actually produces: none of it is zero, the median is
-around 8 mm, and the tail runs to several centimetres where the methods
-genuinely fail.
+ReciPSIICOS is the exception, and it is an instructive one. It misses the same
+single sources by up to 15 mm, because it does not localise on the covariance it
+was given: it projects that covariance first, and the projection moves the peak
+even when the model is exact. A method that edits the covariance gives up the
+inverse crime's free lunch along with everything else it gives up.
+
+What the matched setting buys is the only clean view of what the *constraint*
+does, with everything else held exact. At :math:`r = 0.99` and a hundred trials
+LCMV delivers 0.03 of the source amplitude while MCMV delivers 1.00, ReciPSIICOS
+0.82 and ABMC 1.02. That gap is the whole point of the page, and it is a gap
+rather than a ratio: LCMV's delivered amplitude passes through zero and changes
+sign under strong cancellation, so dividing by it means nothing.
+
+With **realistic** selected, the sources are taken from the full 9248-point
+forward while the beamformer still scans the decimated 797-point grid, so they
+sit a few millimetres from anything any method can report. The localisation
+error becomes what a localiser actually produces: not one configuration in the
+whole grid reports zero, the median is 11.4 mm, and the tail runs past 60 mm
+where the methods genuinely fail.
 
 The price is worth understanding, because it is a real result rather than a
-limitation of the panel. Under a mismatched model **every method loses its
-amplitude, and by almost exactly the same amount**: the MCMV to LCMV ratio falls
-from 1.6 to 1.01. A beamformer pointed at a slightly wrong location does not pass
-a weakened copy of the source, it actively nulls it, so a few millimetres of
-model error costs more amplitude than the entire cancellation effect the
-constraint was protecting against. That is the single most practical thing on
-this page: **the constraint only buys you anything if your head model and
+limitation of the panel. Under a mismatched model a beamformer pointed at a
+slightly wrong location does not pass a weakened copy of the source, it actively
+nulls it, and at a hundred trials that costs more amplitude than the entire
+cancellation effect the constraint was protecting against. At :math:`r = 0.99`
+MCMV falls from 1.00 to 0.06, which is barely distinguishable from LCMV's 0.03.
+**The joint constraint only buys you anything if your head model and
 coregistration are good enough to use it.**
+
+The methods do not all fail the same way, though, and that is the most useful
+thing here. ReciPSIICOS holds 0.85 and ABMC 0.59 under the model error that
+takes MCMV from 1.00 to 0.06. Neither is told where the sources are: one edits
+the covariance and the other matches a waveform, and neither writes an equation
+at a location that turns out to be wrong. What a wrong location destroys is the
+methods that needed the location in the first place.
+
+Read the two head models together rather than picking one. Matched says MCMV's
+constraint is worth a factor of thirty over LCMV; realistic says you will not
+collect it unless your coregistration earns it, and that a method which never
+names a location keeps more of what it had.
 
 The background activity is identical in both settings, so switching between them
 changes the source placement and nothing else. Read the realistic errors as a
@@ -219,12 +295,17 @@ show at once, and it was wrong: a rank map is a uniform ramp whatever the
 underlying shape, so all four rendered identically. Measured, the fraction of the
 grid above half the display maximum was 0.500 for every method. Normalising
 without compression goes too far the other way and leaves two bright dots on an
-empty brain. The cube root sits between and separates them.
+empty brain. The cube root sits between and separates them: averaged over the
+whole grid, that same fraction now reads 10.6 per cent for LCMV, 7.0 for MCMV,
+15.8 for ReciPSIICOS and 33.9 for ABMC, which is the spread the methods actually
+have.
 
 The markers on the simulated sources are drawn as unfilled rings for a related
 reason: a filled marker sitting on a peak hides the one thing you are trying to
-check. They are drawn at the sources' real positions, which are not grid points,
-so a ring will not usually sit under a cross even when the method is right.
+check. They are drawn at the sources' real positions. Under the realistic head
+model those are not grid points, so a ring will not usually sit under a cross even
+when the method is right; under the matched model they are grid points, and the
+two coincide exactly whenever the method has found the source.
 
 The sensor panel shows a field map beside the traces. The traces carry all 203
 gradiometers over two and a half seconds: drag to move through channels and
@@ -250,6 +331,48 @@ The true and recovered waveforms are drawn on one shared scale per scene, so a
 reconstruction that lost half its amplitude looks like it lost half its
 amplitude. Normalising each trace to its own peak would have made every method
 look equally good, which is the opposite of the point.
+
+The **amplitude delivered** readout is what the filter does to the source's
+amplitude: each constrained source's gain, weighted by how much of this source's
+waveform it carries, which for a pair is :math:`\mathbf{w}_i^{\mathsf T}
+\mathbf{g}_i + r\,\mathbf{w}_i^{\mathsf T}\mathbf{g}_j`. There is no noise in
+it, so it says what the filter does rather than how well one short recording
+measures it.
+
+Two other definitions were tried and rejected, and the reason is worth stating
+because both look reasonable. The figures below are one scene rather than the
+grid, since neither rejected measure is stored in the panel: a correlated pair
+6 cm apart at :math:`r = 0.9`, alpha, one averaged trial.
+
+The output's own amplitude over the truth's is not a recovery measure at all.
+The output is the source plus whatever interference survives the filter, so it
+reads **5.65 for LCMV and 5.75 for MCMV** on that scene, separating the two by
+two per cent where the filters deliver 0.13 and 1.00 respectively. A measure
+that cannot tell apart filters differing by a factor of seven is measuring the
+noise, not the recovery. Regressing the output on the true waveform is far
+better behaved and agrees with the delivered amplitude in expectation, but it is
+still estimated from one short noisy recording: on the same scene it returns
+0.21 where the filter delivers 0.13.
+
+Read a value below 100 per cent as cancellation and one above it as leakage,
+where a positive off-diagonal adds a correlated neighbour instead of subtracting
+it. Leakage is the minority case, from 3.4 per cent of configurations for LCMV
+to 26.5 for ReciPSIICOS, and it is more common at one trial than at a hundred,
+9.6 against 5.4 per cent with a matched model, because a filter with too
+little
+data to adapt degenerates towards a non-adaptive one with poor spatial
+selectivity. In a percent or two of configurations the delivered amplitude comes
+out **negative**: the filter returns an inverted copy of the source, which
+taking a magnitude would have hidden completely. It happens most to LCMV, at
+2.7 per
+cent, and never to MCMV, whose constraint forbids it. The readout beside the
+constraint table carries the sign for exactly that reason.
+
+MCMV delivers exactly 1.000 in every *matched* configuration, at every
+correlation and every signal-to-noise ratio, because its constraint fixes the
+whole table rather than one entry. Switch the head model to realistic and that
+guarantee is gone, 0.06 at :math:`r = 0.99`, because the table it pins is the
+table at the wrong locations.
 
 The last panel sweeps the whole correlation axis at the current settings, for all
 four methods at once, plotting both recovered amplitude and localisation error
