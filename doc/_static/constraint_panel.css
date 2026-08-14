@@ -8,7 +8,7 @@
   --cp-border: #d5d7de;
   --cp-text: #202124;
   --cp-muted: #63666e;
-  --cp-grid: #c9ccd4;
+  --cp-grid: #a9aebb;
   --cp-true: #6b7078;
   --cp-accent: #0072b2;
   --cp-warm: #c8452e;
@@ -23,7 +23,7 @@ html[data-theme="dark"] .cp-root {
   --cp-border: #333a44;
   --cp-text: #e6e8eb;
   --cp-muted: #9aa0aa;
-  --cp-grid: #39404a;
+  --cp-grid: #6d7887;
   --cp-true: #9aa0aa;
   --cp-accent: #4aa3df;
   --cp-warm: #e2705a;

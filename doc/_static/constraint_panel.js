@@ -25,10 +25,10 @@
     matched:
       "<b>Matched head model.</b> The sources sit exactly on points the " +
       "beamformer scans, and the data are generated with the very leadfield " +
-      "being inverted. That is an inverse crime: a single source is then " +
-      "localised to 0 mm however much noise there is, because nothing can move " +
-      "a matched filter off its own node. Read the error here as a floor, not " +
-      "a result. What this setting buys is the only clean view of what the " +
+      "being inverted. That is an inverse crime: a single source usually " +
+      "localises to exactly 0 mm, because little can move a matched filter off " +
+      "its own node. Read the error here as a floor rather than a result. " +
+      "What this setting buys is the only clean view of what the " +
       "<em>constraint</em> does, with every other source of error held at zero.",
     realistic:
       "<b>Realistic head model.</b> The sources are taken from a finer forward " +
@@ -108,9 +108,23 @@
     },
   };
 
+  /* Sizes written by the build with {C}-style placeholders, so the numbers
+   * come from the model that was actually used rather than from this file. */
+  function fillSizes(text, S) {
+    return String(text).replace(/\{(\w+)\}/g, function (whole, key) {
+      return Object.prototype.hasOwnProperty.call(S, key) ? S[key] : whole;
+    });
+  }
+
   /* What each symbol in the equation above actually is, at the current
-   * selection. Readers ask this constantly and the algebra never says it. */
-  function dimensions(P, n) {
+   * selection. Readers ask this constantly and the algebra never says it.
+   *
+   * The first table holds only what all four methods share. Everything a
+   * method introduces on top of that -- the matrix MCMV inverts, the space
+   * ReciPSIICOS projects in, ABMC's template and its iteration counts -- comes
+   * from the build in P.model.algorithms, because a table that did not change
+   * with the method left those terms with no size at all. */
+  function dimensions(P, n, method) {
     var C = P.n_channels, V = P.n_sources;
     var T = (P.model && P.model.n_times_simulated) || P.n_times_simulated;
     var rows = [
@@ -132,16 +146,43 @@
         "one row per source"],
       ["map", "localiser", V + " &times; 1", "one value per scanned point"],
     ];
+    function table(list) {
+      return (
+        '<table class="cp-dims"><tr><th>symbol</th><th>what it is</th>' +
+        "<th>size</th><th></th></tr>" +
+        list
+          .map(function (r) {
+            return "<tr><td class=\"cp-sym\">" + r[0] + "</td><td>" + r[1] +
+              '</td><td class="cp-size">' + r[2] + "</td><td>" + r[3] +
+              "</td></tr>";
+          })
+          .join("") +
+        "</table>"
+      );
+    }
+
+    var algo = (P.model && P.model.algorithms && P.model.algorithms[method]) || null;
+    var extra = "";
+    if (algo) {
+      var S = {
+        C: C, V: V, T: T, n: n, n2: n * n,
+        K: (P.model && P.model.recipsiicos_rank) || 0,
+        q: (P.model && P.model.recipsiicos_virtual) || 0,
+      };
+      S.q2 = S.q * S.q;
+      extra =
+        "<h5>What " + METHOD_LABEL[method] + " adds on top</h5>" +
+        '<p class="cp-hint">' + fillSizes(algo.summary, S) + "</p>" +
+        table(
+          algo.rows.map(function (r) {
+            return [r[0], r[1], fillSizes(r[2], S), fillSizes(r[3], S)];
+          })
+        );
+    }
+
     return (
-      '<table class="cp-dims"><tr><th>symbol</th><th>what it is</th>' +
-      "<th>size</th><th></th></tr>" +
-      rows
-        .map(function (r) {
-          return "<tr><td class=\"cp-sym\">" + r[0] + "</td><td>" + r[1] +
-            '</td><td class="cp-size">' + r[2] + "</td><td>" + r[3] + "</td></tr>";
-        })
-        .join("") +
-      "</table>" +
+      table(rows) +
+      extra +
       '<p class="cp-note-block"><b>&ldquo;Constrained&rdquo; source.</b> A source ' +
       "the method is <em>told about</em> and writes an equation for. The " +
       "distinction is the whole difference between the first two methods. LCMV " +
@@ -191,7 +232,9 @@
   var VIEWS = {
     Left: [Math.PI / 2, 0],
     Right: [-Math.PI / 2, 0],
-    Top: [0, -Math.PI / 2 + 0.001],
+    // Positive elevation puts the camera above the head. Negative looked
+    // plausible but rendered an inferior view with the nose at the bottom.
+    Top: [0, Math.PI / 2 - 0.001],
     Front: [Math.PI, 0],
   };
 
@@ -277,8 +320,10 @@
     var truePos = view(P.true_positions);
     var gscale = P.geometry_scale;
     var wscale = P.waveform_scale;
-    // Waveforms are stored as bytes; everything else keeps 16 bits.
+    // Waveforms are stored as bytes; everything else keeps 16 bits. The mix
+    // block carries its own scale, chosen from the data so it cannot saturate.
     var bscale = P.byte_scale;
+    var mscale = P.mix_scale || wscale;
     var nT = P.n_times;
     var nW = P.wave_times;
     var nSrc = P.n_sources;
@@ -583,7 +628,7 @@
     function sensorAt(scene, channel, t) {
       var n = nOf(scene), v = 0;
       for (var i = 0; i < n; i++) {
-        v += (mix[mixOff[scene] + channel * n + i] / wscale) *
+        v += (mix[mixOff[scene] + channel * n + i] / mscale) *
           (trueTcs[trueOff[scene] + i * nT + t] / bscale);
       }
       return v + P.noise_gain[scene] * (noise[channel * nT + t] / bscale);
@@ -637,18 +682,25 @@
       var X = function (v) { return cx + v[0] * scale; };
       var Y = function (v) { return cy - v[1] * scale; };
 
-      pts.sort(function (u, v) { return u[2] - v[2]; });
+      /* Far first, so nearer points paint over them. The third component is
+       * distance *from* the viewer, so this sorts descending; ascending drew
+       * the far half of the head on top of the near half. */
+      pts.sort(function (u, v) { return v[2] - u[2]; });
       var backdrop = css(root, "--cp-grid");
       for (i = 0; i < pts.length; i++) {
         var pt = pts[i];
-        var depth = (pt[2] - minD) / (maxD - minD || 1);
+        var near = 1 - (pt[2] - minD) / (maxD - minD || 1);
         if (pt[3] < 0) {
+          /* Strong depth contrast, because a flat wash of dots reads as a
+           * cloud rather than a head and gives no clue which end is frontal.
+           * Near points are brighter and larger than far ones. */
           ctx.fillStyle = backdrop;
-          ctx.globalAlpha = 0.1 + 0.3 * depth;
-          ctx.fillRect(X(pt), Y(pt), 1.5, 1.5);
+          ctx.globalAlpha = 0.08 + 0.62 * near * near;
+          var sz = 1.3 + 1.3 * near;
+          ctx.fillRect(X(pt), Y(pt), sz, sz);
         } else {
           var rgb = rampColour(pt[4]);
-          ctx.globalAlpha = (0.2 + 0.8 * pt[4]) * (0.45 + 0.55 * depth);
+          ctx.globalAlpha = (0.2 + 0.8 * pt[4]) * (0.45 + 0.55 * near);
           ctx.fillStyle = "rgb(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ")";
           ctx.beginPath();
           ctx.arc(X(pt), Y(pt), 1.4 + 4.5 * pt[4] * pt[4], 0, 6.2832);
@@ -667,8 +719,9 @@
        * Painted last regardless of depth, a hippocampus reads as sitting on the
        * surface of the brain and the left and right of a pair look inconsistent
        * as you rotate, because whichever is behind is still drawn in front. */
-      function depthOf(q) {
-        return Math.max(0, Math.min(1, (q[1] - minD) / (maxD - minD || 1)));
+      // Nearness, not depth: one at the front of the head, zero at the back.
+      function nearnessOf(d) {
+        return 1 - Math.max(0, Math.min(1, (d - minD) / (maxD - minD || 1)));
       }
       var markers = [];
       truth.forEach(function (t) {
@@ -687,10 +740,10 @@
           markers.push({ d: Math.min(t[2], best[2]), kind: "link", p: t, q: best });
         }
       });
-      markers.sort(function (u, v) { return u.d - v.d; });
+      markers.sort(function (u, v) { return v.d - u.d; });
       markers.forEach(function (mk) {
         // Behind the middle of the head: dimmer and thinner, so depth reads.
-        var front = depthOf([0, mk.d]);
+        var front = nearnessOf(mk.d);
         ctx.globalAlpha = 0.3 + 0.7 * front;
         if (mk.kind === "link") {
           ctx.setLineDash([4, 3]);
@@ -720,11 +773,53 @@
         }
       });
       ctx.globalAlpha = 1;
+      /* An orientation gizmo, because a rotated point cloud gives a reader no
+       * way to tell the frontal pole from the occipital one. The three head
+       * axes are drawn through the same rotation as the brain: +x to the right
+       * ear, +y to the nose, +z to the vertex. Whichever end points towards the
+       * viewer is drawn solid and labelled; the other end is faint. */
+      (function gizmo() {
+        var ox = 34, oy = c.h - 34, len = 22;
+        var axes = [
+          [[1, 0, 0], "R", "L"],
+          [[0, 1, 0], "A", "P"],
+          [[0, 0, 1], "S", "I"],
+        ];
+        ctx.font = "bold 10px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        axes.forEach(function (a) {
+          var p3 = rotated(a[0][0], a[0][1], a[0][2]);
+          var vx = p3[0], vy = p3[2], vd = p3[1];
+          [1, -1].forEach(function (sign) {
+            var towards = sign * vd <= 0;
+            ctx.globalAlpha = towards ? 0.95 : 0.28;
+            ctx.strokeStyle = css(root, "--cp-muted");
+            ctx.lineWidth = towards ? 1.6 : 1;
+            ctx.beginPath();
+            ctx.moveTo(ox, oy);
+            ctx.lineTo(ox + sign * vx * len, oy - sign * vy * len);
+            ctx.stroke();
+            ctx.fillStyle = towards
+              ? css(root, "--cp-text")
+              : css(root, "--cp-muted");
+            ctx.fillText(
+              sign > 0 ? a[1] : a[2],
+              ox + sign * vx * (len + 8),
+              oy - sign * vy * (len + 8)
+            );
+          });
+        });
+        ctx.globalAlpha = 1;
+        ctx.textAlign = "left";
+        ctx.textBaseline = "alphabetic";
+      })();
+
       ctx.fillStyle = css(root, "--cp-muted");
       ctx.font = "12px system-ui, sans-serif";
       ctx.fillText(
         "error " + res.peak_errors.map(function (v) { return v.toFixed(0); }).join(", ") +
-        " mm", 10, c.h - 10
+        " mm", 72, c.h - 12
       );
     }
 
@@ -900,16 +995,24 @@
       ctx.fillRect(0, 0, c.w, c.h);
       var pad = 8;
       var lane = (c.h - 2 * pad) / n;
+      /* Each block is stored at its own scale so neither loses precision; they
+       * are put back on one scale here, which is what makes a reconstruction
+       * that lost half its amplitude look like it did. */
+      var tScale = P.true_scale[cur.scene];
+      var rScale = P.recon_scale[cur.result];
+      var shared = Math.max(tScale, rScale);
       for (var k = 0; k < n; k++) {
         [
-          [trueTcs, trueOff[cur.scene] + k * nT, css(root, "--cp-true"), 1.1],
-          [recon, reconOff[cur.result] + k * nW, methodColour(), 1.7],
+          [trueTcs, trueOff[cur.scene] + k * nT, css(root, "--cp-true"), 1.1,
+            tScale / shared],
+          [recon, reconOff[cur.result] + k * nW, methodColour(), 1.7,
+            rScale / shared],
         ].forEach(function (spec) {
           ctx.beginPath();
           ctx.strokeStyle = spec[2];
           ctx.lineWidth = spec[3];
           for (var t = 0; t < nW; t++) {
-            var v = spec[0][spec[1] + t] / bscale;
+            var v = (spec[0][spec[1] + t] / bscale) * spec[4];
             var x = pad + (t / (nW - 1)) * (c.w - 2 * pad);
             var y = pad + lane * (k + 0.5) - v * lane * 0.42;
             if (t === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
@@ -992,7 +1095,12 @@
           ctx.globalAlpha = 1;
         });
       }
-      panel(padT, half, "amp", 1.2, "amplitude");
+      var ampTop = 1.2;
+      series.forEach(function (x) {
+        x.amp.forEach(function (v) { ampTop = Math.max(ampTop, v); });
+      });
+      ampTop = Math.ceil(ampTop * 10) / 10;
+      panel(padT, half, "amp", ampTop, "amplitude");
       panel(padT + half + 16, half, "err",
         Math.max(10, Math.ceil(maxErr / 10) * 10), "error (mm)");
       ctx.fillStyle = css(root, "--cp-muted");
@@ -1030,22 +1138,30 @@
       }
       root.querySelector("#cp-gains").innerHTML = html;
 
+      /* Signed, because the sign is the whole distinction: a negative
+       * off-diagonal is the filter subtracting a neighbour, a positive one is
+       * the neighbour leaking in. Reporting the magnitude called both
+       * "cancelling". */
       var worst = 0;
       for (i = 0; i < n; i++) {
         for (j = 0; j < n; j++) {
-          if (i !== j) worst = Math.max(worst, Math.abs(g[i][j]));
+          if (i !== j && Math.abs(g[i][j]) > Math.abs(worst)) worst = g[i][j];
         }
+      }
+      var behaviour = "none";
+      if (n > 1) {
+        behaviour =
+          Math.abs(worst) <= 0.2 ? "controlled" : worst < 0 ? "cancelling" : "leaking";
       }
       root.querySelector("#cp-readout").innerHTML =
         '<div><span>Largest off-diagonal</span><strong>' +
-        (n > 1 ? worst.toFixed(3) : "n/a") + "</strong></div>" +
-        '<div><span>Amplitude recovered</span><strong>' +
+        (n > 1 ? (worst >= 0 ? "+" : "") + worst.toFixed(3) : "n/a") +
+        "</strong></div>" +
+        '<div><span>Amplitude delivered</span><strong>' +
         (res.amplitude_ratio[0] * 100).toFixed(0) + "%</strong></div>" +
         '<div><span>Localisation error</span><strong>' +
         res.peak_errors[0].toFixed(0) + " mm</strong></div>" +
-        '<div><span>Cancelling?</span><strong>' +
-        (n > 1 ? (worst > 0.2 ? "yes" : "no") : "nothing to cancel") +
-        "</strong></div>";
+        '<div><span>Neighbour</span><strong>' + behaviour + "</strong></div>";
     }
 
     function drawEquations() {
@@ -1071,10 +1187,27 @@
         " &nbsp;&rarr;&nbsp; " + (res.amplitude_ratio[0] * 100).toFixed(0) +
         "% of the amplitude survives, peak " + res.peak_errors[0].toFixed(0) +
         " mm from the source</div>" +
+        '<p class="cp-note-block"><b>What &ldquo;amplitude delivered&rdquo; ' +
+        "means.</b> It is what this filter does to the source's amplitude: each " +
+        "constrained source's gain, weighted by how much of this source's " +
+        "waveform it carries. There is no noise in it, so it says what the " +
+        "filter <em>does</em> rather than how well one short recording measures " +
+        "it.<br><br>" +
+        "Below 100 per cent is cancellation: the filter is subtracting a " +
+        "correlated neighbour and taking the target with it, and the " +
+        "off-diagonal is negative. Above 100 per cent is the opposite failure, " +
+        "leakage, where a positive off-diagonal adds the neighbour instead. The " +
+        "readout beside the constraint table gives that entry with its sign, so " +
+        "the two cases can be told apart at a glance.<br><br>" +
+        "The obvious measure, the output's own amplitude over the truth's, was " +
+        "tried and rejected: the output is the source plus whatever " +
+        "interference survives, so at one trial it reads about 570 per cent for " +
+        "both LCMV and MCMV, separating them by two per cent where the filters " +
+        "themselves differ by a factor of seven.</p>" +
         '<div class="cp-eq-note">' + HEAD_NOTE[P.head_models[state.head]] +
         "</div>" +
         "<h5>The sizes of everything in that equation</h5>" +
-        dimensions(P, n) +
+        dimensions(P, n, P.methods[state.method]) +
         (m
           ? '<p class="cp-provenance">Head model: MNE\u2019s <code>' + m.subject +
             "</code> subject, " + m.bem + ", " + m.channels + " " +
@@ -1115,6 +1248,17 @@
         "--cp-cross-colour", methodColour()
       );
       state.chan0 = Math.min(state.chan0, nCh - state.chanShown);
+      /* Keep the instant the field map refers to inside the drawn window. The
+       * card says the map is "the field at the instant marked on the traces",
+       * and with a fixed default window that instant fell outside it for most
+       * scenes, so no marker was drawn and the map referred to something not on
+       * screen. */
+      var tp = P.topography_time[cur.scene];
+      if (tp < state.tStart || tp >= state.tStart + state.tSpan) {
+        state.tStart = Math.max(
+          0, Math.min(nT - state.tSpan, Math.round(tp - state.tSpan / 2))
+        );
+      }
       drawEquations();
       drawBrain();
       drawTopo();
