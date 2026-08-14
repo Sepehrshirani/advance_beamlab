@@ -35,8 +35,14 @@ so the cancellation has less to work with. ABMC keeps a constraint but trades
 the distortionless one against a match to a known waveform. Both leave a visible
 signature in the table.
 
-The panel opens with the problem each method is solving, and the line that
-changes between them is short. LCMV minimises :math:`\mathbf{w}_1^{\mathsf T}
+The panel opens with the problem each method is solving, the sizes of every
+quantity in it at the current settings, and a note on which head model is in use
+and what that costs. The sizes are there because the algebra never states them
+and readers reasonably ask: with a fixed-orientation model a single point's
+leadfield is one column of 203 numbers, not three, and the constraint table is
+only as big as the number of sources you have put down.
+
+The line that changes between the methods is short. LCMV minimises :math:`\mathbf{w}_1^{\mathsf T}
 \mathbf{R}\,\mathbf{w}_1` subject to one scalar equation. MCMV minimises
 :math:`\operatorname{tr}(\mathbf{W}^{\mathsf T}\mathbf{R}\,\mathbf{W})` subject
 to :math:`\mathbf{W}^{\mathsf T}\mathbf{G} = \mathbf{I}`, which is the same

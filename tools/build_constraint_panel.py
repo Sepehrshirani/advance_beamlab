@@ -318,12 +318,12 @@ def build_forward(verbose=True):
     )
     fwd = mne.forward.restrict_forward_to_stc(fine, stc)
 
+    rr = fwd["source_rr"]
+    gaps = [
+        np.sort(np.linalg.norm(rr - rr[i], axis=1))[1] * 1000
+        for i in range(0, sum(len(v) for v in verts[:2]), 41)
+    ]
     if verbose:
-        rr = fwd["source_rr"]
-        gaps = [
-            np.sort(np.linalg.norm(rr - rr[i], axis=1))[1] * 1000
-            for i in range(0, sum(len(v) for v in verts[:2]), 41)
-        ]
         print(
             f"scan grid: {fwd['sol']['data'].shape[1]} sources "
             f"({len(verts[0]) + len(verts[1])} cortical at {np.median(gaps):.1f} mm, "
@@ -342,7 +342,23 @@ def build_forward(verbose=True):
             "  subcortical in the scan grid: "
             + ", ".join(f"{n} {c}" for n, c in groups)
         )
-    return info, fwd, fine, cortex, groups
+    model = dict(
+        subject="sample",
+        bem="single-layer BEM, 5120 triangles",
+        channels=int(fwd["nchan"]),
+        channel_type="gradiometers",
+        n_scan=int(fwd["sol"]["data"].shape[1]),
+        n_cortical=int(fwd["src"][0]["nuse"] + fwd["src"][1]["nuse"]),
+        n_subcortical=int(fwd["src"][2]["nuse"]),
+        cortical_spacing_mm=round(float(np.median(gaps)), 1),
+        n_truth=int(fine["sol"]["data"].shape[1]),
+        surface="oct-6",
+        subcortical_structures=[name for name, _ in groups],
+        orientation="fixed",
+        sfreq=SFREQ,
+        n_times_simulated=N_TIMES,
+    )
+    return info, fwd, fine, cortex, groups, model
 
 
 def resolve_layouts(fwd, groups, verbose=True):
@@ -608,7 +624,7 @@ def _quantise8(array):
     return np.clip(np.round(np.asarray(array) * 127), -127, 127)
 
 
-def pack(scenes, results, positions, cortex, sensor_pos, layouts, verbose=True):
+def pack(scenes, results, positions, cortex, sensor_pos, layouts, model, verbose=True):
     """Quantise everything into one gzipped buffer plus a JSON header."""
     packer = Packer()
     header = dict(
@@ -633,6 +649,7 @@ def pack(scenes, results, positions, cortex, sensor_pos, layouts, verbose=True):
         n_times_simulated=N_TIMES,
         sfreq=SFREQ,
         n_sources=int(positions.shape[0]),
+        model=model,
     )
 
     # Geometry, in millimetres and centred, so int16 is plenty of resolution.
@@ -773,7 +790,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     verbose = not args.quiet
 
-    info, fwd, fine, cortex, groups = build_forward(verbose)
+    info, fwd, fine, cortex, groups, model = build_forward(verbose)
     layouts = resolve_layouts(fwd, groups, verbose)
     rank = recipsiicos_rank(info, fwd, verbose)
     scenes, results = run_grid(info, fwd, fine, layouts, rank, verbose)
@@ -784,6 +801,7 @@ def main(argv=None):
         cortex,
         sensor_layout(info),
         layouts,
+        model,
         verbose,
     )
 

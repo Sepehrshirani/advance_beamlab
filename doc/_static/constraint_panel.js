@@ -21,6 +21,24 @@
     abmc: "ABMC",
   };
   var HEAD_LABEL = { matched: "matched", realistic: "realistic" };
+  var HEAD_NOTE = {
+    matched:
+      "<b>Matched head model.</b> The sources sit exactly on points the " +
+      "beamformer scans, and the data are generated with the very leadfield " +
+      "being inverted. That is an inverse crime: a single source is then " +
+      "localised to 0 mm however much noise there is, because nothing can move " +
+      "a matched filter off its own node. Read the error here as a floor, not " +
+      "a result. What this setting buys is the only clean view of what the " +
+      "<em>constraint</em> does, with every other source of error held at zero.",
+    realistic:
+      "<b>Realistic head model.</b> The sources are taken from a finer forward " +
+      "than the one being scanned, so they sit a few millimetres from anything " +
+      "any method can report, as on real data. Localisation error becomes " +
+      "meaningful. The price is that every method now loses amplitude for the " +
+      "same reason, so the constraint contrast largely disappears: a filter " +
+      "pointed slightly wrong <em>nulls</em> a source rather than passing a " +
+      "weakened copy of it. That is the practical lesson of this control.",
+  };
   var MORPH_LABEL = {
     theta: "theta 6 Hz",
     alpha: "alpha 10 Hz",
@@ -89,6 +107,41 @@
         "with the burst morphology, the regime it was designed for.",
     },
   };
+
+  /* What each symbol in the equation above actually is, at the current
+   * selection. Readers ask this constantly and the algebra never says it. */
+  function dimensions(P, n) {
+    var C = P.n_channels, V = P.n_sources;
+    var T = (P.model && P.model.n_times_simulated) || P.n_times_simulated;
+    var rows = [
+      ["X", "sensor recording", C + " &times; " + T, "channels &times; samples"],
+      ["R", "data covariance", C + " &times; " + C, "channels &times; channels"],
+      ["G", "leadfield, whole scan grid", C + " &times; " + V,
+        "channels &times; scanned points"],
+      ["g<sub>i</sub>", "leadfield of one point", C + " &times; 1",
+        "one column, because the orientation is fixed; free orientation would " +
+        "make it " + C + " &times; 3"],
+      ["w<sub>i</sub>", "one filter", C + " &times; 1", "one weight per channel"],
+      ["W", "all filters here", C + " &times; " + n,
+        "one column per constrained source"],
+      ["W<sup>T</sup>G<sub>s</sub>", "constraint table", n + " &times; " + n,
+        "what the table on the right shows"],
+      ["s&#770;", "reconstructed sources", n + " &times; " + T,
+        "one row per source"],
+      ["map", "localiser", V + " &times; 1", "one value per scanned point"],
+    ];
+    return (
+      '<table class="cp-dims"><tr><th>symbol</th><th>what it is</th>' +
+      "<th>size</th><th></th></tr>" +
+      rows
+        .map(function (r) {
+          return "<tr><td class=\"cp-sym\">" + r[0] + "</td><td>" + r[1] +
+            '</td><td class="cp-size">' + r[2] + "</td><td>" + r[3] + "</td></tr>";
+        })
+        .join("") +
+      "</table>"
+    );
+  }
 
   var RAMP = [
     [0.0, 60, 75, 105],
@@ -276,10 +329,27 @@
       "</span></div></div>" +
 
       '<div class="cp-card cp-half"><h4>The constraint table</h4>' +
-      '<p class="cp-hint">Row <em>i</em> is the filter for source <em>i</em>, column ' +
-      "<em>j</em> its gain at source <em>j</em>. The diagonal is what the " +
-      "distortionless constraint pins. The off-diagonal is what LCMV leaves free, " +
-      "and where the cancellation lives.</p>" +
+      '<p class="cp-hint">Every entry is ' +
+      "w<sub>i</sub><sup>T</sup>g<sub>j</sub>: what the filter built for source " +
+      "<em>i</em> passes of source <em>j</em>. Row <em>i</em> is therefore one " +
+      "filter, read across all the sources in the scene.<br><br>" +
+      "<b>The diagonal is the distortionless constraint.</b> Every method here " +
+      "pins it to one, which is what makes their outputs comparable at all: a " +
+      "filter that returns the source at unit gain is measuring amplitude in " +
+      "the source's own units.<br><br>" +
+      "<b>The off-diagonal is the part that is left free</b>, and it is where " +
+      "the whole correlated-source problem lives. LCMV never mentions it, so " +
+      "the minimiser sets it to whatever lowers output power most. When two " +
+      "sources are correlated, subtracting a scaled copy of one from the other " +
+      "does exactly that, so the entry runs to a large negative value and takes " +
+      "the target's amplitude with it. MCMV adds the equations that pin it to " +
+      "zero. ReciPSIICOS leaves the constraint alone and removes the " +
+      "correlation from the covariance instead, so cancelling stops paying. " +
+      "ABMC trades the diagonal itself against a template match.<br><br>" +
+      "Red is positive, blue negative, and stronger colour means further from " +
+      "zero. The numbers are measured by passing a scene containing only source " +
+      "<em>j</em> through the finished filter, not read out of the stored " +
+      "weights, because the methods keep their weights in different spaces.</p>" +
       '<table class="cp-table" id="cp-gains"></table>' +
       '<div class="cp-readout" id="cp-readout"></div></div>' +
 
@@ -301,7 +371,8 @@
       '<p class="cp-hint">One shared scale per scene, so a reconstruction that lost ' +
       "half its amplitude looks like it did. Grey is simulated, colour is the " +
       "selected method.</p>" +
-      '<canvas id="cp-wave"></canvas></div>' +
+      '<canvas id="cp-wave"></canvas>' +
+      '<div class="cp-legend" id="cp-wave-key"></div></div>' +
 
       '<div class="cp-card cp-half"><h4>How it changes with correlation</h4>' +
       '<p class="cp-hint">The whole correlation axis at the current settings, for ' +
@@ -812,6 +883,13 @@
         ctx.font = "11px system-ui, sans-serif";
         ctx.fillText("source " + (k + 1), 8, pad + lane * k + 12);
       }
+      root.querySelector("#cp-wave-key").innerHTML =
+        '<span class="cp-key"><i style="background:' + css(root, "--cp-true") +
+        ';width:14px;height:2px"></i>simulated</span>' +
+        '<span class="cp-key"><i style="background:' + methodColour() +
+        ';width:14px;height:3px"></i>recovered by ' +
+        (METHOD_LABEL[P.methods[state.method]]) + "</span>" +
+        '<span class="cp-key">' + (nW / sfreq).toFixed(2) + " s shown</span>";
     }
 
     function drawSweep() {
@@ -944,6 +1022,7 @@
         live += ", &nbsp;w<sub>1</sub><sup>T</sup>g<sub>2</sub> = <b>" +
           (g[0][1] >= 0 ? "+" : "") + g[0][1].toFixed(3) + "</b>";
       }
+      var m = P.model || null;
       root.querySelector("#cp-equations").innerHTML =
         "<h4>What " + (METHOD_LABEL[P.methods[state.method]]) + " is solving</h4>" +
         '<div class="cp-eq-row"><span class="cp-eq-main">' + eq.objective +
@@ -951,18 +1030,26 @@
         eq.subject + "</span></div>" +
         '<div class="cp-eq-sol">' + eq.solution + "</div>" +
         '<p class="cp-hint">' + eq.note + "</p>" +
-        (P.head_models[state.head] === "realistic"
-          ? '<div class="cp-eq-note">Realistic head model: the sources sit ' +
-            "where no method can scan them, as on real data. Localisation error " +
-            "becomes meaningful, and every method loses amplitude for the same " +
-            "reason, so the constraint contrast is no longer visible here. " +
-            "Switch to <b>matched</b> to see what the constraint alone does." +
-            "</div>"
-          : "") +
         '<div class="cp-eq-live">with the controls where they are: ' + live +
         " &nbsp;&rarr;&nbsp; " + (res.amplitude_ratio[0] * 100).toFixed(0) +
         "% of the amplitude survives, peak " + res.peak_errors[0].toFixed(0) +
-        " mm from the source</div>";
+        " mm from the source</div>" +
+        '<div class="cp-eq-note">' + HEAD_NOTE[P.head_models[state.head]] +
+        "</div>" +
+        "<h5>The sizes of everything in that equation</h5>" +
+        dimensions(P, n) +
+        (m
+          ? '<p class="cp-provenance">Head model: MNE\u2019s <code>' + m.subject +
+            "</code> subject, " + m.bem + ", " + m.channels + " " +
+            m.channel_type + ". Scan grid " + m.n_scan + " points: " +
+            m.n_cortical + " on an " + m.surface + " cortical surface at " +
+            m.cortical_spacing_mm + " mm, plus " + m.n_subcortical + " inside " +
+            m.subcortical_structures.length + " subcortical structures (" +
+            m.subcortical_structures.join(", ").replace(/-Proper/g, "") +
+            "). Truth drawn from " + m.n_truth + " points. Orientation " +
+            m.orientation + ", covariance estimated from " + m.n_times_simulated +
+            " samples at " + m.sfreq + " Hz.</p>"
+          : "");
     }
 
     function render() {

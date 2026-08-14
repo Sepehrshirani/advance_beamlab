@@ -237,3 +237,18 @@ def test_lcmv_cancels_where_mcmv_does_not(header):
         assert abs(mcmv["gains"][0][1]) < 1e-5
         checked += 1
     assert checked >= 4
+
+
+def test_the_model_describes_itself(header):
+    """The panel states its own provenance, so the numbers have to be real."""
+    model = header["model"]
+    assert model["channels"] == header["n_channels"]
+    assert model["n_scan"] == header["n_sources"]
+    assert model["n_cortical"] + model["n_subcortical"] == model["n_scan"]
+    # The truth is drawn from a finer forward than the one being scanned; that
+    # difference is what the realistic head model rests on.
+    assert model["n_truth"] > model["n_scan"]
+    assert model["orientation"] == "fixed"
+    assert model["sfreq"] == header["sfreq"]
+    assert 2.0 < model["cortical_spacing_mm"] < 20.0
+    assert any("Hippocampus" in name for name in model["subcortical_structures"])

@@ -411,3 +411,62 @@ html[data-theme="dark"] .cp-root {
 .cp-group-label:first-child {
   margin-top: 0;
 }
+
+/* The sizes table under the equation. Readers ask what every symbol actually is
+   far more often than they ask what the equation means. */
+.cp-eq h5 {
+  margin: 0.9rem 0 0.35rem;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--cp-muted);
+}
+
+.cp-dims {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.82rem;
+}
+
+.cp-dims th {
+  text-align: left;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--cp-muted);
+  border-bottom: 1px solid var(--cp-border);
+  padding: 0.2rem 0.5rem 0.2rem 0;
+}
+
+.cp-dims td {
+  padding: 0.22rem 0.5rem 0.22rem 0;
+  border-bottom: 1px solid var(--cp-border);
+  vertical-align: top;
+  color: var(--cp-muted);
+}
+
+.cp-dims td.cp-sym {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1rem;
+  color: var(--cp-text);
+  white-space: nowrap;
+}
+
+.cp-dims td.cp-size {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--cp-text);
+}
+
+.cp-provenance {
+  margin: 0.75rem 0 0;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--cp-border);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--cp-muted);
+}
+
+.cp-provenance code {
+  font-size: 0.95em;
+}
