@@ -324,115 +324,28 @@ def _measure_gains(apply_fn, columns, n_times):
     return table
 
 
-@verbose
-def constraint_demo(
+def _build_filters(
     info,
     forward,
+    data_cov,
+    noise_cov,
+    sources,
+    sensor,
     *,
-    method="lcmv",
-    n_sources=2,
-    sources=None,
-    morphology="alpha",
-    separation=0.04,
-    correlation=0.9,
-    snr=3.0,
-    n_times=1000,
-    sfreq=200.0,
-    reg=0.05,
-    seed=0,
-    true_forward=None,
-    off_grid_sources=True,
-    template_p=0.03,
-    recipsiicos_rank=None,
-    verbose=None,
+    method,
+    reg,
+    template,
+    template_p,
+    recipsiicos_rank,
 ):
-    """Simulate a multi-source scene and reconstruct it with one method.
+    """Build one method's filters and its localiser, for any covariance.
 
-    Everything the interactive panel shows comes from here, so that the panel
-    and the local explorer cannot drift apart.
+    Split out of :func:`constraint_demo` so that a real recording runs through
+    exactly the same path as a simulated one. Only ABMC needed anything from the
+    simulation -- the waveform it matches -- so that arrives as ``template``
+    rather than being taken from the truth, which real data does not have.
 
-    Parameters
-    ----------
-    info : mne.Info
-        Measurement info matching ``forward``.
-    forward : mne.Forward
-        Fixed-orientation forward solution.
-    method : str
-        ``'lcmv'``, ``'mcmv'``, ``'recipsiicos'`` or ``'abmc'``.
-    sources : array-like of int | None
-        Grid indices to place the sources at, overriding ``n_sources`` and
-        ``separation``. Use it to put them in named anatomical regions.
-    n_sources : int
-        How many sources to simulate, ignored when ``sources`` is given. One has
-        nothing to cancel against and is
-        the control case; two is the classic correlated pair; three shows what
-        happens when a beamformer is given fewer constraints than there are
-        active sources.
-    morphology : str
-        ``'theta'``, ``'alpha'`` or ``'beta'`` for a modulated rhythm at 6, 10 or
-        20 Hz, or ``'transient'`` for a train of short bursts, which is the
-        regime ABMC is aimed at.
-    separation : float
-        Requested distance between the sources, in metres. The nearest
-        available pair on the grid is used, and the achieved distance is
-        reported.
-    correlation : float
-        Requested pairwise correlation between the source waveforms, achieved
-        exactly for any number of sources by mixing one shared factor and one
-        private factor per source in proportions ``sqrt(r)`` and
-        ``sqrt(1 - r)``.
-    snr : float
-        Ratio of clean sensor standard deviation to noise standard deviation.
-    n_times : int
-        Samples to simulate. The covariance is estimated from these, so it wants
-        to be several times the channel count: below about five samples per
-        channel the estimate is rank deficient, MNE says so, and the numbers
-        move with it.
-    sfreq : float
-        Sampling frequency in Hz.
-    reg : float
-        Covariance regularisation passed to the beamformer.
-    seed : int
-        Seed for the interference, the waveforms and the off-grid placement. The
-        grid points themselves are chosen deterministically from the geometry.
-    true_forward : mne.Forward | None
-        A finer forward the simulated sources are taken from, while ``forward``
-        stays the grid the beamformer scans. Without it the sources sit exactly
-        on scanned grid nodes and the same leadfield generates and inverts the
-        data, which is an inverse crime: the localiser then peaks on the true
-        node almost every time and reports zero error. Supplying the
-        undecimated forward puts the sources where no method can scan them,
-        which is the situation on real data. It is also the grid the ongoing
-        background activity is drawn from, whether or not the sources move.
-    off_grid_sources : bool
-        Whether ``true_forward`` moves the sources as well as supplying the
-        background. Setting it ``False`` keeps the sources on scanned grid
-        points, which is the only way to see what the constraint itself does,
-        while leaving the background identical so the two cases stay comparable.
-    template_p : float
-        ``P`` for ABMC. Ignored by the other methods.
-    recipsiicos_rank : int | None
-        Projection rank for ReciPSIICOS. ``None`` selects it from the rank
-        curve. Ignored by the other methods.
-    %(verbose)s
-
-    Returns
-    -------
-    demo : instance of ConstraintDemo
-        The scene, the constraint table and the reconstruction.
-
-    Notes
-    -----
-    The constraint table is measured through the public apply path rather than
-    read out of the stored weights, because the methods keep their weights in
-    different spaces and the arrays are not comparable. See the module
-    docstring.
-
-    MCMV is given the true source locations, as its definition requires, so its
-    ``power_map`` is the sequential search's localiser rather than a map the
-    filter itself produces. That difference is the point rather than an
-    inconsistency: MCMV reconstructs sources it is told about, and
-    :func:`~advance_beamlab.scan_mcmv` is what finds them.
+    Returns ``(apply_fn, power_map, recipsiicos_space)``.
     """
     import mne
     from mne.beamformer import apply_lcmv, apply_lcmv_cov, make_lcmv
@@ -442,114 +355,7 @@ def constraint_demo(
     from ._mcmv import apply_mcmv, make_mcmv
     from ._recipsiicos import make_recipsiicos_lcmv, recipsiicos_rank_curve
 
-    _check_option("method", method, _METHODS)
-    _check_option("morphology", morphology, _MORPHOLOGIES)
-    if int(n_sources) < 1:
-        raise ValueError(f"n_sources must be at least 1, got {n_sources}")
-    gain = forward["sol"]["data"]
-    rr = forward["source_rr"]
-    if sources is None:
-        sources = _pick_sources(forward, int(n_sources), separation)
-    else:
-        sources = [int(v) for v in sources]
-
-    # Where the sources really are. Taken from a finer forward when one is
-    # supplied, so they sit between the points the beamformer scans rather than
-    # exactly on them. Without this the localiser peaks on the true node in
-    # essentially every configuration and reports 0 mm, which is an artefact of
-    # the simulation rather than a property of any method.
-    if true_forward is not None:
-        fine_rr = true_forward["source_rr"]
-        fine_gain = true_forward["sol"]["data"]
-        # The background comes from the fine grid either way. Drawing it from
-        # different grids in the two cases would give them different
-        # interference, and the comparison between them is the whole point.
-        background_gain = fine_gain
-    else:
-        background_gain = gain
-
-    if true_forward is not None and off_grid_sources:
-        place = np.random.default_rng(seed + 991)
-        true_idx = []
-        for s in sources:
-            offsets = np.linalg.norm(fine_rr - rr[s], axis=1)
-            near = np.flatnonzero((offsets > 1e-6) & (offsets < _OFFSET_SEARCH))
-            column = gain[:, s]
-            column = column / (np.linalg.norm(column) or 1.0)
-            others = fine_gain[:, near]
-            others = others / (np.linalg.norm(others, axis=0) + 1e-30)
-            # Signed, not absolute. Taking the magnitude accepted candidates
-            # whose leadfield is the *negative* of the scanned node's as a
-            # "0.95 match", and the reconstruction then came back as the truth
-            # with its sign flipped: 11 of the 34 source placements the panel
-            # builds were polarity inverted.
-            match = column @ others
-            ok = near[(match >= _LEADFIELD_MATCH[0]) & (match <= _LEADFIELD_MATCH[1])]
-            if ok.size == 0:  # pragma: no cover - only on a very coarse mesh
-                ok = near[np.argsort(np.abs(match - np.mean(_LEADFIELD_MATCH)))[:1]]
-            # Reject any candidate that is itself a point the beamformer scans.
-            # The finer forward overlaps the scan grid wherever the scan grid was
-            # taken from it, so without this a "true" source lands on a scanned
-            # node often enough to bring the inverse crime back: it accounted for
-            # one localisation error in seven coming out at exactly zero.
-            gap = np.linalg.norm(fine_rr[ok][:, None, :] - rr[None, :, :], axis=2).min(
-                axis=1
-            )
-            off_grid = ok[gap > _ON_GRID_TOLERANCE]
-            true_idx.append(int(place.choice(off_grid if off_grid.size else ok)))
-        true_gain = fine_gain[:, true_idx]
-        true_positions = fine_rr[true_idx]
-    else:
-        true_gain = gain[:, sources]
-        true_positions = rr[sources]
-
-    times, true_tcs, sensor, noise, noise_scale = _simulate(
-        true_gain,
-        correlation,
-        snr,
-        n_times,
-        sfreq,
-        seed,
-        morphology,
-        background_gain,
-    )
-    if len(sources) > 1:
-        off = np.corrcoef(true_tcs)[np.triu_indices(len(sources), k=1)]
-        achieved_r = float(np.mean(off))
-        # Between the sources that were simulated, not between the grid nodes
-        # standing in for them: under a realistic head model those differ by up
-        # to 17 mm, and the panel was printing the node distance as the source
-        # separation.
-        achieved_sep = float(
-            np.mean(
-                [
-                    np.linalg.norm(true_positions[i] - true_positions[j])
-                    for i in range(len(sources))
-                    for j in range(i + 1, len(sources))
-                ]
-            )
-        )
-    else:
-        achieved_r = 0.0
-        achieved_sep = 0.0
-    logger.info(
-        f"    constraint_demo: {method}, {len(sources)} {morphology} source(s), "
-        f"separation {achieved_sep * 100:.1f} cm, r = {achieved_r:.3f}, SNR {snr:g}."
-    )
-
-    def _cov(x):
-        # ``.copy()`` is load bearing. EpochsArray applies the info's projectors
-        # to the array it is handed, in place and without copying first, so
-        # without this the simulated recording is average referenced behind the
-        # caller's back and no longer equals its own leadfield times its own
-        # source waveforms plus noise. The covariance is unaffected either way,
-        # since EpochsArray projects its own copy regardless.
-        ep = mne.EpochsArray(x[None].copy(), info, tmin=0.0, verbose=False)
-        return mne.compute_covariance(ep, method="empirical", verbose=False)
-
-    data_cov, noise_cov = _cov(sensor), _cov(noise)
     recipsiicos_space = (None, None)
-
     if method in ("lcmv", "recipsiicos"):
         if method == "lcmv":
             filters = make_lcmv(
@@ -665,7 +471,6 @@ def constraint_demo(
         power_map = np.nan_to_num(np.asarray(scan["maps"][0]))
 
     else:  # abmc
-        template = true_tcs[0] / np.abs(true_tcs[0]).max()
         result = make_abmc(
             info,
             forward,
@@ -682,6 +487,529 @@ def constraint_demo(
             return w.T @ x
 
         power_map = np.abs(np.asarray(result.template_match))
+
+    return apply_fn, power_map, recipsiicos_space
+
+
+@dataclass
+class EvokedDemo:
+    """One real recording, reconstructed by one method.
+
+    The simulated counterpart, :class:`ConstraintDemo`, can compare everything
+    against a truth it generated. Here there is none, so the fields that would
+    have needed one are absent rather than filled with a stand-in. What survives
+    is the part that never needed a truth in the first place: the constraint
+    table is the filters' response to the leadfields of the constrained
+    locations, and it is measurable on any data at all.
+
+    Attributes
+    ----------
+    method : str
+        The method used.
+    condition : str
+        The evoked condition, e.g. ``'Auditory/Left'``.
+    sources : list of int
+        Grid indices of the two constrained locations, one per hemisphere.
+    positions : ndarray, shape (n_sources, 3)
+        Their positions in head coordinates, in metres.
+    separation : float
+        Distance between them, in metres.
+    correlation : float
+        Correlation between the two source waveforms as estimated by the
+        *joint* filter. Read off per-source LCMV traces instead and a strongly
+        correlated pair can read as uncorrelated, through the very filter whose
+        cancellation the correlation is meant to explain.
+    times : ndarray, shape (n_times,)
+        Time axis in seconds, with zero at stimulus onset.
+    sensor_data : ndarray, shape (n_channels, n_times)
+        The averaged recording, in tesla per metre.
+    gains : ndarray, shape (n_sources, n_sources)
+        The constraint table, measured exactly as in the simulated case.
+    reconstructed : ndarray, shape (n_sources, n_times)
+        Recovered waveforms.
+    amplitude_ratio : ndarray, shape (n_sources,)
+        What the filter does to each source's amplitude, given how correlated
+        the pair is. Same expression as the simulated case, but the waveform
+        overlap is estimated by the joint filter rather than known.
+    power_map : ndarray, shape (n_grid,)
+        The localiser.
+    peaks : ndarray
+        Grid indices of the localiser's strongest points, as many as there are
+        sources.
+    reference : ndarray, shape (n_reference, 3)
+        Positions of an independent estimate -- a sequential dipole fit -- in
+        head coordinates. Not a truth: another method's answer, with its own
+        assumptions, which is why the field is not called one.
+    reference_gof : ndarray, shape (n_reference,)
+        Goodness of fit of each dipole, in per cent.
+    reference_distance : ndarray, shape (n_sources,)
+        Distance from each localiser peak to the nearest reference dipole, in
+        metres. A disagreement between two methods, not an error.
+    n_trials : int
+        Epochs averaged.
+    window : tuple of float
+        The window the data covariance was computed over, in seconds.
+    """
+
+    method: str
+    condition: str
+    sources: list
+    positions: np.ndarray
+    separation: float
+    correlation: float
+    times: np.ndarray
+    sensor_data: np.ndarray
+    gains: np.ndarray
+    reconstructed: np.ndarray
+    amplitude_ratio: np.ndarray
+    power_map: np.ndarray
+    peaks: np.ndarray
+    reference: np.ndarray
+    reference_gof: np.ndarray
+    reference_distance: np.ndarray
+    n_trials: int
+    window: tuple
+    extra: dict = field(default_factory=dict)
+
+
+def evoked_sources(info, forward, data_cov, noise_cov, *, reg=0.05):
+    """Return the strongest LCMV grid point in each hemisphere.
+
+    The locations are chosen once per recording and handed to all four methods,
+    because comparing filters that were constrained at different places compares
+    nothing. A coarse grid is not good enough for this: on the panel's own
+    7.5 mm scan grid the right-hemisphere peak of the auditory response lands in
+    parietal cortex and the pair stops being correlated at all, which is why the
+    real recording is analysed on the undecimated surface.
+    """
+    from mne.beamformer import apply_lcmv_cov, make_lcmv
+
+    filters = make_lcmv(
+        info,
+        forward,
+        data_cov,
+        reg=reg,
+        noise_cov=noise_cov,
+        weight_norm="unit-noise-gain",
+        verbose=False,
+    )
+    power = np.asarray(apply_lcmv_cov(data_cov, filters, verbose=False).data).ravel()
+    n_lh = int(forward["src"][0]["nuse"])
+    n_cortex = n_lh + int(forward["src"][1]["nuse"])
+    return [
+        int(np.argmax(power[:n_lh])),
+        n_lh + int(np.argmax(power[n_lh:n_cortex])),
+    ]
+
+
+@verbose
+def evoked_demo(
+    info,
+    forward,
+    evoked,
+    data_cov,
+    noise_cov,
+    sources,
+    *,
+    method="lcmv",
+    condition="",
+    n_trials=0,
+    window=(0.0, 0.0),
+    reference=None,
+    reference_gof=None,
+    reference_tcs=None,
+    reg=0.05,
+    template_p=0.03,
+    recipsiicos_rank=None,
+    verbose=None,
+):
+    """Reconstruct a real averaged recording with one method.
+
+    Runs the same filters, the same constraint table and the same localiser as
+    :func:`constraint_demo`, on data that was recorded rather than simulated.
+
+    Parameters
+    ----------
+    info : mne.Info
+        Measurement info matching ``forward`` and ``evoked``.
+    forward : mne.Forward
+        Fixed-orientation forward covering the search grid.
+    evoked : mne.Evoked
+        The averaged response.
+    data_cov, noise_cov : mne.Covariance
+        Active-window and baseline covariances.
+    sources : list of int
+        The constrained grid points, from :func:`evoked_sources`.
+    method : str
+        ``'lcmv'``, ``'mcmv'``, ``'recipsiicos'`` or ``'abmc'``.
+    condition : str
+        Label carried through to the result.
+    n_trials : int
+        How many epochs went into ``evoked``, carried through to the result.
+    window : tuple of float
+        The active window, carried through to the result.
+    reference : ndarray | None
+        Independent dipole positions, in metres.
+    reference_gof : ndarray | None
+        Their goodness of fit, in per cent.
+    reference_tcs : ndarray | None
+        Source waveforms used to weight the constraint table into a delivered
+        amplitude. These should come from the joint filter; without them the
+        pair is treated as uncorrelated, which understates the cancellation.
+    reg : float
+        Diagonal loading, as a fraction of the mean eigenvalue.
+    template_p : float
+        ABMC's constraint trade-off.
+    recipsiicos_rank : int | None
+        Projection rank. Selected from the data when ``None``.
+    %(verbose)s
+
+    Returns
+    -------
+    demo : instance of EvokedDemo
+        The reconstruction, the constraint table and the localiser.
+
+    Notes
+    -----
+    ABMC matches a known waveform, and on real data there is no known waveform
+    to hand it. It is given the single-source LCMV reconstruction at the first
+    constrained location, which is what an experimenter would have: a first
+    estimate of the time course, used to sharpen the second pass.
+    """
+    from mne.beamformer import apply_lcmv, make_lcmv
+
+    _check_option("method", method, _METHODS)
+    sources = [int(v) for v in sources]
+    sensor = np.asarray(evoked.data, float)
+    gain = forward["sol"]["data"]
+    rr = forward["source_rr"]
+    n_times = sensor.shape[1]
+
+    # ABMC needs a template. On simulated data that is the truth; here it is the
+    # ordinary LCMV estimate of the first source, normalised.
+    plain = make_lcmv(
+        info,
+        forward,
+        data_cov,
+        reg=reg,
+        noise_cov=noise_cov,
+        weight_norm=None,
+        verbose=False,
+    )
+    seed = np.asarray(apply_lcmv(evoked, plain, verbose=False).data)[sources[0]]
+    template = seed / max(float(np.abs(seed).max()), 1e-300)
+
+    apply_fn, power_map, recipsiicos_space = _build_filters(
+        info,
+        forward,
+        data_cov,
+        noise_cov,
+        sources,
+        sensor,
+        method=method,
+        reg=reg,
+        template=template,
+        template_p=template_p,
+        recipsiicos_rank=recipsiicos_rank,
+    )
+
+    gains = _measure_gains(apply_fn, gain[:, sources], n_times)
+    reconstructed = apply_fn(sensor)
+
+    # Same expression as the simulated case. The overlap is estimated rather
+    # than known, so it is only as good as the joint reconstruction it comes
+    # from -- but treating the pair as uncorrelated would be worse, and would
+    # quietly report every method as distortionless.
+    basis = reference_tcs if reference_tcs is not None else reconstructed
+    basis = np.asarray(basis, float)
+    overlap = basis @ basis.T
+    energy = np.maximum(np.diag(overlap), 1e-300)
+    ratio = (gains * (overlap.T / energy[:, None])).sum(axis=1)
+
+    peaks = np.argsort(power_map)[::-1][: len(sources)]
+    if reference is None or len(reference) == 0:
+        reference = np.zeros((0, 3))
+        reference_gof = np.zeros(0)
+        distance = np.full(len(sources), np.nan)
+    else:
+        reference = np.asarray(reference, float)
+        reference_gof = np.asarray(
+            reference_gof if reference_gof is not None else np.zeros(len(reference)),
+            float,
+        )
+        distance = np.array(
+            [float(np.linalg.norm(reference - rr[p], axis=1).min()) for p in peaks]
+        )
+
+    corr = 0.0
+    if basis.shape[0] > 1:
+        with np.errstate(invalid="ignore"):
+            corr = float(np.corrcoef(basis)[0, 1])
+        corr = 0.0 if not np.isfinite(corr) else corr
+
+    return EvokedDemo(
+        method=method,
+        condition=condition,
+        sources=list(sources),
+        positions=rr[sources],
+        separation=float(np.linalg.norm(rr[sources[0]] - rr[sources[-1]]))
+        if len(sources) > 1
+        else 0.0,
+        correlation=corr,
+        times=np.asarray(evoked.times, float),
+        sensor_data=sensor,
+        gains=gains,
+        reconstructed=reconstructed,
+        amplitude_ratio=ratio,
+        power_map=power_map,
+        peaks=peaks,
+        reference=reference,
+        reference_gof=reference_gof,
+        reference_distance=distance,
+        n_trials=int(n_trials),
+        window=tuple(float(v) for v in window),
+        extra=dict(
+            n_sources=len(sources),
+            # Reported for the same reason as in the simulated case: a caller
+            # precomputing the rank for a whole grid needs the q it belongs to.
+            recipsiicos_rank=recipsiicos_space[0],
+            recipsiicos_virtual=recipsiicos_space[1],
+        ),
+    )
+
+
+@verbose
+def constraint_demo(
+    info,
+    forward,
+    *,
+    method="lcmv",
+    n_sources=2,
+    sources=None,
+    morphology="alpha",
+    separation=0.04,
+    correlation=0.9,
+    snr=3.0,
+    n_times=1000,
+    sfreq=200.0,
+    reg=0.05,
+    seed=0,
+    true_forward=None,
+    off_grid_sources=True,
+    template_p=0.03,
+    recipsiicos_rank=None,
+    verbose=None,
+):
+    """Simulate a multi-source scene and reconstruct it with one method.
+
+    Everything the interactive panel shows comes from here, so that the panel
+    and the local explorer cannot drift apart.
+
+    Parameters
+    ----------
+    info : mne.Info
+        Measurement info matching ``forward``.
+    forward : mne.Forward
+        Fixed-orientation forward solution.
+    method : str
+        ``'lcmv'``, ``'mcmv'``, ``'recipsiicos'`` or ``'abmc'``.
+    sources : array-like of int | None
+        Grid indices to place the sources at, overriding ``n_sources`` and
+        ``separation``. Use it to put them in named anatomical regions.
+    n_sources : int
+        How many sources to simulate, ignored when ``sources`` is given. One has
+        nothing to cancel against and is
+        the control case; two is the classic correlated pair; three shows what
+        happens when a beamformer is given fewer constraints than there are
+        active sources.
+    morphology : str
+        ``'theta'``, ``'alpha'`` or ``'beta'`` for a modulated rhythm at 6, 10 or
+        20 Hz, or ``'transient'`` for a train of short bursts, which is the
+        regime ABMC is aimed at.
+    separation : float
+        Requested distance between the sources, in metres. The nearest
+        available pair on the grid is used, and the achieved distance is
+        reported.
+    correlation : float
+        Requested pairwise correlation between the source waveforms, achieved
+        exactly for any number of sources by mixing one shared factor and one
+        private factor per source in proportions ``sqrt(r)`` and
+        ``sqrt(1 - r)``.
+    snr : float
+        Ratio of clean sensor standard deviation to noise standard deviation.
+    n_times : int
+        Samples to simulate. The covariance is estimated from these, so it wants
+        to be several times the channel count: below about five samples per
+        channel the estimate is rank deficient, MNE says so, and the numbers
+        move with it.
+    sfreq : float
+        Sampling frequency in Hz.
+    reg : float
+        Covariance regularisation passed to the beamformer.
+    seed : int
+        Seed for the interference, the waveforms and the off-grid placement. The
+        grid points themselves are chosen deterministically from the geometry.
+    true_forward : mne.Forward | None
+        A finer forward the simulated sources are taken from, while ``forward``
+        stays the grid the beamformer scans. Without it the sources sit exactly
+        on scanned grid nodes and the same leadfield generates and inverts the
+        data, which is an inverse crime: the localiser then peaks on the true
+        node almost every time and reports zero error. Supplying the
+        undecimated forward puts the sources where no method can scan them,
+        which is the situation on real data. It is also the grid the ongoing
+        background activity is drawn from, whether or not the sources move.
+    off_grid_sources : bool
+        Whether ``true_forward`` moves the sources as well as supplying the
+        background. Setting it ``False`` keeps the sources on scanned grid
+        points, which is the only way to see what the constraint itself does,
+        while leaving the background identical so the two cases stay comparable.
+    template_p : float
+        ``P`` for ABMC. Ignored by the other methods.
+    recipsiicos_rank : int | None
+        Projection rank for ReciPSIICOS. ``None`` selects it from the rank
+        curve. Ignored by the other methods.
+    %(verbose)s
+
+    Returns
+    -------
+    demo : instance of ConstraintDemo
+        The scene, the constraint table and the reconstruction.
+
+    Notes
+    -----
+    The constraint table is measured through the public apply path rather than
+    read out of the stored weights, because the methods keep their weights in
+    different spaces and the arrays are not comparable. See the module
+    docstring.
+
+    MCMV is given the true source locations, as its definition requires, so its
+    ``power_map`` is the sequential search's localiser rather than a map the
+    filter itself produces. That difference is the point rather than an
+    inconsistency: MCMV reconstructs sources it is told about, and
+    :func:`~advance_beamlab.scan_mcmv` is what finds them.
+    """
+    import mne
+
+    _check_option("method", method, _METHODS)
+    _check_option("morphology", morphology, _MORPHOLOGIES)
+    if int(n_sources) < 1:
+        raise ValueError(f"n_sources must be at least 1, got {n_sources}")
+    gain = forward["sol"]["data"]
+    rr = forward["source_rr"]
+    if sources is None:
+        sources = _pick_sources(forward, int(n_sources), separation)
+    else:
+        sources = [int(v) for v in sources]
+
+    # Where the sources really are. Taken from a finer forward when one is
+    # supplied, so they sit between the points the beamformer scans rather than
+    # exactly on them. Without this the localiser peaks on the true node in
+    # essentially every configuration and reports 0 mm, which is an artefact of
+    # the simulation rather than a property of any method.
+    if true_forward is not None:
+        fine_rr = true_forward["source_rr"]
+        fine_gain = true_forward["sol"]["data"]
+        # The background comes from the fine grid either way. Drawing it from
+        # different grids in the two cases would give them different
+        # interference, and the comparison between them is the whole point.
+        background_gain = fine_gain
+    else:
+        background_gain = gain
+
+    if true_forward is not None and off_grid_sources:
+        place = np.random.default_rng(seed + 991)
+        true_idx = []
+        for s in sources:
+            offsets = np.linalg.norm(fine_rr - rr[s], axis=1)
+            near = np.flatnonzero((offsets > 1e-6) & (offsets < _OFFSET_SEARCH))
+            column = gain[:, s]
+            column = column / (np.linalg.norm(column) or 1.0)
+            others = fine_gain[:, near]
+            others = others / (np.linalg.norm(others, axis=0) + 1e-30)
+            # Signed, not absolute. Taking the magnitude accepted candidates
+            # whose leadfield is the *negative* of the scanned node's as a
+            # "0.95 match", and the reconstruction then came back as the truth
+            # with its sign flipped: 11 of the 34 source placements the panel
+            # builds were polarity inverted.
+            match = column @ others
+            ok = near[(match >= _LEADFIELD_MATCH[0]) & (match <= _LEADFIELD_MATCH[1])]
+            if ok.size == 0:  # pragma: no cover - only on a very coarse mesh
+                ok = near[np.argsort(np.abs(match - np.mean(_LEADFIELD_MATCH)))[:1]]
+            # Reject any candidate that is itself a point the beamformer scans.
+            # The finer forward overlaps the scan grid wherever the scan grid was
+            # taken from it, so without this a "true" source lands on a scanned
+            # node often enough to bring the inverse crime back: it accounted for
+            # one localisation error in seven coming out at exactly zero.
+            gap = np.linalg.norm(fine_rr[ok][:, None, :] - rr[None, :, :], axis=2).min(
+                axis=1
+            )
+            off_grid = ok[gap > _ON_GRID_TOLERANCE]
+            true_idx.append(int(place.choice(off_grid if off_grid.size else ok)))
+        true_gain = fine_gain[:, true_idx]
+        true_positions = fine_rr[true_idx]
+    else:
+        true_gain = gain[:, sources]
+        true_positions = rr[sources]
+
+    times, true_tcs, sensor, noise, noise_scale = _simulate(
+        true_gain,
+        correlation,
+        snr,
+        n_times,
+        sfreq,
+        seed,
+        morphology,
+        background_gain,
+    )
+    if len(sources) > 1:
+        off = np.corrcoef(true_tcs)[np.triu_indices(len(sources), k=1)]
+        achieved_r = float(np.mean(off))
+        # Between the sources that were simulated, not between the grid nodes
+        # standing in for them: under a realistic head model those differ by up
+        # to 17 mm, and the panel was printing the node distance as the source
+        # separation.
+        achieved_sep = float(
+            np.mean(
+                [
+                    np.linalg.norm(true_positions[i] - true_positions[j])
+                    for i in range(len(sources))
+                    for j in range(i + 1, len(sources))
+                ]
+            )
+        )
+    else:
+        achieved_r = 0.0
+        achieved_sep = 0.0
+    logger.info(
+        f"    constraint_demo: {method}, {len(sources)} {morphology} source(s), "
+        f"separation {achieved_sep * 100:.1f} cm, r = {achieved_r:.3f}, SNR {snr:g}."
+    )
+
+    def _cov(x):
+        # ``.copy()`` is load bearing. EpochsArray applies the info's projectors
+        # to the array it is handed, in place and without copying first, so
+        # without this the simulated recording is average referenced behind the
+        # caller's back and no longer equals its own leadfield times its own
+        # source waveforms plus noise. The covariance is unaffected either way,
+        # since EpochsArray projects its own copy regardless.
+        ep = mne.EpochsArray(x[None].copy(), info, tmin=0.0, verbose=False)
+        return mne.compute_covariance(ep, method="empirical", verbose=False)
+
+    data_cov, noise_cov = _cov(sensor), _cov(noise)
+
+    apply_fn, power_map, recipsiicos_space = _build_filters(
+        info,
+        forward,
+        data_cov,
+        noise_cov,
+        sources,
+        sensor,
+        method=method,
+        reg=reg,
+        template=true_tcs[0] / np.abs(true_tcs[0]).max(),
+        template_p=template_p,
+        recipsiicos_rank=recipsiicos_rank,
+    )
 
     # Two tables, because under a mismatched head model they are different
     # things and conflating them hides the mismatch entirely.
