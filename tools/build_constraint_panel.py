@@ -869,6 +869,333 @@ def run_grid(info, fwd, fine, layouts, rank, verbose=True):
     return scenes, results
 
 
+# --------------------------------------------------------------------------- #
+# The recorded half: MNE's sample auditory and visual responses
+# --------------------------------------------------------------------------- #
+# Everything above this line is simulated, which is what lets it be checked
+# against a truth. None of that is available here, so this half shows only what
+# needs no truth -- the constraint table, the localiser, the recording and the
+# reconstruction -- and reports an independent dipole fit beside the peaks
+# rather than pretending to know where the sources are.
+REAL_CONDITIONS = (
+    ("Auditory/Left", "auditory left", "auditory"),
+    ("Auditory/Right", "auditory right", "auditory"),
+    ("Auditory", "auditory both", "auditory"),
+    ("Visual/Left", "visual left", "visual"),
+    ("Visual/Right", "visual right", "visual"),
+    ("Visual", "visual both", "visual"),
+)
+# The active window the covariance is built from. This is the control with the
+# most to teach: a beamformer is tuned by the covariance it is given, and the
+# published auditory example shows the wider window moving the selected left
+# source 25 mm out of superior temporal cortex.
+REAL_WINDOWS = ((0.08, 0.13), (0.05, 0.20))
+REAL_TRIALS = (1, 4, 16, 0)  # 0 means every epoch of that condition
+# Epoching follows the published auditory example exactly, and that is not
+# cosmetic. Shortening the baseline and adding amplitude rejection moved the
+# right-hemisphere peak to a different vertex, and LCMV's off-diagonal fell from
+# -0.78 to -0.15: the cancellation this page exists to show is a property of the
+# pair that gets selected, so the preprocessing that selects it has to be the
+# one whose result is already documented.
+REAL_TMIN, REAL_TMAX = -0.2, 0.25
+# The scan grid is decimated from the full surface, but the *locations* are not:
+# they are chosen at full resolution and forced into the grid. That separation
+# matters. Decimating before choosing moves the right auditory peak into
+# parietal cortex and the pair stops being correlated; decimating after changes
+# nothing at all, because LCMV, MCMV and ABMC each build a filter from one
+# leadfield and the covariance, and the rest of the grid never enters. Measured,
+# the constraint table is identical to three decimals from 7498 sources down to
+# 627. Only ReciPSIICOS spans the grid, and it is the reason for decimating: its
+# projector needs a q^2-by-grid factorisation, which costs 0.6 s here and over
+# five minutes on the undecimated surface.
+REAL_DECIMATION = 8
+
+
+def real_recording(info, verbose=True):
+    """Load epochs, the full-resolution forward, and one shared noise covariance.
+
+    The noise covariance is pooled over every epoch in the session rather than
+    estimated per scene, for the reason the simulated half learned the hard way:
+    it sets the whitener, the whitener sets q, and q is the space the
+    ReciPSIICOS rank is drawn from. Estimating it per scene would give each
+    scene its own q and a precomputed rank would mean something different in
+    each one. Pooling is also the better estimate and standard practice.
+    """
+    meg = mne.datasets.sample.data_path() / "MEG" / "sample"
+    raw = mne.io.read_raw_fif(meg / "sample_audvis_filt-0-40_raw.fif", preload=True)
+    events = mne.read_events(meg / "sample_audvis_filt-0-40_raw-eve.fif")
+    raw.pick(info["ch_names"])
+    epochs = mne.Epochs(
+        raw,
+        events,
+        {"Auditory/Left": 1, "Auditory/Right": 2, "Visual/Left": 3, "Visual/Right": 4},
+        tmin=REAL_TMIN,
+        tmax=REAL_TMAX,
+        baseline=(None, 0.0),
+        preload=True,
+        verbose=False,
+    )
+    epochs.pick(info["ch_names"])
+
+    base = mne.read_forward_solution(
+        meg / "sample_audvis-meg-eeg-oct-6-fwd.fif", verbose=False
+    )
+    base = mne.pick_types_forward(base, meg=True, eeg=False)
+    base = mne.convert_forward_solution(
+        base, force_fixed=True, use_cps=True, verbose=False
+    )
+    base = mne.pick_channels_forward(base, info["ch_names"], ordered=True)
+
+    noise_cov = mne.compute_covariance(
+        epochs, tmin=None, tmax=0.0, method="shrunk", verbose=False
+    )
+    if verbose:
+        counts = ", ".join(f"{k} {len(epochs[k])}" for k in epochs.event_id)
+        print(
+            f"real recording: {counts}; {base['sol']['data'].shape[1]} vertices at "
+            f"full resolution, {epochs.info['sfreq']:.0f} Hz"
+        )
+    return epochs, base, noise_cov
+
+
+def _dipole_reference(evoked, noise_cov, window, verbose=True):
+    """Fit two dipoles, one after the other, as an independent reference.
+
+    Not a truth. A single fit lands in whichever hemisphere is stronger, so the
+    second is fitted to what the first leaves behind, which is what separates
+    the pair. Their goodness of fit is reported with them because a reference
+    worth drawing is one whose quality the reader can see.
+    """
+    data_path = mne.datasets.sample.data_path()
+    bem = data_path / "subjects" / "sample" / "bem" / "sample-5120-bem-sol.fif"
+    trans = data_path / "MEG" / "sample" / "sample_audvis_raw-trans.fif"
+    peak = evoked.copy().crop(*window)
+    first, residual = mne.fit_dipole(
+        peak, noise_cov, str(bem), str(trans), verbose=False
+    )
+    second, _ = mne.fit_dipole(residual, noise_cov, str(bem), str(trans), verbose=False)
+    out, gof = [], []
+    for dip in (first, second):
+        k = int(np.argmax(dip.gof))
+        out.append(dip.pos[k])
+        gof.append(float(dip.gof[k]))
+    return np.asarray(out), np.asarray(gof)
+
+
+def real_selection(info, base, epochs, noise_cov, verbose=True):
+    """Choose where to constrain, once per condition and window.
+
+    Chosen from every available epoch rather than from the subset a scene
+    averages, so that the trials control is a signal-to-noise axis and nothing
+    else. If the locations moved with the trial count the constraint tables
+    either side of that control would describe different pairs.
+    """
+    from advance_beamlab._explain import evoked_sources
+
+    picked = {}
+    for condition, label, _family in REAL_CONDITIONS:
+        for window in REAL_WINDOWS:
+            ep = epochs[condition]
+            evoked = ep.average()
+            data_cov = mne.compute_covariance(
+                ep, tmin=window[0], tmax=window[1], method="shrunk", verbose=False
+            )
+            src = evoked_sources(info, base, data_cov, noise_cov)
+            reference, gof = _dipole_reference(evoked, noise_cov, window)
+            vertno = [base["src"][0]["vertno"], base["src"][1]["vertno"]]
+            n_lh = len(vertno[0])
+            vertices = (int(vertno[0][src[0]]), int(vertno[1][src[1] - n_lh]))
+            picked[(condition, window)] = dict(
+                vertices=vertices, reference=reference, gof=gof, label=label
+            )
+            if verbose:
+                sep = np.linalg.norm(
+                    base["source_rr"][src[0]] - base["source_rr"][src[1]]
+                )
+                print(
+                    f"  {label:>15} {window[0]:.2f}-{window[1]:.2f}s: "
+                    f"vertices {vertices}, {sep * 100:.1f} cm apart, "
+                    f"dipole gof {gof[0]:.0f}%/{gof[1]:.0f}%"
+                )
+    return picked
+
+
+def real_scan_grid(base, picked, verbose=True):
+    """Build one decimated grid holding every location any scene constrains.
+
+    A single grid for all of them, so that every localiser map is the same
+    length and drawn against the same positions. Building a grid per condition
+    would make the maps incomparable and the payload a set of unrelated arrays.
+    """
+    wanted = [set(), set()]
+    for entry in picked.values():
+        wanted[0].add(entry["vertices"][0])
+        wanted[1].add(entry["vertices"][1])
+    keep = []
+    for hemi in (0, 1):
+        vertno = base["src"][hemi]["vertno"]
+        kept = set(vertno[::REAL_DECIMATION].tolist()) | wanted[hemi]
+        keep.append(np.array(sorted(kept)))
+    total = sum(len(k) for k in keep)
+    stc = mne.SourceEstimate(
+        np.ones((total, 1)), keep, tmin=0.0, tstep=1.0, subject="sample"
+    )
+    fwd = mne.forward.restrict_forward_to_stc(base, stc)
+    index = {}
+    left = fwd["src"][0]["vertno"].tolist()
+    right = fwd["src"][1]["vertno"].tolist()
+    for hemi, table in ((0, left), (1, right)):
+        for v in wanted[hemi]:
+            index[(hemi, v)] = table.index(v) + (0 if hemi == 0 else len(left))
+    if verbose:
+        print(
+            f"real scan grid: {total} sources (1 in {REAL_DECIMATION} of the "
+            f"surface, plus every constrained location)"
+        )
+    return fwd, index
+
+
+def real_rank(info, fwd, epochs, noise_cov, window, verbose=True):
+    """Return the ReciPSIICOS rank, once, for every real scene.
+
+    Same rule as the simulated half: the rank is drawn out of q^2 and q comes
+    from the whitened leadfield, so it has to be chosen against the covariance
+    it will be spent against. Every real scene shares one noise covariance,
+    which is what makes a single rank legitimate here.
+    """
+    from advance_beamlab._explain import evoked_demo, evoked_sources
+
+    ep = epochs["Auditory"]
+    data_cov = mne.compute_covariance(
+        ep, tmin=window[0], tmax=window[1], method="shrunk", verbose=False
+    )
+    src = evoked_sources(info, fwd, data_cov, noise_cov)
+    demo = evoked_demo(
+        info,
+        fwd,
+        ep.average(),
+        data_cov,
+        noise_cov,
+        src,
+        method="recipsiicos",
+        recipsiicos_rank=None,
+        verbose=False,
+    )
+    rank = demo.extra.get("recipsiicos_rank")
+    virtual = demo.extra.get("recipsiicos_virtual")
+    if verbose:
+        print(
+            f"real ReciPSIICOS rank K* = {rank} of q^2 = {virtual**2} "
+            f"(q = {virtual} virtual sensors)"
+        )
+    return int(rank), int(virtual)
+
+
+def run_real_grid(info, fwd, index, epochs, noise_cov, picked, rank, verbose=True):
+    """Every real scene: condition, window and trial count, all four methods."""
+    from advance_beamlab._explain import evoked_demo
+
+    scenes, results = [], []
+    combos = [
+        (condition, label, family, window, trials)
+        for condition, label, family in REAL_CONDITIONS
+        for window in REAL_WINDOWS
+        for trials in REAL_TRIALS
+    ]
+    for n, (condition, label, family, window, trials) in enumerate(combos):
+        ep = epochs[condition]
+        available = len(ep)
+        # ``trials`` of 0 means every epoch; anything larger than the condition
+        # holds is clamped, and the scene records what it actually averaged
+        # rather than what was asked for.
+        used = available if trials == 0 else min(int(trials), available)
+        subset = ep[:used]
+        evoked = subset.average()
+        data_cov = mne.compute_covariance(
+            subset, tmin=window[0], tmax=window[1], method="shrunk", verbose=False
+        )
+        entry = picked[(condition, window)]
+        sources = [
+            index[(0, entry["vertices"][0])],
+            index[(1, entry["vertices"][1])],
+        ]
+        # The joint filter estimates the waveform overlap that turns a
+        # constraint table into a delivered amplitude. Read that overlap off
+        # per-source LCMV traces instead and a strongly correlated pair reads as
+        # uncorrelated, through the very filter whose cancellation it explains.
+        joint = evoked_demo(
+            info,
+            fwd,
+            evoked,
+            data_cov,
+            noise_cov,
+            sources,
+            method="mcmv",
+            verbose=False,
+        )
+        scene = dict(
+            index=len(scenes),
+            condition=condition,
+            label=label,
+            family=family,
+            window=[float(window[0]), float(window[1])],
+            trials=used,
+            available=available,
+            sources=sources,
+            separation=float(joint.separation),
+            correlation=float(joint.correlation),
+            reference=[[float(v) for v in p] for p in entry["reference"]],
+            reference_gof=[float(v) for v in entry["gof"]],
+        )
+        scenes.append(scene)
+        for method in METHODS:
+            t0 = time.time()
+            demo = evoked_demo(
+                info,
+                fwd,
+                evoked,
+                data_cov,
+                noise_cov,
+                sources,
+                method=method,
+                condition=condition,
+                n_trials=used,
+                window=window,
+                reference=entry["reference"],
+                reference_gof=entry["gof"],
+                reference_tcs=joint.reconstructed,
+                recipsiicos_rank=rank,
+                verbose=False,
+            )
+            results.append(
+                dict(
+                    scene=scene["index"],
+                    method=method,
+                    gains=[[float(v) for v in row] for row in demo.gains],
+                    amplitude_ratio=[float(v) for v in demo.amplitude_ratio],
+                    peaks=[int(v) for v in demo.peaks],
+                    reference_distance=[
+                        float(v) for v in demo.reference_distance * 1000
+                    ],
+                    power_map=np.asarray(demo.power_map, float),
+                    reconstructed=np.asarray(demo.reconstructed, float),
+                    sensor=np.asarray(demo.sensor_data, float),
+                    times=np.asarray(demo.times, float),
+                )
+            )
+            if verbose:
+                print(
+                    f"  {method:>11} {label:>15} {window[0]:.2f}-{window[1]:.2f}s "
+                    f"{used:>3} trial(s)  off-diag {demo.gains[0, 1]:+.3f}  "
+                    f"delivered {demo.amplitude_ratio[0]:.3f}  "
+                    f"to dipole {demo.reference_distance.min() * 1000:5.1f} mm "
+                    f"[{time.time() - t0:.1f}s]"
+                )
+        if verbose:
+            print(f"real scene {n + 1}/{len(combos)}")
+    return scenes, results
+
+
 class Packer:
     """Concatenates typed arrays into one buffer and records where they went."""
 
@@ -932,7 +1259,128 @@ def _quantise8(array, name="array"):
     return out
 
 
-def pack(scenes, results, positions, cortex, sensor_pos, layouts, model, verbose=True):
+def pack_real(packer, header, scenes, results, positions, *, centre, verbose=True):
+    """Add the recorded half to an in-progress payload.
+
+    Kept separate from :func:`pack` rather than folded into it because almost
+    nothing is shared: the recorded scenes have their own grid, their own time
+    axis, and no truth to store. What they do share is the buffer, so the two
+    halves are written through the same packer and the browser reads them the
+    same way.
+
+    The recording is stored rather than rebuilt. The simulated half can
+    reconstruct its sensor data from a leadfield and a noise scale, which is
+    what keeps it small; a real recording has no such recipe and has to be
+    carried. It is deduplicated first: the covariance window changes the
+    filters but not the data, so the traces vary only with condition and trial
+    count.
+    """
+    n_real = int(positions.shape[0])
+    header["real_conditions"] = [
+        dict(key=key, label=label, family=family)
+        for key, label, family in REAL_CONDITIONS
+    ]
+    header["real_windows"] = [[float(a), float(b)] for a, b in REAL_WINDOWS]
+    header["real_trials"] = list(REAL_TRIALS)
+    header["n_real_sources"] = n_real
+    header["real_decimation"] = REAL_DECIMATION
+    header["real_positions"] = packer.add(
+        _quantise((positions - centre) * 1000, 10, "real positions"), np.int16
+    )
+
+    times = results[0]["times"]
+    header["real_time0"] = float(times[0])
+    header["real_sfreq"] = float(1.0 / (times[1] - times[0]))
+    header["real_n_times"] = int(times.size)
+
+    # One recording per (condition, trials); the window does not touch it.
+    recordings, recording_of = [], {}
+    for scene in scenes:
+        key = (scene["condition"], scene["trials"])
+        if key not in recording_of:
+            recording_of[key] = len(recordings)
+            match = next(r for r in results if r["scene"] == scene["index"])
+            recordings.append(match["sensor"])
+        scene["recording"] = recording_of[key]
+    stack = np.stack(recordings)
+    # A single scale for all of them, so that averaging more trials visibly
+    # lowers the noise instead of every scene being renormalised to its own
+    # peak, which would hide exactly what the trials control is there to show.
+    real_scale = 32000.0 / max(float(np.abs(stack).max()), 1e-30)
+    header["real_recording_scale"] = real_scale
+    header["real_recording"] = packer.add(
+        _quantise(stack, real_scale, "real recording"), np.int16
+    )
+    header["real_n_recordings"] = len(recordings)
+
+    recon = np.stack([r["reconstructed"] for r in results])
+    recon_peak = np.abs(recon).max(axis=(1, 2), keepdims=True)
+    header["real_recon"] = packer.add(
+        _quantise8(recon / np.maximum(recon_peak, 1e-30), "real reconstruction"),
+        np.int8,
+    )
+    header["real_recon_scale"] = [float(v) for v in recon_peak.ravel()]
+
+    maps = []
+    for r in results:
+        m = np.asarray(r["power_map"], float)
+        span = m.max() - m.min()
+        norm = (m - m.min()) / span if span > 0 else np.zeros_like(m)
+        maps.append(np.round(norm ** (1 / 3) * 255))
+    header["real_maps"] = packer.add(np.concatenate(maps), np.uint8)
+
+    header["real_scenes"] = [
+        dict(
+            index=s["index"],
+            condition=s["condition"],
+            label=s["label"],
+            family=s["family"],
+            window=s["window"],
+            trials=s["trials"],
+            available=s["available"],
+            recording=s["recording"],
+            sources=s["sources"],
+            separation=s["separation"],
+            correlation=s["correlation"],
+            reference=[
+                [round((p[k] - centre[k]) * 1000, 2) for k in range(3)]
+                for p in s["reference"]
+            ],
+            reference_gof=[round(v, 1) for v in s["reference_gof"]],
+        )
+        for s in scenes
+    ]
+    header["real_results"] = [
+        dict(
+            scene=r["scene"],
+            method=r["method"],
+            gains=[[round(v, 4) for v in row] for row in r["gains"]],
+            amplitude_ratio=[round(v, 4) for v in r["amplitude_ratio"]],
+            peaks=r["peaks"],
+            reference_distance=[round(v, 2) for v in r["reference_distance"]],
+        )
+        for r in results
+    ]
+    if verbose:
+        print(
+            f"real payload: {len(results)} results over {len(scenes)} scenes, "
+            f"{len(recordings)} recordings of {header['real_n_times']} samples, "
+            f"{n_real} grid points"
+        )
+    return header
+
+
+def pack(
+    scenes,
+    results,
+    positions,
+    cortex,
+    sensor_pos,
+    layouts,
+    model,
+    real=None,
+    verbose=True,
+):
     """Quantise everything into one gzipped buffer plus a JSON header."""
     packer = Packer()
     header = dict(
@@ -1104,6 +1552,9 @@ def pack(scenes, results, positions, cortex, sensor_pos, layouts, model, verbose
         for r in results
     ]
 
+    if real is not None:
+        pack_real(packer, header, *real, centre=centre, verbose=verbose)
+
     raw = packer.buffer()
     blob = base64.b64encode(gzip.compress(raw, 9)).decode("ascii")
     if verbose:
@@ -1119,6 +1570,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path, help="path of the .js data file")
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument(
+        "--simulation-only",
+        action="store_true",
+        help="skip the recorded half, which needs the sample dataset",
+    )
     args = parser.parse_args(argv)
     verbose = not args.quiet
 
@@ -1129,6 +1585,25 @@ def main(argv=None):
     model["recipsiicos_rank"] = int(rank)
     model["recipsiicos_virtual"] = int(virtual)
     scenes, results = run_grid(info, fwd, fine, layouts, rank, verbose)
+
+    real = None
+    if not args.simulation_only:
+        epochs, base, real_noise = real_recording(info, verbose)
+        picked = real_selection(info, base, epochs, real_noise, verbose)
+        scan, index = real_scan_grid(base, picked, verbose)
+        real_k, real_q = real_rank(
+            info, scan, epochs, real_noise, REAL_WINDOWS[0], verbose
+        )
+        model["real_recipsiicos_rank"] = real_k
+        model["real_recipsiicos_virtual"] = real_q
+        model["real_channels"] = int(scan["nchan"])
+        model["real_n_scan"] = int(scan["sol"]["data"].shape[1])
+        model["real_n_full"] = int(base["sol"]["data"].shape[1])
+        real_scenes, real_results = run_real_grid(
+            info, scan, index, epochs, real_noise, picked, real_k, verbose
+        )
+        real = (real_scenes, real_results, scan["source_rr"])
+
     header, blob = pack(
         scenes,
         results,
@@ -1137,7 +1612,8 @@ def main(argv=None):
         sensor_layout(info),
         layouts,
         model,
-        verbose,
+        real=real,
+        verbose=verbose,
     )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -497,3 +497,81 @@ def test_the_build_takes_its_rank_from_a_real_scene():
     )
     required = {kw.arg for kw in scene_call.keywords} - {"method", "recipsiicos_rank"}
     assert required <= passed, f"representative scene omits {sorted(required - passed)}"
+
+
+def test_the_recorded_half_is_present_and_self_consistent(header):
+    """The recorded scenes have to index the arrays that describe them."""
+    scenes = header["real_scenes"]
+    results = header["real_results"]
+    assert scenes and results
+    assert len(results) == len(scenes) * len(header["methods"])
+    n_rec = header["real_n_recordings"]
+    for scene in scenes:
+        assert 0 <= scene["recording"] < n_rec
+        assert len(scene["sources"]) == 2
+        assert 0 < scene["trials"] <= scene["available"]
+        assert len(scene["reference"]) == len(scene["reference_gof"])
+        for gof in scene["reference_gof"]:
+            assert 0 <= gof <= 100
+    seen = {(r["scene"], r["method"]) for r in results}
+    assert len(seen) == len(results)
+
+
+def test_the_recorded_constraint_table_is_distortionless(header):
+    """Whatever else a recording does, the diagonal is what the method pins."""
+    checked = 0
+    for result in header["real_results"]:
+        for i in range(len(result["gains"])):
+            # Element by element. A list compared against a scalar approx is
+            # simply False, so the whole assertion fired on correct data.
+            assert result["gains"][i][i] == pytest.approx(1.0, abs=1e-3), (
+                f"{result['method']} filter {i}"
+            )
+            checked += 1
+    assert checked == 2 * len(header["real_results"])
+
+
+def test_the_recording_shows_the_cancellation_it_was_added_for(header):
+    """A recorded half that does not reproduce the effect is not worth shipping.
+
+    The bilateral auditory response is the correlated pair the page is about. On
+    the panel's own simulated grid this recording gives an LCMV off-diagonal of
+    +0.03 -- no cancellation at all -- which is why the locations are chosen at
+    full resolution instead. Averaged over every epoch the effect is unmistakable
+    and MCMV removes it, so assert both rather than trusting the build.
+    """
+    scenes = {s["index"]: s for s in header["real_scenes"]}
+    worst_lcmv, matching_mcmv = 0.0, None
+    for result in header["real_results"]:
+        scene = scenes[result["scene"]]
+        if scene["family"] != "auditory" or scene["trials"] < 50:
+            continue
+        off = abs(result["gains"][0][1])
+        if result["method"] == "lcmv" and off > worst_lcmv:
+            worst_lcmv = off
+            matching_mcmv = scene["index"]
+    assert worst_lcmv > 0.5, f"LCMV off-diagonal only reached {worst_lcmv:.3f}"
+    mcmv = next(
+        r
+        for r in header["real_results"]
+        if r["scene"] == matching_mcmv and r["method"] == "mcmv"
+    )
+    assert abs(mcmv["gains"][0][1]) < 1e-3
+
+
+def test_the_recorded_blocks_are_sized_as_the_header_says(header, payload):
+    """A wrong length here draws one scene's recording under another's label."""
+    n_ch = header["n_channels"]
+    n_t = header["real_n_times"]
+    rec = view(header, payload, "real_recording")
+    assert rec.size == header["real_n_recordings"] * n_ch * n_t
+    maps = view(header, payload, "real_maps")
+    assert maps.size == len(header["real_results"]) * header["n_real_sources"]
+    pos = view(header, payload, "real_positions")
+    assert pos.size == header["n_real_sources"] * 3
+    recon = view(header, payload, "real_recon")
+    total = sum(
+        len(header["real_scenes"][r["scene"]]["sources"])
+        for r in header["real_results"]
+    )
+    assert recon.size == total * n_t
