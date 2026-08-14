@@ -22,8 +22,10 @@ equations say they should:
   LCMV has it and edits the data covariance instead, removing the cross-source
   structure that made cancelling profitable. Its table therefore looks like
   LCMV's in form, with an off-diagonal that no longer runs away.
-* **ABMC** :footcite:`Shirani2024` trades the distortionless constraint against a
-  template-match term as ``P`` rises, so its diagonal is not pinned at one.
+* **ABMC** :footcite:`Shirani2024` adds a template-match term weighted by ``P``.
+  Its solution still enforces the distortionless constraint exactly, so the
+  diagonal stays at one for every ``P``; what ``P`` changes is the off-diagonal
+  and the localiser, which scores template match rather than power.
 
 Reading the table through the public ``apply`` functions rather than out of each
 method's weight array is deliberate. The methods store their weights in
@@ -112,9 +114,15 @@ class ConstraintDemo:
     reconstructed : ndarray, shape (n_sources, n_times)
         Recovered waveforms, in ampere-metres.
     amplitude_ratio : ndarray, shape (n_sources,)
-        Recovered root mean square over true root mean square. One means the
-        amplitude survived. Root mean square rather than peak because the
-        reconstruction carries filtered sensor noise.
+        How much of each source's amplitude the filter delivers, summing every
+        constrained source's gain weighted by how much of this source's waveform
+        it carries. One means the amplitude comes through intact; a half means
+        half of it is cancelled away. It contains no noise, so it states what
+        the filter does rather than how well a particular short recording
+        measures it; ``extra['projected_ratio']`` is the empirical counterpart
+        estimated from the reconstruction, and ``extra['output_rms_ratio']`` is
+        the output's own amplitude, which at low signal-to-noise is a statement
+        about the interference rather than about the source.
     power_map : ndarray, shape (n_grid,)
         The localiser map over the whole source grid, for display.
     peak_errors : ndarray, shape (n_sources,)
@@ -122,9 +130,19 @@ class ConstraintDemo:
         peaks, in metres.
     extra : dict
         ``'morphology'`` and ``'n_sources'`` as requested, the ``'leadfield'``
-        columns of the simulated sources and the ``'noise_scale'`` applied to
-        the shared noise field. The last two are what let a viewer rebuild
-        ``sensor_data`` without storing it.
+        columns of the simulated sources, the ``'true_positions'`` they were
+        simulated at, the ``'noise_scale'`` applied to the shared noise field,
+        ``'output_rms_ratio'``, the output's own amplitude relative to the truth,
+        and ``'projected_ratio'``, the same quantity as ``amplitude_ratio`` but
+        estimated from the noisy reconstruction rather than from the gains. The
+        leadfield and the noise scale are what let a viewer rebuild
+        ``sensor_data`` without storing it. For ReciPSIICOS with the rank left
+        to be chosen, ``'recipsiicos_rank'`` is the rank selected and
+        ``'recipsiicos_virtual'`` the number of virtual sensors it was selected
+        for. Both are ``None`` for any other method, and both are ``None`` when
+        a rank is passed in, because then nothing here chose anything. They come
+        as a pair: a rank is only meaningful together with the :math:`q^2` it
+        was drawn from.
     """
 
     method: str
@@ -151,7 +169,7 @@ class ConstraintDemo:
         )
 
 
-def _pick_sources(forward, n_sources, separation, seed=0):
+def _pick_sources(forward, n_sources, separation):
     """``n_sources`` grid indices, mutually about ``separation`` metres apart.
 
     The first sits near the middle of the grid so the rest stay inside it
@@ -277,7 +295,10 @@ def _simulate(
     white = interference_rng.standard_normal(clean.shape)
     brain /= brain.std() or 1.0
     white /= white.std() or 1.0
-    noise = _BRAIN_FRACTION * brain + (1.0 - _BRAIN_FRACTION) * white
+    # Weighted in power, not amplitude. Mixing two unit-variance fields with
+    # amplitude weights 0.75 and 0.25 gives the brain 90 per cent of the
+    # variance, not the 75 per cent the constant is named for.
+    noise = np.sqrt(_BRAIN_FRACTION) * brain + np.sqrt(1.0 - _BRAIN_FRACTION) * white
     # Scale to the requested ratio of standard deviations, which is a
     # sensor-level SNR rather than a source-level one.
     scale = clean.std() / (snr * (noise.std() or 1.0))
@@ -285,7 +306,7 @@ def _simulate(
     return times, true_tcs, clean + scale * noise, scale * noise, scale
 
 
-def _measure_gains(apply_fn, gain, sources, n_times):
+def _measure_gains(apply_fn, columns, n_times):
     r"""Gain of every filter at every source, via the public apply path.
 
     Feeds a scene containing only source ``j`` and reads what filter ``i``
@@ -293,12 +314,12 @@ def _measure_gains(apply_fn, gain, sources, n_times):
     definition, and unlike the stored weight arrays it is directly comparable
     across methods, which keep their weights in different spaces.
     """
-    n = len(sources)
+    n = columns.shape[1]
     table = np.empty((n, n))
     probe = np.zeros(n_times)
     probe[n_times // 2] = 1.0
-    for j, src in enumerate(sources):
-        out = apply_fn(np.outer(gain[:, src], probe))
+    for j in range(n):
+        out = apply_fn(np.outer(columns[:, j], probe))
         table[:, j] = out[:, n_times // 2]
     return table
 
@@ -356,8 +377,10 @@ def constraint_demo(
         available pair on the grid is used, and the achieved distance is
         reported.
     correlation : float
-        Requested correlation between the two source waveforms, achieved
-        exactly by a phase shift of ``arccos(correlation)``.
+        Requested pairwise correlation between the source waveforms, achieved
+        exactly for any number of sources by mixing one shared factor and one
+        private factor per source in proportions ``sqrt(r)`` and
+        ``sqrt(1 - r)``.
     snr : float
         Ratio of clean sensor standard deviation to noise standard deviation.
     n_times : int
@@ -370,7 +393,8 @@ def constraint_demo(
     reg : float
         Covariance regularisation passed to the beamformer.
     seed : int
-        Seed for the interference and the source choice.
+        Seed for the interference, the waveforms and the off-grid placement. The
+        grid points themselves are chosen deterministically from the geometry.
     true_forward : mne.Forward | None
         A finer forward the simulated sources are taken from, while ``forward``
         stays the grid the beamformer scans. Without it the sources sit exactly
@@ -425,18 +449,9 @@ def constraint_demo(
     gain = forward["sol"]["data"]
     rr = forward["source_rr"]
     if sources is None:
-        sources = _pick_sources(forward, int(n_sources), separation, seed=seed)
+        sources = _pick_sources(forward, int(n_sources), separation)
     else:
         sources = [int(v) for v in sources]
-    if len(sources) > 1:
-        pairs = [
-            float(np.linalg.norm(rr[a] - rr[b]))
-            for i, a in enumerate(sources)
-            for b in sources[i + 1 :]
-        ]
-        achieved_sep = float(np.mean(pairs))
-    else:
-        achieved_sep = 0.0
 
     # Where the sources really are. Taken from a finer forward when one is
     # supplied, so they sit between the points the beamformer scans rather than
@@ -463,7 +478,12 @@ def constraint_demo(
             column = column / (np.linalg.norm(column) or 1.0)
             others = fine_gain[:, near]
             others = others / (np.linalg.norm(others, axis=0) + 1e-30)
-            match = np.abs(column @ others)
+            # Signed, not absolute. Taking the magnitude accepted candidates
+            # whose leadfield is the *negative* of the scanned node's as a
+            # "0.95 match", and the reconstruction then came back as the truth
+            # with its sign flipped: 11 of the 34 source placements the panel
+            # builds were polarity inverted.
+            match = column @ others
             ok = near[(match >= _LEADFIELD_MATCH[0]) & (match <= _LEADFIELD_MATCH[1])]
             if ok.size == 0:  # pragma: no cover - only on a very coarse mesh
                 ok = near[np.argsort(np.abs(match - np.mean(_LEADFIELD_MATCH)))[:1]]
@@ -496,8 +516,22 @@ def constraint_demo(
     if len(sources) > 1:
         off = np.corrcoef(true_tcs)[np.triu_indices(len(sources), k=1)]
         achieved_r = float(np.mean(off))
+        # Between the sources that were simulated, not between the grid nodes
+        # standing in for them: under a realistic head model those differ by up
+        # to 17 mm, and the panel was printing the node distance as the source
+        # separation.
+        achieved_sep = float(
+            np.mean(
+                [
+                    np.linalg.norm(true_positions[i] - true_positions[j])
+                    for i in range(len(sources))
+                    for j in range(i + 1, len(sources))
+                ]
+            )
+        )
     else:
         achieved_r = 0.0
+        achieved_sep = 0.0
     logger.info(
         f"    constraint_demo: {method}, {len(sources)} {morphology} source(s), "
         f"separation {achieved_sep * 100:.1f} cm, r = {achieved_r:.3f}, SNR {snr:g}."
@@ -514,6 +548,7 @@ def constraint_demo(
         return mne.compute_covariance(ep, method="empirical", verbose=False)
 
     data_cov, noise_cov = _cov(sensor), _cov(noise)
+    recipsiicos_space = (None, None)
 
     if method in ("lcmv", "recipsiicos"):
         if method == "lcmv":
@@ -527,20 +562,29 @@ def constraint_demo(
                 verbose=False,
             )
         else:
-            rank = (
-                recipsiicos_rank
-                if recipsiicos_rank is not None
-                else int(
-                    recipsiicos_rank_curve(
-                        forward,
-                        info,
-                        data_cov=data_cov,
-                        noise_cov=noise_cov,
-                        return_optimal=True,
-                        verbose=False,
-                    )[3]
+            # The curve gets the same covariances as the filter, and that is
+            # not a detail. Both reduce the array to q virtual sensors first,
+            # and q comes from a truncated SVD of the *whitened* leadfield, so a
+            # curve built without the noise covariance runs over a different q
+            # and K* silently stops meaning what it says. Precomputing the rank
+            # that way for the web panel's grid chose it at q = 49, out of 2401,
+            # and spent it at q = 78, out of 6084. When a rank is chosen here
+            # it is reported in ``extra`` together with the q it was drawn from,
+            # because neither number means anything alone. A rank passed in
+            # reports nothing, since then this function chose nothing.
+            if recipsiicos_rank is not None:
+                rank = int(recipsiicos_rank)
+            else:
+                ranks, _, _, k_opt = recipsiicos_rank_curve(
+                    forward,
+                    info,
+                    data_cov=data_cov,
+                    noise_cov=noise_cov,
+                    return_optimal=True,
+                    verbose=False,
                 )
-            )
+                rank = int(k_opt)
+                recipsiicos_space = (rank, int(round(float(len(ranks)) ** 0.5)))
             filters = make_recipsiicos_lcmv(
                 info,
                 forward,
@@ -639,12 +683,45 @@ def constraint_demo(
 
         power_map = np.abs(np.asarray(result.template_match))
 
-    gains = _measure_gains(apply_fn, gain, sources, n_times)
+    # Two tables, because under a mismatched head model they are different
+    # things and conflating them hides the mismatch entirely.
+    #
+    # ``gains`` is the constraint table: the filters' response at the locations
+    # they were *constrained* at, which are scan-grid nodes. Its diagonal is
+    # pinned to one by construction and that is exactly what it is for.
+    #
+    # ``delivered`` is the response at the locations actually simulated. With a
+    # matched head model the two coincide. With a realistic one they do not, and
+    # only the second says what the filter does to the real source: measured
+    # against the scan node, LCMV reported delivering 100 per cent of an
+    # amplitude whose reconstruction held about 7.
+    gains = _measure_gains(apply_fn, gain[:, sources], n_times)
+    delivered = _measure_gains(apply_fn, true_gain, n_times)
     reconstructed = apply_fn(sensor)
-    # Root mean square rather than peak: the reconstruction carries filtered
-    # sensor noise, and the peak of a noisy trace measures the noise as much as
-    # the signal.
-    ratio = np.sqrt((reconstructed**2).mean(axis=1) / (true_tcs**2).mean(axis=1))
+    # How much of each source's amplitude the filter delivers, which is what the
+    # constraint actually controls: every constrained source's contribution,
+    # weighted by how much of source i's waveform each of them carries. For a
+    # pair it is w_i'g_i + r w_i'g_j, so it is the cancellation itself, written
+    # down.
+    #
+    # Two alternatives were measured and rejected, on one two-source alpha scene
+    # 6 cm apart at r = 0.9 and a single averaged trial. The ratio of root mean
+    # squares is not a recovery measure at all -- the output is the source plus
+    # whatever interference survives the filter, so it read 5.65 for LCMV and
+    # 5.75 for MCMV, separating them by two per cent where the filters deliver
+    # 0.13 and 1.00. Regressing the output on the true waveform agrees with this
+    # form in expectation but is estimated from one short noisy recording, and
+    # on that scene it returned 0.21 against a delivered 0.13. This form has no
+    # noise in it, so it says what the filter does rather than how well one
+    # recording happens to measure it.
+    overlap = true_tcs @ true_tcs.T
+    energy = np.maximum(np.diag(overlap), 1e-300)
+    ratio = (delivered * (overlap.T / energy[:, None])).sum(axis=1)
+    # Both empirical alternatives, kept for reference and for the tests.
+    projected = (reconstructed * true_tcs).sum(axis=1) / energy
+    output_rms = np.sqrt(
+        (reconstructed**2).mean(axis=1) / np.maximum((true_tcs**2).mean(axis=1), 1e-300)
+    )
 
     peaks = np.argsort(power_map)[::-1][: len(sources)]
     # Measured from where the source actually is, not from the grid node that
@@ -670,6 +747,11 @@ def constraint_demo(
         extra=dict(
             morphology=morphology,
             n_sources=len(sources),
+            # The projection rank and the q^2 it was chosen out of. A caller
+            # that precomputes the rank for a whole grid needs both, because a
+            # rank alone cannot say which space it belongs to.
+            recipsiicos_rank=recipsiicos_space[0],
+            recipsiicos_virtual=recipsiicos_space[1],
             # Enough to rebuild the recording exactly: the leadfield columns of
             # the simulated sources, and the factor the shared noise field was
             # scaled by. The web panel uses these instead of storing 203
@@ -677,6 +759,8 @@ def constraint_demo(
             # noise.
             leadfield=true_gain,
             true_positions=true_positions,
+            output_rms_ratio=output_rms,
+            projected_ratio=projected,
             noise_scale=float(noise_scale),
         ),
     )
