@@ -328,3 +328,51 @@ def test_the_amplitude_is_measured_at_the_true_source_not_the_scan_node(sphere):
         "amplitude_ratio was built from the scan-node table, so a wrong head "
         "model cannot show up in it"
     )
+
+
+def test_abmc_is_told_what_to_look_for(sphere):
+    """The template is ABMC's main input, not an internal detail.
+
+    It used to be taken silently from the simulated truth, which no experiment
+    has and which quietly made the method look better than it can be. It is a
+    parameter now, and the localiser has to actually depend on it: the map is
+    the template match, so a template from the wrong band must not produce the
+    same map as one from the right band.
+    """
+    info, fwd = sphere
+    maps = {}
+    for choice in ("truth", "matched", "mismatched"):
+        demo = constraint_demo(
+            info,
+            fwd,
+            method="abmc",
+            morphology="theta",
+            correlation=0.9,
+            snr=5.0,
+            template=choice,
+        )
+        maps[choice] = np.asarray(demo.power_map, float)
+    same = np.corrcoef(maps["truth"], maps["matched"])[0, 1]
+    wrong = np.corrcoef(maps["truth"], maps["mismatched"])[0, 1]
+    assert wrong < same, f"wrong-band template scored {wrong:.3f} against {same:.3f}"
+
+    # And an array is accepted as given, which is the case a real study is in.
+    own = np.sin(np.linspace(0, 40, 1000))
+    demo = constraint_demo(
+        info, fwd, method="abmc", correlation=0.9, snr=5.0, template=own, n_times=1000
+    )
+    assert demo.power_map.shape[0] == fwd["sol"]["data"].shape[1]
+
+
+def test_a_template_of_the_wrong_length_is_refused(sphere):
+    """Silently resampling it would change what the method was asked to find."""
+    info, fwd = sphere
+    with pytest.raises(ValueError, match="samples"):
+        constraint_demo(
+            info,
+            fwd,
+            method="abmc",
+            snr=5.0,
+            n_times=1000,
+            template=np.zeros(37),
+        )

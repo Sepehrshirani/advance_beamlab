@@ -248,6 +248,63 @@ def _morphology_waveform(morphology, rng, n_times, sfreq):
     return x - x.mean()
 
 
+# What ABMC is told to look for. The template is the whole point of the method:
+# it is steered to the location whose output best matches this waveform, so
+# choosing it is a scientific decision, not a detail. To localise hippocampal
+# theta you hand it theta. These names build one without needing an array, and
+# an array can always be passed instead.
+_TEMPLATES = ("truth", "matched", "mismatched")
+
+
+def resolve_template(template, morphology, rng, n_times, sfreq, fallback=None):
+    """Turn a template choice into the waveform ABMC will match.
+
+    Parameters
+    ----------
+    template : ndarray | str
+        An explicit waveform, or one of ``'truth'``, ``'matched'`` and
+        ``'mismatched'``. ``'truth'`` is the target's own time course, which no
+        experiment has and which is offered only to show what a perfect template
+        would buy. ``'matched'`` is an independent draw from the same band as
+        the target: the realistic best case, and what someone looking for
+        hippocampal theta would actually supply. ``'mismatched'`` draws from a
+        different band, which is what a wrong guess costs.
+    morphology : str
+        The target's morphology, used to pick the band for ``'matched'``.
+    rng : numpy.random.Generator
+        Randomness for the generated cases.
+    n_times : int
+        Length of the template, which has to match the data.
+    sfreq : float
+        Sampling frequency in hertz.
+    fallback : ndarray | None
+        The waveform ``'truth'`` resolves to. Required for that choice.
+
+    Returns
+    -------
+    template : ndarray, shape (n_times,)
+        Normalised to unit peak. Only its shape matters to ABMC.
+    """
+    if not isinstance(template, str):
+        out = np.asarray(template, float).ravel()
+        if out.shape[0] != n_times:
+            raise ValueError(f"template has {out.shape[0]} samples, data has {n_times}")
+    elif template == "truth":
+        if fallback is None:
+            raise ValueError("template='truth' needs a waveform to copy")
+        out = np.asarray(fallback, float).ravel()
+    else:
+        _check_option("template", template, _TEMPLATES)
+        if template == "matched":
+            kind = morphology
+        else:
+            # Deliberately the wrong band: beta against anything slower, theta
+            # against beta, so the mismatch is always a real one.
+            kind = "beta" if morphology in ("theta", "alpha") else "theta"
+        out = _morphology_waveform(kind, rng, n_times, sfreq)
+    return out / max(float(np.abs(out).max()), 1e-300)
+
+
 def _simulate(
     true_gain,
     correlation,
@@ -619,6 +676,7 @@ def evoked_demo(
     reference_gof=None,
     reference_tcs=None,
     reg=0.05,
+    template="estimate",
     template_p=0.03,
     recipsiicos_rank=None,
     verbose=None,
@@ -658,6 +716,12 @@ def evoked_demo(
         pair is treated as uncorrelated, which understates the cancellation.
     reg : float
         Diagonal loading, as a fraction of the mean eigenvalue.
+    template : ndarray | str
+        What ABMC is told to look for. ``'estimate'``, the default, uses a
+        first-pass single-source LCMV reconstruction of the first location,
+        which is what a recording can supply; ``'mismatched'`` deliberately does
+        not match, to show what a wrong guess costs. An array is used as given.
+        Ignored by every method except ABMC.
     template_p : float
         ABMC's constraint trade-off.
     recipsiicos_rank : int | None
@@ -685,19 +749,31 @@ def evoked_demo(
     rr = forward["source_rr"]
     n_times = sensor.shape[1]
 
-    # ABMC needs a template. On simulated data that is the truth; here it is the
-    # ordinary LCMV estimate of the first source, normalised.
-    plain = make_lcmv(
-        info,
-        forward,
-        data_cov,
-        reg=reg,
-        noise_cov=noise_cov,
-        weight_norm=None,
-        verbose=False,
-    )
-    seed = np.asarray(apply_lcmv(evoked, plain, verbose=False).data)[sources[0]]
-    template = seed / max(float(np.abs(seed).max()), 1e-300)
+    # ABMC has to be told what to look for. A recording has no truth to copy, so
+    # the default is the thing an experimenter actually has: an ordinary
+    # single-source LCMV estimate of the first location, used as a first pass to
+    # sharpen the second. Anything else the caller knows about the target
+    # morphology can be passed instead, which is the point of the argument.
+    if isinstance(template, str) and template == "estimate":
+        plain = make_lcmv(
+            info,
+            forward,
+            data_cov,
+            reg=reg,
+            noise_cov=noise_cov,
+            weight_norm=None,
+            verbose=False,
+        )
+        seed = np.asarray(apply_lcmv(evoked, plain, verbose=False).data)[sources[0]]
+        template = seed / max(float(np.abs(seed).max()), 1e-300)
+    else:
+        template = resolve_template(
+            template,
+            "alpha",
+            np.random.default_rng(977),
+            n_times,
+            float(evoked.info["sfreq"]),
+        )
 
     apply_fn, power_map, recipsiicos_space = _build_filters(
         info,
@@ -796,6 +872,7 @@ def constraint_demo(
     seed=0,
     true_forward=None,
     off_grid_sources=True,
+    template="truth",
     template_p=0.03,
     recipsiicos_rank=None,
     verbose=None,
@@ -863,6 +940,15 @@ def constraint_demo(
         background. Setting it ``False`` keeps the sources on scanned grid
         points, which is the only way to see what the constraint itself does,
         while leaving the background identical so the two cases stay comparable.
+    template : ndarray | str
+        What ABMC is told to look for, and the choice matters more than any
+        other ABMC setting: the method is steered to the location whose output
+        best matches this waveform. To localise hippocampal theta you hand it
+        theta. Pass an array to supply your own, or name one of ``'truth'``,
+        ``'matched'`` and ``'mismatched'``; see :func:`resolve_template`. The
+        default reproduces the target exactly, which no experiment can do, and
+        is there to show what a perfect template would be worth. Ignored by
+        every method except ABMC.
     template_p : float
         ``P`` for ABMC. Ignored by the other methods.
     recipsiicos_rank : int | None
@@ -1006,7 +1092,14 @@ def constraint_demo(
         sensor,
         method=method,
         reg=reg,
-        template=true_tcs[0] / np.abs(true_tcs[0]).max(),
+        template=resolve_template(
+            template,
+            morphology,
+            np.random.default_rng(seed + 977),
+            n_times,
+            sfreq,
+            fallback=true_tcs[0],
+        ),
         template_p=template_p,
         recipsiicos_rank=recipsiicos_rank,
     )

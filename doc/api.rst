@@ -89,6 +89,9 @@ The methods here differ from an ordinary LCMV in their *constraint*, which is
 the part hardest to picture from the algebra. :func:`constraint_demo` turns it
 into a number: the gain of each filter at each source, measured rather than read
 out of the weights, so that the four methods are directly comparable.
+:func:`evoked_demo` does the same for a recording, reporting only what needs no
+truth, and :func:`resolve_template` builds the waveform ABMC is asked to look
+for when you would rather name a band than supply an array.
 
 .. autosummary::
    :toctree: generated/
@@ -96,6 +99,10 @@ out of the weights, so that the four methods are directly comparable.
    constraint_demo
    constraint_explorer
    ConstraintDemo
+   evoked_demo
+   evoked_sources
+   EvokedDemo
+   resolve_template
 
 References
 ----------

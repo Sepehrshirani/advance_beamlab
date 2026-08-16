@@ -42,7 +42,15 @@ from ._connectivity import (
     pairwise_mcmv_connectivity,
     reconstruct_pairwise_mcmv,
 )
-from ._explain import ConstraintDemo, constraint_demo, constraint_explorer
+from ._explain import (
+    ConstraintDemo,
+    EvokedDemo,
+    constraint_demo,
+    constraint_explorer,
+    evoked_demo,
+    evoked_sources,
+    resolve_template,
+)
 from ._fem import (
     fetch_ny_head,
     make_ny_head_info,
@@ -98,9 +106,13 @@ __all__ = [
     "ny_head_scalp",
     "ny_head_plot_indices",
     "ny_head_picks",
+    "EvokedDemo",
     "constraint_demo",
     "ConstraintDemo",
     "constraint_explorer",
+    "evoked_demo",
+    "evoked_sources",
+    "resolve_template",
 ]
 
 __version__ = "0.1.0.dev0"
