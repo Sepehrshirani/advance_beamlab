@@ -152,6 +152,36 @@ somato-dendritic direction its pyramidal cells are organised along. It is a
 simplification, and a real hippocampal study would want to think harder about
 it.
 
+**Template ABMC seeks** appears only with ABMC selected, because it is the only
+method that has one, and it is that method's most consequential setting. ABMC
+does not look for power; it is steered to the location whose output best matches
+a waveform you give it, at the best lag. Choosing that waveform is a scientific
+decision: to localise hippocampal theta you hand it theta. The control offers
+the target's own time course, which no experiment has and which is there only to
+show what a perfect template would be worth; an independent signal from the
+*same band*, which is the realistic best case and what "looking for theta"
+actually means; and one from a *different* band, which is what a wrong guess
+costs. In your own analysis this is an argument to
+:func:`~advance_beamlab.make_abmc`: pass an expert-annotated spike, an averaged
+response, or a band-limited signal standing for the rhythm you are after.
+
+Watch the localiser rather than the constraint table when you move it. At the
+panel's :math:`P` of 0.03 the template barely changes the weights, which is the
+method behaving as designed -- it is a mild steer, not a second distortionless
+constraint -- so the delivered amplitude hardly moves. The map is a different
+story, because the map *is* the template match: on hippocampal theta a
+same-band template gives a map correlating 0.86 with the one the target's own
+waveform produces, and a wrong-band template only 0.14. The peak often survives
+that, which is worth knowing too; what a bad template mostly costs you is the
+rest of the picture.
+
+One caveat that the burst morphology makes obvious. For a rhythm, naming the
+band is most of what a template needs to say. For spike-like activity it is not:
+an independent burst train drawn from the same generator has the same shape and
+the wrong timing, and ABMC's lag search can only align a template that is
+actually there. Matching the morphology matters more than matching the class it
+came from.
+
 The rhythms are chosen to go with them. **Activity** switches between theta,
 alpha and beta, or a train of short bursts. The rhythms are band-limited processes rather than modulated sinusoids,
 because a pure tone is not what a rhythm looks like and it makes every trace on
