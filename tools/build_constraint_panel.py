@@ -38,6 +38,21 @@ from advance_beamlab import constraint_demo
 
 # The axes a reader can move. Every combination is precomputed.
 METHODS = ("lcmv", "mcmv", "recipsiicos", "abmc")
+# ABMC is steered to whatever waveform it is told to look for, so that choice is
+# the method's main control and belongs on the page rather than buried in the
+# build. "truth" is the target's own time course, which no experiment has and
+# which is here to show what a perfect template would be worth; "matched" is an
+# independent draw from the same band, which is what someone looking for
+# hippocampal theta would really supply; "mismatched" is a wrong guess.
+TEMPLATES = ("truth", "matched", "mismatched")
+REAL_TEMPLATES = ("estimate", "mismatched")
+
+
+def templates_for(method, choices):
+    """Return the template settings a method needs; one pass for all but ABMC."""
+    return choices if method == "abmc" else (None,)
+
+
 CORRELATIONS = (0.0, 0.9, 0.99)
 MORPHOLOGIES = ("theta", "alpha", "beta", "transient")
 
@@ -442,94 +457,99 @@ def _one_scene(info, fwd, fine, rank, combo, verbose):
     off_grid = head_model == "realistic"
     scene, rows = None, []
     for method in METHODS:
-        t0 = time.time()
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            demo = constraint_demo(
-                info,
-                fwd,
-                method=method,
-                sources=layout["sources"],
-                n_sources=layout.get("n", 2),
-                separation=layout.get("sep", 0.04),
-                morphology=morph,
-                correlation=corr,
-                snr=snr,
-                n_times=N_TIMES,
-                sfreq=SFREQ,
-                seed=SEED,
-                # The rank curve is a property of the forward, not of the data,
-                # so it is computed once and handed in. Left to default it is
-                # recomputed for every ReciPSIICOS configuration, which cost
-                # about thirty seconds each and dominated the whole build.
-                recipsiicos_rank=rank,
-                true_forward=fine,
-                off_grid_sources=off_grid,
+        for template in templates_for(method, TEMPLATES):
+            t0 = time.time()
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                demo = constraint_demo(
+                    info,
+                    fwd,
+                    method=method,
+                    sources=layout["sources"],
+                    n_sources=layout.get("n", 2),
+                    separation=layout.get("sep", 0.04),
+                    morphology=morph,
+                    correlation=corr,
+                    snr=snr,
+                    n_times=N_TIMES,
+                    sfreq=SFREQ,
+                    seed=SEED,
+                    # The rank curve is a property of the forward, not of the data,
+                    # so it is computed once and handed in. Left to default it is
+                    # recomputed for every ReciPSIICOS configuration, which cost
+                    # about thirty seconds each and dominated the whole build.
+                    recipsiicos_rank=rank,
+                    true_forward=fine,
+                    off_grid_sources=off_grid,
+                    template=template if template is not None else "truth",
+                )
+            fatal = sorted(
+                {
+                    str(w.message)
+                    for w in caught
+                    if any(f in str(w.message) for f in FATAL_WARNINGS)
+                }
             )
-        fatal = sorted(
-            {
-                str(w.message)
-                for w in caught
-                if any(f in str(w.message) for f in FATAL_WARNINGS)
-            }
-        )
-        if fatal:
-            raise RuntimeError(
-                f"{method} on layout {layout['key']}, correlation {corr}, "
-                f"{trials} trial(s), {morph} produced a covariance that cannot "
-                "be trusted:\n  " + "\n  ".join(fatal)
+            if fatal:
+                raise RuntimeError(
+                    f"{method} on layout {layout['key']}, correlation {corr}, "
+                    f"{trials} trial(s), {morph} produced a covariance that cannot "
+                    "be trusted:\n  " + "\n  ".join(fatal)
+                )
+            if scene is None:
+                scene = dict(
+                    sources=[int(v) for v in demo.sources],
+                    separation=float(demo.separation),
+                    correlation=float(demo.correlation),
+                    requested=dict(
+                        layout=layout["key"],
+                        corr=corr,
+                        trials=trials,
+                        morph=morph,
+                        head=head_model,
+                    ),
+                    true_tcs=demo.true_tcs,
+                    sensor=demo.sensor_data,
+                    leadfield=demo.extra["leadfield"],
+                    noise_scale=demo.extra["noise_scale"],
+                    true_positions=demo.extra["true_positions"],
+                )
+            else:
+                # The comparison is only fair if the data are identical.
+                np.testing.assert_allclose(
+                    demo.true_tcs, scene["true_tcs"], rtol=0, atol=0
+                )
+                np.testing.assert_allclose(
+                    demo.sensor_data, scene["sensor"], rtol=0, atol=0
+                )
+                assert list(demo.sources) == scene["sources"]
+            # The grid points the map actually peaks at. constraint_demo scores its
+            # peak_errors against exactly these, so the panel can draw the estimate
+            # the error refers to rather than a different peak of its own choosing.
+            peaks = np.argsort(demo.power_map)[::-1][: len(demo.sources)]
+            rows.append(
+                dict(
+                    method=method,
+                    template=template,
+                    gains=demo.gains.tolist(),
+                    amplitude_ratio=demo.amplitude_ratio.tolist(),
+                    peak_errors=(demo.peak_errors * 1000).tolist(),
+                    peaks=[int(v) for v in peaks],
+                    power_map=demo.power_map,
+                    reconstructed=demo.reconstructed,
+                )
             )
-        if scene is None:
-            scene = dict(
-                sources=[int(v) for v in demo.sources],
-                separation=float(demo.separation),
-                correlation=float(demo.correlation),
-                requested=dict(
-                    layout=layout["key"],
-                    corr=corr,
-                    trials=trials,
-                    morph=morph,
-                    head=head_model,
-                ),
-                true_tcs=demo.true_tcs,
-                sensor=demo.sensor_data,
-                leadfield=demo.extra["leadfield"],
-                noise_scale=demo.extra["noise_scale"],
-                true_positions=demo.extra["true_positions"],
-            )
-        else:
-            # The comparison is only fair if the data are identical.
-            np.testing.assert_allclose(demo.true_tcs, scene["true_tcs"], rtol=0, atol=0)
-            np.testing.assert_allclose(
-                demo.sensor_data, scene["sensor"], rtol=0, atol=0
-            )
-            assert list(demo.sources) == scene["sources"]
-        # The grid points the map actually peaks at. constraint_demo scores its
-        # peak_errors against exactly these, so the panel can draw the estimate
-        # the error refers to rather than a different peak of its own choosing.
-        peaks = np.argsort(demo.power_map)[::-1][: len(demo.sources)]
-        rows.append(
-            dict(
-                method=method,
-                gains=demo.gains.tolist(),
-                amplitude_ratio=demo.amplitude_ratio.tolist(),
-                peak_errors=(demo.peak_errors * 1000).tolist(),
-                peaks=[int(v) for v in peaks],
-                power_map=demo.power_map,
-                reconstructed=demo.reconstructed,
-            )
-        )
-        if verbose:
-            n_src = len(demo.sources)
-            off = demo.gains[0, 1] if n_src > 1 else float("nan")
-            print(
-                f"  {method:>11} {layout['key']:>15} {morph:>9} {head_model:>9} "
-                f"r {corr:+.2f} "
-                f"{trials:>4} trial  off-diag {off:+.3f}  "
-                f"recovered {demo.amplitude_ratio[0]:.3f}  "
-                f"error {demo.peak_errors[0] * 1000:5.1f} mm  "
-                f"[{time.time() - t0:.1f}s]"
-            )
+            if verbose:
+                n_src = len(demo.sources)
+                off = demo.gains[0, 1] if n_src > 1 else float("nan")
+                print(
+                    f"  {method:>11} {layout['key']:>15} {morph:>9} {head_model:>9} "
+                    f"r {corr:+.2f} "
+                    f"{trials:>4} trial  off-diag {off:+.3f}  "
+                    f"recovered {demo.amplitude_ratio[0]:.3f}  "
+                    f"error {demo.peak_errors[0] * 1000:5.1f} mm  "
+                    f"[{time.time() - t0:.1f}s]"
+                )
     return scene, rows
 
 
@@ -1149,48 +1169,51 @@ def run_real_grid(info, fwd, index, epochs, noise_cov, picked, rank, verbose=Tru
         )
         scenes.append(scene)
         for method in METHODS:
-            t0 = time.time()
-            demo = evoked_demo(
-                info,
-                fwd,
-                evoked,
-                data_cov,
-                noise_cov,
-                sources,
-                method=method,
-                condition=condition,
-                n_trials=used,
-                window=window,
-                reference=entry["reference"],
-                reference_gof=entry["gof"],
-                reference_tcs=joint.reconstructed,
-                recipsiicos_rank=rank,
-                verbose=False,
-            )
-            results.append(
-                dict(
-                    scene=scene["index"],
+            for template in templates_for(method, REAL_TEMPLATES):
+                t0 = time.time()
+                demo = evoked_demo(
+                    info,
+                    fwd,
+                    evoked,
+                    data_cov,
+                    noise_cov,
+                    sources,
                     method=method,
-                    gains=[[float(v) for v in row] for row in demo.gains],
-                    amplitude_ratio=[float(v) for v in demo.amplitude_ratio],
-                    peaks=[int(v) for v in demo.peaks],
-                    reference_distance=[
-                        float(v) for v in demo.reference_distance * 1000
-                    ],
-                    power_map=np.asarray(demo.power_map, float),
-                    reconstructed=np.asarray(demo.reconstructed, float),
-                    sensor=np.asarray(demo.sensor_data, float),
-                    times=np.asarray(demo.times, float),
+                    condition=condition,
+                    n_trials=used,
+                    window=window,
+                    reference=entry["reference"],
+                    reference_gof=entry["gof"],
+                    reference_tcs=joint.reconstructed,
+                    recipsiicos_rank=rank,
+                    template=template if template is not None else "estimate",
+                    verbose=False,
                 )
-            )
-            if verbose:
-                print(
-                    f"  {method:>11} {label:>15} {window[0]:.2f}-{window[1]:.2f}s "
-                    f"{used:>3} trial(s)  off-diag {demo.gains[0, 1]:+.3f}  "
-                    f"delivered {demo.amplitude_ratio[0]:.3f}  "
-                    f"to dipole {demo.reference_distance.min() * 1000:5.1f} mm "
-                    f"[{time.time() - t0:.1f}s]"
+                results.append(
+                    dict(
+                        scene=scene["index"],
+                        method=method,
+                        template=template,
+                        gains=[[float(v) for v in row] for row in demo.gains],
+                        amplitude_ratio=[float(v) for v in demo.amplitude_ratio],
+                        peaks=[int(v) for v in demo.peaks],
+                        reference_distance=[
+                            float(v) for v in demo.reference_distance * 1000
+                        ],
+                        power_map=np.asarray(demo.power_map, float),
+                        reconstructed=np.asarray(demo.reconstructed, float),
+                        sensor=np.asarray(demo.sensor_data, float),
+                        times=np.asarray(demo.times, float),
+                    )
                 )
+                if verbose:
+                    print(
+                        f"  {method:>11} {label:>15} {window[0]:.2f}-{window[1]:.2f}s "
+                        f"{used:>3} trial(s)  off-diag {demo.gains[0, 1]:+.3f}  "
+                        f"delivered {demo.amplitude_ratio[0]:.3f}  "
+                        f"to dipole {demo.reference_distance.min() * 1000:5.1f} mm "
+                        f"[{time.time() - t0:.1f}s]"
+                    )
         if verbose:
             print(f"real scene {n + 1}/{len(combos)}")
     return scenes, results
@@ -1282,6 +1305,7 @@ def pack_real(packer, header, scenes, results, positions, *, centre, verbose=Tru
     ]
     header["real_windows"] = [[float(a), float(b)] for a, b in REAL_WINDOWS]
     header["real_trials"] = list(REAL_TRIALS)
+    header["real_templates"] = list(REAL_TEMPLATES)
     header["n_real_sources"] = n_real
     header["real_decimation"] = REAL_DECIMATION
     header["real_positions"] = packer.add(
@@ -1303,13 +1327,19 @@ def pack_real(packer, header, scenes, results, positions, *, centre, verbose=Tru
             recordings.append(match["sensor"])
         scene["recording"] = recording_of[key]
     stack = np.stack(recordings)
-    # A single scale for all of them, so that averaging more trials visibly
-    # lowers the noise instead of every scene being renormalised to its own
-    # peak, which would hide exactly what the trials control is there to show.
-    real_scale = 32000.0 / max(float(np.abs(stack).max()), 1e-30)
-    header["real_recording_scale"] = real_scale
+    # Stored as a fraction of the loudest sample anywhere in the recorded half,
+    # not in tesla per metre. Two reasons. One scale for all of them means
+    # averaging more trials visibly lowers the noise instead of every scene
+    # being renormalised to its own peak, which would hide exactly what the
+    # trials control is there to show. And unit amplitude is the convention the
+    # simulated half already uses, so the drawing code does not have to know
+    # which half it is looking at: in physical units the traces came out around
+    # 1e-12 and every sensor panel drew a flat line.
+    peak = max(float(np.abs(stack).max()), 1e-30)
+    header["real_recording_peak"] = peak
+    header["real_recording_scale"] = 32000.0
     header["real_recording"] = packer.add(
-        _quantise(stack, real_scale, "real recording"), np.int16
+        _quantise(stack / peak, 32000.0, "real recording"), np.int16
     )
     header["real_n_recordings"] = len(recordings)
 
@@ -1354,6 +1384,7 @@ def pack_real(packer, header, scenes, results, positions, *, centre, verbose=Tru
         dict(
             scene=r["scene"],
             method=r["method"],
+            template=r.get("template"),
             gains=[[round(v, 4) for v in row] for row in r["gains"]],
             amplitude_ratio=[round(v, 4) for v in r["amplitude_ratio"]],
             peaks=r["peaks"],
@@ -1385,6 +1416,7 @@ def pack(
     packer = Packer()
     header = dict(
         methods=list(METHODS),
+        templates=list(TEMPLATES),
         correlations=list(CORRELATIONS),
         trials=list(TRIALS),
         snrs=list(SNRS),
@@ -1544,6 +1576,7 @@ def pack(
         dict(
             scene=r["scene"],
             method=r["method"],
+            template=r.get("template"),
             gains=[[round(v, 5) for v in row] for row in r["gains"]],
             amplitude_ratio=[round(v, 5) for v in r["amplitude_ratio"]],
             peak_errors=[round(v, 2) for v in r["peak_errors"]],

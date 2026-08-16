@@ -109,8 +109,11 @@ def test_every_combination_is_present(header):
         * len(header["head_models"])
     )
     assert len(header["scenes"]) == expected
-    assert len(header["results"]) == expected * len(header["methods"])
-    seen = {(r["scene"], r["method"]) for r in header["results"]}
+    # ABMC runs once per template and the other three once, so a result is
+    # identified by all three of scene, method and template.
+    per_scene = len(header["methods"]) - 1 + len(header["templates"])
+    assert len(header["results"]) == expected * per_scene
+    seen = {(r["scene"], r["method"], r["template"]) for r in header["results"]}
     assert len(seen) == len(header["results"])
 
 
@@ -495,7 +498,14 @@ def test_the_build_takes_its_rank_from_a_real_scene():
         and isinstance(node.func, ast.Name)
         and node.func.id == "constraint_demo"
     )
-    required = {kw.arg for kw in scene_call.keywords} - {"method", "recipsiicos_rank"}
+    # ``method`` and ``recipsiicos_rank`` are what the helper is choosing, and
+    # ``template`` steers ABMC's filter without touching either covariance, so
+    # it cannot move q. Everything else reaches the covariance and must match.
+    required = {kw.arg for kw in scene_call.keywords} - {
+        "method",
+        "recipsiicos_rank",
+        "template",
+    }
     assert required <= passed, f"representative scene omits {sorted(required - passed)}"
 
 
@@ -504,7 +514,8 @@ def test_the_recorded_half_is_present_and_self_consistent(header):
     scenes = header["real_scenes"]
     results = header["real_results"]
     assert scenes and results
-    assert len(results) == len(scenes) * len(header["methods"])
+    per_scene = len(header["methods"]) - 1 + len(header["real_templates"])
+    assert len(results) == len(scenes) * per_scene
     n_rec = header["real_n_recordings"]
     for scene in scenes:
         assert 0 <= scene["recording"] < n_rec
@@ -513,7 +524,7 @@ def test_the_recorded_half_is_present_and_self_consistent(header):
         assert len(scene["reference"]) == len(scene["reference_gof"])
         for gof in scene["reference_gof"]:
             assert 0 <= gof <= 100
-    seen = {(r["scene"], r["method"]) for r in results}
+    seen = {(r["scene"], r["method"], r["template"]) for r in results}
     assert len(seen) == len(results)
 
 
@@ -575,3 +586,72 @@ def test_the_recorded_blocks_are_sized_as_the_header_says(header, payload):
         for r in header["real_results"]
     )
     assert recon.size == total * n_t
+
+
+def test_only_abmc_carries_a_template(header):
+    """The other three never see one, and saying they do would mislead."""
+    for key in ("results", "real_results"):
+        for result in header[key]:
+            if result["method"] == "abmc":
+                assert result["template"], key
+            else:
+                assert result["template"] is None, key
+
+
+def test_every_template_was_run_for_abmc(header):
+    """A missing combination leaves the control pointing at nothing."""
+    for results_key, scenes_key, templates_key in (
+        ("results", "scenes", "templates"),
+        ("real_results", "real_scenes", "real_templates"),
+    ):
+        wanted = set(header[templates_key])
+        assert wanted
+        seen = {}
+        for result in header[results_key]:
+            if result["method"] != "abmc":
+                continue
+            seen.setdefault(result["scene"], set()).add(result["template"])
+        assert len(seen) == len(header[scenes_key])
+        for scene, got in seen.items():
+            assert got == wanted, f"{results_key} scene {scene}: {sorted(got)}"
+
+
+def test_the_template_changes_the_localiser(header, payload):
+    """If the map did not move, the control would teach the wrong lesson.
+
+    ABMC is steered to whatever waveform it is told to look for, so the map is
+    the template match. A wrong-band template has to produce a different map
+    from the target's own waveform, or the panel would suggest the choice does
+    not matter.
+    """
+    maps = view(header, payload, "maps").reshape(
+        len(header["results"]), header["n_sources"]
+    )
+    by_scene = {}
+    for i, result in enumerate(header["results"]):
+        if result["method"] == "abmc":
+            by_scene.setdefault(result["scene"], {})[result["template"]] = i
+    moved = 0
+    for entry in by_scene.values():
+        if not {"truth", "mismatched"} <= set(entry):
+            continue
+        a = maps[entry["truth"]].astype(float)
+        b = maps[entry["mismatched"]].astype(float)
+        if not np.array_equal(a, b):
+            moved += 1
+    assert moved > 0.8 * len(by_scene), f"only {moved} of {len(by_scene)} maps moved"
+
+
+def test_the_recording_is_stored_at_unit_amplitude(header, payload):
+    """Physical units drew flat lines, because the panel scales as if unit.
+
+    The recorded traces are around 1e-12 tesla per metre. The sensor panel
+    normalises by the loudest visible sample and the topography clamps to
+    plus or minus one, so a block stored in physical units rendered as a flat
+    line and an empty field map. The peak is carried separately, so nothing is
+    lost by storing a fraction of it.
+    """
+    rec = view(header, payload, "real_recording").astype(float)
+    unit = rec / header["real_recording_scale"]
+    assert 0.5 < np.abs(unit).max() <= 1.0
+    assert header["real_recording_peak"] > 0
