@@ -511,3 +511,14 @@ html[data-theme="dark"] .cp-root {
 .cp-root.cp-showing-real .cp-real-only {
   display: contents;
 }
+
+/* The template belongs to ABMC alone, so the control only appears with it.
+   Shown for the other three it would suggest they use one, which is the
+   misunderstanding this control exists to prevent. */
+.cp-abmc-only {
+  display: none;
+}
+
+.cp-root.cp-showing-abmc .cp-abmc-only {
+  display: contents;
+}

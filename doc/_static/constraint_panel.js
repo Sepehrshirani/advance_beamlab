@@ -356,7 +356,7 @@
     });
     var resultOf = {};
     P.results.forEach(function (r, i) {
-      resultOf[r.scene + "|" + r.method] = i;
+      resultOf[r.scene + "|" + r.method + "|" + (r.template || "")] = i;
     });
 
     /* The recorded half. Everything about it is optional: a payload built with
@@ -378,7 +378,7 @@
     var realResultOf = {};
     if (HAS_REAL) {
       P.real_results.forEach(function (r, i) {
-        realResultOf[r.scene + "|" + r.method] = i;
+        realResultOf[r.scene + "|" + r.method + "|" + (r.template || "")] = i;
       });
     }
     /* Trial counts are per condition -- a scene records what it actually
@@ -396,6 +396,7 @@
 
     var state = {
       dataset: 0,
+      template: 0,
       cond: 0,
       win: 0,
       rtrials: 0,
@@ -428,6 +429,8 @@
       '<div class="cp-controls">' +
       (HAS_REAL ? chip("cp-dataset", "Dataset") : "") +
       chip("cp-methods", "Method") +
+      '<span class="cp-abmc-only">' + chip("cp-template", "Template ABMC seeks") +
+      "</span>" +
       '<span class="cp-sim-only">' +
       chip("cp-layout", "Sources", true) +
       chip("cp-morph", "Activity") +
@@ -533,6 +536,30 @@
       return METHOD_LABEL[m] || m;
     });
     var datasetBox = null, condBox = null, winBox = null, rtrialsBox = null;
+    var TEMPLATE_LABEL = {
+      truth: "the source itself",
+      matched: "same band",
+      mismatched: "wrong band",
+      estimate: "first-pass estimate",
+    };
+    var TEMPLATE_NOTE = {
+      truth:
+        "The target's own waveform. No experiment has this; it is here to show " +
+        "what a perfect template would be worth.",
+      matched:
+        "An independent signal from the same band as the target. This is the " +
+        "realistic best case, and what looking for hippocampal theta means in " +
+        "practice: you know the rhythm, not the trace.",
+      mismatched:
+        "A signal from a different band. A wrong guess about what you are " +
+        "looking for, which is the failure this control exists to show.",
+      estimate:
+        "A first-pass single-source LCMV reconstruction, which is what a " +
+        "recording can actually supply: an estimate of the time course, used " +
+        "to sharpen the second pass.",
+    };
+    var templateBox = null;
+    templateBox = root.querySelector("#cp-template");
     if (HAS_REAL) {
       datasetBox = chips(
         "cp-dataset",
@@ -682,6 +709,21 @@
     /* The recorded trial counts depend on the condition: a scene records what
      * it actually averaged, and rejection leaves each condition a different
      * number of epochs. Rebuilt whenever the condition changes. */
+    /* Rebuilt on a dataset change: the simulated half can offer the target's own
+     * waveform and the recorded half cannot, so the choices are not the same. */
+    function rebuildTemplates() {
+      var list = templateList();
+      state.template = Math.min(state.template, Math.max(0, list.length - 1));
+      templateBox.innerHTML = "";
+      list.forEach(function (name, i) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.textContent = TEMPLATE_LABEL[name] || name;
+        b.addEventListener("click", function () { state.template = i; render(); });
+        templateBox.appendChild(b);
+      });
+    }
+
     function rebuildRealTrials() {
       if (!HAS_REAL) return;
       var counts = realTrialsFor(state.cond);
@@ -696,6 +738,23 @@
       });
     }
 
+    /* Only ABMC has a template; the other three were run once and stored with
+     * an empty one, so the key is empty for them. */
+    function templateList() {
+      return recorded() ? (P.real_templates || []) : (P.templates || []);
+    }
+    /* The sweep draws all four methods at once, so it needs the template key of
+     * a named method rather than of the selected one. */
+    function templateFor(method) {
+      if (method !== "abmc") return "";
+      var list = templateList();
+      return list.length ? list[Math.min(state.template, list.length - 1)] : "";
+    }
+    function templateKey() {
+      if (P.methods[state.method] !== "abmc") return "";
+      var list = templateList();
+      return list.length ? list[Math.min(state.template, list.length - 1)] : "";
+    }
     function current() {
       if (recorded()) {
         var counts = realTrialsFor(state.cond);
@@ -707,7 +766,8 @@
         var rs = realSceneOf[rk];
         return {
           scene: rs,
-          result: realResultOf[rs + "|" + P.methods[state.method]],
+          result:
+            realResultOf[rs + "|" + P.methods[state.method] + "|" + templateKey()],
         };
       }
       var key = [
@@ -718,7 +778,10 @@
         P.head_models[state.head],
       ].join("|");
       var s = sceneOf[key];
-      return { scene: s, result: resultOf[s + "|" + P.methods[state.method]] };
+      return {
+        scene: s,
+        result: resultOf[s + "|" + P.methods[state.method] + "|" + templateKey()],
+      };
     }
     /* The active scene and result, whichever half is showing. */
     function sceneRec(i) { return recorded() ? P.real_scenes[i] : P.scenes[i]; }
@@ -1117,7 +1180,10 @@
       var t0 = state.tStart, t1 = Math.min(timeCount(), state.tStart + state.tSpan);
 
       // One scale across the visible channels, so relative amplitude is real.
-      var peak = 1e-9, k, t;
+      // Seeded at zero, not at a small constant. A floor of 1e-9 is larger than
+      // a gradiometer ever reads, so every real trace was divided by the floor
+      // rather than by its own peak and drew as a flat line.
+      var peak = 0, k, t;
       for (k = 0; k < shown; k++) {
         for (t = t0; t < t1; t++) {
           var v0 = Math.abs(sensorAt(cur.scene, state.chan0 + k, t));
@@ -1130,7 +1196,7 @@
       for (k = 0; k < shown; k++) {
         ctx.beginPath();
         for (t = t0; t < t1; t++) {
-          var v = sensorAt(cur.scene, state.chan0 + k, t) / peak;
+          var v = peak > 0 ? sensorAt(cur.scene, state.chan0 + k, t) / peak : 0;
           var x = padL + ((t - t0) / (t1 - t0 - 1 || 1)) * (c.w - padL - padR);
           var y = padT + lane * (k + 0.5) - v * lane * 0.46;
           if (t === t0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
@@ -1251,14 +1317,16 @@
               P.real_windows[state.win].join(","),
               counts[i],
             ].join("|");
-            r = P.real_results[realResultOf[realSceneOf[rk] + "|" + mm]];
+            r = P.real_results[
+              realResultOf[realSceneOf[rk] + "|" + mm + "|" + templateFor(mm)]
+            ];
           } else {
             var key = [
               P.layouts[state.layout].key, P.correlations[i],
               P.trials[state.trials], P.morphologies[state.morph],
               P.head_models[state.head],
             ].join("|");
-            r = P.results[resultOf[sceneOf[key] + "|" + mm]];
+            r = P.results[resultOf[sceneOf[key] + "|" + mm + "|" + templateFor(mm)]];
           }
           var e = recorded()
             ? Math.min.apply(null, r.reference_distance)
@@ -1403,6 +1471,17 @@
         eq.subject + "</span></div>" +
         '<div class="cp-eq-sol">' + eq.solution + "</div>" +
         '<p class="cp-hint">' + eq.note + "</p>" +
+        (P.methods[state.method] === "abmc"
+          ? '<p class="cp-note-block"><b>The template u.</b> ' +
+            (TEMPLATE_NOTE[templateKey()] || "") +
+            " ABMC is steered to the location whose output best matches it, at " +
+            "the best lag, and only its shape matters -- the readout is " +
+            "invariant to its amplitude. In a real study this is yours to " +
+            "choose: an expert-annotated spike, an averaged response, or a " +
+            "band-limited signal standing for the rhythm you are after. " +
+            "<code>make_abmc</code> takes it as an argument for exactly that " +
+            "reason.</p>"
+          : "") +
         '<div class="cp-eq-live">with the controls where they are: ' + live +
         " &nbsp;&rarr;&nbsp; " + (res.amplitude_ratio[0] * 100).toFixed(0) +
         "% of the amplitude survives, peak " +
@@ -1487,6 +1566,14 @@
           }
         }
       );
+      var isAbmc = P.methods[state.method] === "abmc";
+      root.classList.toggle("cp-showing-abmc", isAbmc);
+      rebuildTemplates();
+      for (var q = 0; q < templateBox.children.length; q++) {
+        templateBox.children[q].setAttribute(
+          "aria-pressed", q === state.template ? "true" : "false"
+        );
+      }
       if (HAS_REAL) {
         for (var d = 0; d < datasetBox.children.length; d++) {
           datasetBox.children[d].setAttribute(
