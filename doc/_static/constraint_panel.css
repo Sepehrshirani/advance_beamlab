@@ -606,15 +606,27 @@ html[data-theme="dark"] .cp-root {
   transition: none;
 }
 
+/* Both selectors, and !important on the properties that decide whether a chip
+   reads as a control.
+
+   This is not the way to write CSS for a page you own, and it is the way to
+   write it for a widget dropped into someone else's theme. Two rounds of
+   correct-looking, correctly-deployed rules still rendered as floating words,
+   and without a browser to inspect computed styles there is no way to find
+   which of the theme's several hundred rules is winning. Taking the argument
+   off the table costs nothing here: these five properties are the whole visual
+   identity of a chip, and nothing in the surrounding documentation has any
+   business setting them on our buttons. */
+.cp-root .cp-methods button,
 .cp-root button.cp-chip {
   appearance: none;
   -webkit-appearance: none;
   /* Sized to their text, not stretched to fill the row. Stretching made a
      four-option group span the full width with ragged gaps, which reads as
      four unrelated labels rather than one choice. */
-  flex: 0 0 auto;
+  flex: 0 0 auto !important;
   margin: 0;
-  padding: 0.32rem 0.7rem;
+  padding: 0.32rem 0.7rem !important;
   font: inherit;
   font-size: 0.82rem;
   line-height: 1.25;
@@ -624,21 +636,23 @@ html[data-theme="dark"] .cp-root {
      nearly invisible: the whole strip read as a list of words with no sign that
      any of them was a control. A chip has to look clickable before it is
      clicked. */
-  background: var(--cp-chip);
-  border: 1px solid var(--cp-chip-edge);
-  border-radius: 999px;
+  background: var(--cp-chip, #fff) !important;
+  border: 1px solid var(--cp-chip-edge, #82888f) !important;
+  border-radius: 999px !important;
   cursor: pointer;
   white-space: nowrap;
 }
 
+.cp-root .cp-methods button:hover,
 .cp-root button.cp-chip:hover {
   border-color: var(--cp-accent);
 }
 
+.cp-root .cp-methods button[aria-pressed="true"],
 .cp-root button.cp-chip[aria-pressed="true"] {
-  background: var(--cp-accent);
-  border-color: var(--cp-accent);
-  color: #fff;
+  background: var(--cp-accent, #0072b2) !important;
+  border-color: var(--cp-accent, #0072b2) !important;
+  color: #fff !important;
   font-weight: 600;
 }
 
@@ -672,11 +686,25 @@ html[data-theme="dark"] .cp-root {
    scattered. A grid gives every control a column of its own, so labels line up
    down the strip and the chips underneath them start at the same place. */
 .cp-controls {
-  display: grid;
+  display: grid !important;
   grid-template-columns: repeat(auto-fit, minmax(210px, auto));
   justify-content: start;
   align-items: start;
   gap: 0.85rem 1.6rem;
+  /* Restated here, and enforced. The strip is meant to read as one panel that
+     the controls sit inside; without the card it is a set of words on the page
+     background, which is most of why the whole thing looked unstructured. */
+  padding: 0.9rem 1.1rem !important;
+  background: var(--cp-panel, #f7f7f9) !important;
+  border: 1px solid var(--cp-border, #d5d7de) !important;
+  border-radius: 8px !important;
+}
+
+/* The group headings inside the source control sat on the same line as the
+   chips when the container became a grid item. They span the row. */
+.cp-root .cp-group-label {
+  grid-column: 1 / -1;
+  flex-basis: 100%;
 }
 
 .cp-control {

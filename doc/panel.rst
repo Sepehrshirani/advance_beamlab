@@ -100,9 +100,9 @@ says anything on its own.
 .. raw:: html
 
    <div id="constraint-panel" class="cp-root"></div>
-   <link rel="stylesheet" href="_static/constraint_panel.css">
-   <script src="_static/constraint_panel_data.js"></script>
-   <script src="_static/constraint_panel.js"></script>
+   <link rel="stylesheet" href="_static/constraint_panel.css?v=3">
+   <script src="_static/constraint_panel_data.js?v=3"></script>
+   <script src="_static/constraint_panel.js?v=3"></script>
 
 The controls, and what they are for
 -----------------------------------
