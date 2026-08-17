@@ -376,3 +376,66 @@ def test_a_template_of_the_wrong_length_is_refused(sphere):
             n_times=1000,
             template=np.zeros(37),
         )
+
+
+def _permuted_rows(forward, seed=0):
+    """The same forward with its gain rows shuffled, names kept in step."""
+    out = forward.copy()
+    order = np.random.default_rng(seed).permutation(len(out["sol"]["row_names"]))
+    out["sol"]["data"] = out["sol"]["data"][order]
+    out["sol"]["row_names"] = [out["sol"]["row_names"][i] for i in order]
+    return out
+
+
+def test_the_forward_is_aligned_to_the_info_rather_than_assumed(sphere):
+    """Row order is a property of the forward, not a promise to the caller.
+
+    The demos slice rows out of the gain matrix and then label them with the
+    info's channel names. That is only right when the two orders agree, nothing
+    required it, and when they disagreed the result was a wrong answer rather
+    than an error: permuting the forward's rows alone turned an LCMV constraint
+    table of about [[1, -0.81], [-0.72, 1]] into entries of order a thousandth.
+    """
+    info, fwd = sphere
+    kwargs = dict(
+        method="lcmv", sources=[3, 11], n_sources=2, correlation=0.9, snr=5.0
+    )
+    reference = constraint_demo(info, fwd, **kwargs)
+    shuffled = constraint_demo(info, _permuted_rows(fwd), **kwargs)
+    np.testing.assert_allclose(shuffled.gains, reference.gains, atol=1e-9)
+    np.testing.assert_allclose(
+        shuffled.amplitude_ratio, reference.amplitude_ratio, atol=1e-9
+    )
+
+
+def test_a_bad_channel_does_not_break_the_template_method(sphere):
+    """ABMC drops bad channels internally; the sliced leadfield did not.
+
+    The two disagreed the moment ``info['bads']`` was non-empty, which is the
+    normal state of real data, and the call raised rather than returning
+    anything at all.
+    """
+    info, fwd = sphere
+    marked = info.copy()
+    marked["bads"] = [info["ch_names"][5]]
+    demo = constraint_demo(
+        marked, fwd, method="abmc", sources=[3, 11], n_sources=2, snr=5.0
+    )
+    np.testing.assert_allclose(np.diag(demo.gains), 1.0, rtol=1e-6)
+
+
+def test_a_free_orientation_forward_is_refused(sphere):
+    """A source index cannot mean a column and a position at the same time.
+
+    With three gain columns per source the two readings differ by a factor of
+    three, and the function used to return a plausible-looking constraint table
+    built from one component of the wrong source.
+    """
+    info, fwd = sphere
+    free = mne.convert_forward_solution(
+        fwd, force_fixed=False, surf_ori=False, verbose=False
+    )
+    if free["sol"]["data"].shape[1] == free["source_rr"].shape[0]:
+        pytest.skip("fixture forward is not convertible to free orientation")
+    with pytest.raises(ValueError, match="fixed-orientation"):
+        constraint_demo(info, free, method="lcmv", sources=[3, 11], n_sources=2)

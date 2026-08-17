@@ -9,6 +9,8 @@
   --cp-text: #202124;
   --cp-muted: #63666e;
   --cp-grid: #a9aebb;
+  --cp-chip: #ffffff;
+  --cp-chip-edge: #82888f;
   --cp-true: #6b7078;
   --cp-accent: #0072b2;
   --cp-warm: #c8452e;
@@ -24,6 +26,8 @@ html[data-theme="dark"] .cp-root {
   --cp-text: #e6e8eb;
   --cp-muted: #9aa0aa;
   --cp-grid: #6d7887;
+  --cp-chip: #2b323b;
+  --cp-chip-edge: #6f7c8a;
   --cp-true: #9aa0aa;
   --cp-accent: #4aa3df;
   --cp-warm: #e2705a;
@@ -583,14 +587,64 @@ html[data-theme="dark"] .cp-root {
   background: none;
 }
 
-/* Buttons: the theme gives documentation buttons their own padding, radius and
-   transitions. The chips define all of those themselves, so reset first. */
+/* Buttons.
+
+   The chips were styled with a single class selector, which the theme's own
+   button rules match or beat, so in the documentation they lost their border
+   and fill and rendered as bare text -- a row of words with no indication that
+   any of them could be clicked, and a selected state that read only as bold.
+   Restating them here, under .cp-root, wins on specificity, and appearance:none
+   takes the browser's native control chrome out of the argument entirely.
+
+   Every visual property is set rather than inherited, so nothing about how they
+   look depends on what the surrounding page happens to do to a <button>. */
 .cp-root button {
   font-family: inherit;
   letter-spacing: inherit;
   text-transform: none;
   box-shadow: none;
   transition: none;
+}
+
+.cp-root button.cp-chip {
+  appearance: none;
+  -webkit-appearance: none;
+  /* Sized to their text, not stretched to fill the row. Stretching made a
+     four-option group span the full width with ragged gaps, which reads as
+     four unrelated labels rather than one choice. */
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0.32rem 0.7rem;
+  font: inherit;
+  font-size: 0.82rem;
+  line-height: 1.25;
+  color: var(--cp-text);
+  /* Raised off the strip rather than matching it. An unselected chip used the
+     page background with a low-contrast border, which in dark mode left it very
+     nearly invisible: the whole strip read as a list of words with no sign that
+     any of them was a control. A chip has to look clickable before it is
+     clicked. */
+  background: var(--cp-chip);
+  border: 1px solid var(--cp-chip-edge);
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cp-root button.cp-chip:hover {
+  border-color: var(--cp-accent);
+}
+
+.cp-root button.cp-chip[aria-pressed="true"] {
+  background: var(--cp-accent);
+  border-color: var(--cp-accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.cp-root button.cp-chip:focus-visible {
+  outline: 2px solid var(--cp-accent);
+  outline-offset: 2px;
 }
 
 /* Paragraph and heading rhythm inside a card is the card's business. The theme
@@ -613,19 +667,39 @@ html[data-theme="dark"] .cp-root {
 /* The control strip is the first thing a reader meets, so its alignment matters
    more than anywhere else. Each control is a column with its label above its
    chips, and the columns share a baseline whatever the label wraps to. */
+/* The control strip. A flex row of controls of wildly different widths left
+   large ragged gaps between groups, which is what made the panel read as
+   scattered. A grid gives every control a column of its own, so labels line up
+   down the strip and the chips underneath them start at the same place. */
 .cp-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, auto));
+  justify-content: start;
   align-items: start;
-  row-gap: 0.9rem;
+  gap: 0.85rem 1.6rem;
 }
 
 .cp-control {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: 0.35rem;
+  min-width: 0;
 }
 
 .cp-control > label {
   line-height: 1.2;
+}
+
+/* The wide control -- the source layout, with its three sub-groups -- needs the
+   whole strip rather than one column. */
+.cp-control-wide {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 640px) {
+  .cp-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* The shape check reads as an argument rather than a lookup, so the arithmetic

@@ -644,6 +644,32 @@ def _abmc_prepare(info, forward, data, template, cov, noise_cov, reg, max_lag):
     r = 0.5 * (cov_mat + cov_mat.T)
     r_reg = r + reg * np.trace(r) / n_channels * np.eye(n_channels)
 
+    # Stage 2 does not whiten -- it only divides rows by the per-channel noise
+    # standard deviation -- so a null space in a caller-supplied covariance
+    # survives into r_reg and is inverted as though it were data. The other
+    # methods here are immune by construction, because they whiten with a
+    # rank-truncating whitener before inverting anything, and this one is not.
+    #
+    # Silence here is the problem rather than the loading. With reg at its
+    # default of zero and an SSP-projected covariance, perturbing the input by
+    # round-off moved the localised source by up to 17 mm from draw to draw, and
+    # a diagonal loading of 1e-14 -- far too small to move a well-posed problem
+    # -- changed which grid point was reported. The result was determined by the
+    # null space, and nothing said so.
+    condition = np.linalg.cond(r_reg)
+    if not np.isfinite(condition) or condition > 1.0 / np.finfo(np.float64).eps:
+        warnings.warn(
+            f"The covariance handed to ABMC is numerically singular (condition "
+            f"number {condition:.3g}) and reg={reg:g}, so the solve below is "
+            "governed by its null space rather than by the data: the localiser "
+            "peak can move by centimetres under round-off alone. Pass reg > 0 "
+            "(0.05 is a reasonable start), or supply a covariance estimated "
+            "with shrinkage, or leave cov=None to use the sparse Bayesian "
+            "estimate, which is positive definite by construction.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
     # Seed the per-column template lag from an initial distortionless output.
     r_inv_g = np.linalg.solve(r_reg, leadfield)
     w0 = r_inv_g / np.einsum("mk,mk->k", leadfield, r_inv_g)[None, :]

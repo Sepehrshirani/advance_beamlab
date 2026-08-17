@@ -381,6 +381,42 @@ def _measure_gains(apply_fn, columns, n_times):
     return table
 
 
+def _matched(info, forward):
+    """Line the forward's rows up with the info's good channels.
+
+    Both demo entry points slice rows out of ``forward['sol']['data']`` and then
+    hand the result to ``EvokedArray``/``EpochsArray`` with ``info``, which
+    labels forward-ordered rows with the info's channel names. That is only
+    right if the two orders already agree. Nothing required it, and when they
+    disagreed the output was not an error but a wrong answer: permuting the
+    forward's rows alone turned an LCMV constraint table of
+    ``[[1, -0.84], [-0.85, 1]]`` into ``[[0.001, -0.001], [0.001, -0.002]]``,
+    silently. Bad channels do the same thing, since the filter functions drop
+    them internally while the sliced leadfield still carries them.
+
+    The rest of the package is immune because it aligns by name; this brings the
+    demos into line with it.
+    """
+    import mne
+
+    good = [ch for ch in info["ch_names"] if ch not in info["bads"]]
+    rows = list(forward["sol"]["row_names"])
+    missing = [ch for ch in good if ch not in set(rows)]
+    if missing:
+        raise ValueError(
+            f"{len(missing)} of the info's good channels are absent from the "
+            f"forward (first few: {missing[:4]}). The two must describe the "
+            "same sensors."
+        )
+    if list(info["ch_names"]) != good:
+        info = mne.pick_info(
+            info, mne.pick_channels(info["ch_names"], good, ordered=True)
+        )
+    if rows != good:
+        forward = mne.pick_channels_forward(forward, good, ordered=True, verbose=False)
+    return info, forward
+
+
 def _build_filters(
     info,
     forward,
@@ -743,6 +779,14 @@ def evoked_demo(
     from mne.beamformer import apply_lcmv, make_lcmv
 
     _check_option("method", method, _METHODS)
+    info, forward = _matched(info, forward)
+    if forward["sol"]["data"].shape[1] != forward["source_rr"].shape[0]:
+        raise ValueError(
+            "evoked_demo needs a fixed-orientation forward: this one has "
+            f"{forward['sol']['data'].shape[1]} gain columns for "
+            f"{forward['source_rr'].shape[0]} sources. Convert it first with "
+            "mne.convert_forward_solution(fwd, force_fixed=True)."
+        )
     sources = [int(v) for v in sources]
     sensor = np.asarray(evoked.data, float)
     gain = forward["sol"]["data"]
@@ -980,6 +1024,22 @@ def constraint_demo(
     _check_option("morphology", morphology, _MORPHOLOGIES)
     if int(n_sources) < 1:
         raise ValueError(f"n_sources must be at least 1, got {n_sources}")
+    info, forward = _matched(info, forward)
+    # ``sources`` has to mean the same thing in both places it is used: a column
+    # of the gain matrix, and a row of source_rr. Those coincide only for a
+    # fixed-orientation forward, which is what this function is written for. On
+    # a free-orientation one they silently disagree by a factor of three -- the
+    # leadfield picked belongs to one Cartesian component of a different source
+    # from the position reported beside it -- and the result is a plausible
+    # constraint table describing nothing in particular.
+    if forward["sol"]["data"].shape[1] != forward["source_rr"].shape[0]:
+        raise ValueError(
+            "constraint_demo needs a fixed-orientation forward: this one has "
+            f"{forward['sol']['data'].shape[1]} gain columns for "
+            f"{forward['source_rr'].shape[0]} sources, so a source index would "
+            "mean two different things. Convert it first with "
+            "mne.convert_forward_solution(fwd, force_fixed=True)."
+        )
     gain = forward["sol"]["data"]
     rr = forward["source_rr"]
     if sources is None:

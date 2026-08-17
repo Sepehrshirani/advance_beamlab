@@ -635,6 +635,7 @@
       items.forEach(function (item, i) {
         var b = document.createElement("button");
         b.type = "button";
+        b.className = "cp-chip";
         b.textContent = label(item);
         b.addEventListener("click", function () { state[key] = i; render(); });
         box.appendChild(b);
@@ -710,6 +711,7 @@
         members.forEach(function (e) {
           var b = document.createElement("button");
           b.type = "button";
+          b.className = "cp-chip";
           b.textContent = e.l.label;
           b.addEventListener("click", function () {
             state.layout = e.i;
@@ -741,6 +743,7 @@
     Object.keys(VIEWS).forEach(function (name) {
       var b = document.createElement("button");
       b.type = "button";
+      b.className = "cp-chip";
       b.textContent = name;
       b.addEventListener("click", function () {
         state.az = VIEWS[name][0];
@@ -827,6 +830,7 @@
       list.forEach(function (name, i) {
         var b = document.createElement("button");
         b.type = "button";
+        b.className = "cp-chip";
         b.textContent = TEMPLATE_LABEL[name] || name;
         b.addEventListener("click", function () { state.template = i; render(); });
         templateBox.appendChild(b);
@@ -841,6 +845,7 @@
       counts.forEach(function (n, i) {
         var b = document.createElement("button");
         b.type = "button";
+        b.className = "cp-chip";
         b.textContent = n === 1 ? "1 trial" : n + " trials";
         b.addEventListener("click", function () { state.rtrials = i; render(); });
         rtrialsBox.appendChild(b);
