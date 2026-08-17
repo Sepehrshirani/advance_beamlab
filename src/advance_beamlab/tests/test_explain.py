@@ -397,9 +397,7 @@ def test_the_forward_is_aligned_to_the_info_rather_than_assumed(sphere):
     table of about [[1, -0.81], [-0.72, 1]] into entries of order a thousandth.
     """
     info, fwd = sphere
-    kwargs = dict(
-        method="lcmv", sources=[3, 11], n_sources=2, correlation=0.9, snr=5.0
-    )
+    kwargs = dict(method="lcmv", sources=[3, 11], n_sources=2, correlation=0.9, snr=5.0)
     reference = constraint_demo(info, fwd, **kwargs)
     shuffled = constraint_demo(info, _permuted_rows(fwd), **kwargs)
     np.testing.assert_allclose(shuffled.gains, reference.gains, atol=1e-9)

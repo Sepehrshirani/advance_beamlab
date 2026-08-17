@@ -191,9 +191,11 @@ def estimate_rank(cov, *, method="cliff", threshold=None, pct_var=0.999, verbose
         else:
             standardised = (drops - centre) / spread
             hit = np.nonzero((standardised > z) & (drops > _CLIFF_DECADES))[0]
-            # The first qualifying drop, not the largest: on a spectrum with a
-            # projection cliff followed by a noise floor, the later drops can be
-            # larger, and the rank is where the *first* real fall happens.
+            # The first qualifying drop. In practice there is only ever one --
+            # a single cliff inflates the spread enough that a second, smaller
+            # collapse no longer clears the standardised test, which was checked
+            # on a deliberately three-plateau spectrum -- but where several do
+            # qualify the rank is the first genuine fall, not the deepest.
             rank = int(hit[0] + 1) if hit.size else int(live.size)
         # Anything the spectrum already zeroed is not usable whatever the cliff
         # test says.

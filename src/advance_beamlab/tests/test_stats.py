@@ -141,3 +141,62 @@ def test_bad_input_is_refused():
         bad = rng.standard_normal((8, 20))
         bad[2, 3] = np.nan
         permutation_image_test(bad)
+
+
+def test_a_negative_effect_is_found_by_the_two_sided_test():
+    """Two-sided means both sides, and only the observed side was abs'd.
+
+    Dropping the absolute value from the observed statistic while keeping it on
+    the null leaves every existing test green, because they all plant positive
+    effects. A downward effect then cannot be found at all.
+    """
+    rng = np.random.default_rng(11)
+    images = rng.standard_normal((16, 300))
+    images[:, 40:50] -= 1.5
+    _, p, _ = permutation_image_test(
+        images, n_permutations=512, tail=0, seed=0, verbose=False
+    )
+    found = set(np.nonzero(p <= 0.05)[0].tolist())
+    assert found, "a negative effect was not found by a two-sided test"
+    assert found <= set(range(40, 50))
+
+
+def test_the_observed_arrangement_is_inside_its_own_null():
+    """Otherwise the p-value floor is a fiction propped up by the clip.
+
+    The returned p-values are clipped at 1/n, so dropping the observed
+    arrangement from the null -- by removing it from the draw, or by comparing
+    with > instead of >= -- produces a raw count of zero that the clip hides.
+    Check the null itself rather than the number that survives clipping.
+    """
+    rng = np.random.default_rng(12)
+    images = rng.standard_normal((14, 200)) + 3.0
+    observed, _, null = permutation_image_test(
+        images, n_permutations=256, correction="maximum", seed=0, verbose=False
+    )
+    peak = float(np.abs(observed).max())
+    assert null.max() >= peak - 1e-12, (
+        "no permutation reaches the observed statistic, so the observed "
+        "arrangement is not in the distribution it is judged against"
+    )
+    assert np.isclose(null, peak, rtol=0, atol=1e-12).any()
+
+
+def test_ties_with_the_observed_statistic_are_counted():
+    """The comparison has to be >=, and the clip hides it if it is not.
+
+    Relaxing >= to > drops the observed arrangement from the distribution it is
+    judged against. Usually that shows up only as a count of zero, which the
+    clip at 1/n turns back into 1/n, so the error is invisible in the output.
+    Enumerate the flips instead: a two-sided exhaustive test contains both an
+    arrangement and its mirror, so exactly two of them tie the observed
+    statistic and the smallest p-value must be 2/n rather than 1/n.
+    """
+    same = np.ones((7, 4))  # 2**7 = 128 flips, all of them enumerated
+    _, p, null = permutation_image_test(
+        same, n_permutations=1024, tail=0, seed=0, verbose=False
+    )
+    assert null.size == 2**7
+    ties = int(np.isclose(null, np.abs(same.mean(axis=0)).max()).sum())
+    assert ties == 2, f"expected an arrangement and its mirror to tie, got {ties}"
+    assert p.min() == pytest.approx(2.0 / 2**7, rel=1e-9)

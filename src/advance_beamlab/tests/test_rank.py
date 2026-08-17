@@ -98,3 +98,26 @@ def test_a_threshold_can_be_argued_with():
     # An absurd threshold finds no cliff at all and keeps everything positive.
     loose = estimate_rank(cov, method="cliff", threshold=1e9)
     assert loose >= 30
+
+
+def test_a_multi_plateau_spectrum_stops_at_the_first_collapse():
+    """Where a spectrum falls in stages, the rank is the first fall.
+
+    Three plateaus nine orders apart: the usable rank is the top one, not the
+    point where the numbers finally reach round-off. Only one drop clears the
+    standardised test here, because a cliff inflates the spread enough to mask
+    any later one, which is worth knowing when reading the estimate.
+    """
+    rng = np.random.default_rng(9)
+    n = 60
+    basis = np.linalg.qr(rng.standard_normal((n, n)))[0]
+    scale = np.concatenate(
+        [
+            np.full(15, 1.0) * (1 + 0.01 * rng.standard_normal(15)),
+            np.full(15, 1e-9) * (1 + 0.01 * rng.standard_normal(15)),
+            np.full(30, 1e-18) * (1 + 0.01 * rng.standard_normal(30)),
+        ]
+    )
+    cov = (basis * scale) @ basis.T
+    cov = 0.5 * (cov + cov.T)
+    assert estimate_rank(cov, method="cliff") == 15

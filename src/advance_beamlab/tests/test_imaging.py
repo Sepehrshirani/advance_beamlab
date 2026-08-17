@@ -181,3 +181,43 @@ def test_a_degenerate_filter_is_nan_rather_than_enormous(sphere):
     zeroed["data"] = np.zeros_like(zeroed["data"])
     z = power_image(filters, active_cov, noise_cov=zeroed, kind="pseudo-z")
     assert np.all(np.isnan(z))
+
+
+def test_pseudo_z_is_the_ratio_itself_and_not_a_function_of_it(sphere):
+    """Scaling the active covariance scales the image by the same factor.
+
+    Checking only that noise against itself gives one leaves a square root --
+    or any other monotone function of the ratio -- undetectable, since it fixes
+    the value at one as well.
+    """
+    info, fwd = sphere
+    noise_cov, _, active_cov = _covs(info, fwd)
+    filters = mne.beamformer.make_lcmv(
+        info, fwd, active_cov, reg=0.05, noise_cov=noise_cov, verbose=False
+    )
+    louder = active_cov.copy()
+    louder["data"] = louder["data"] * 4.0
+    one = power_image(filters, active_cov, noise_cov=noise_cov, kind="pseudo-z")
+    four = power_image(filters, louder, noise_cov=noise_cov, kind="pseudo-z")
+    np.testing.assert_allclose(four, 4.0 * one, rtol=1e-8)
+
+
+def test_pseudo_t_carries_the_factor_of_two_it_is_defined_with(sphere):
+    """The value, not just the sign and the peak.
+
+    The denominator is twice the projected noise, for the noise entering
+    through both windows. Dropping the two doubles every value in the image,
+    which no test that only looks at where the peak is would notice.
+    """
+    info, fwd = sphere
+    noise_cov, base_cov, active_cov = _covs(info, fwd)
+    filters = mne.beamformer.make_lcmv(
+        info, fwd, active_cov, reg=0.05, noise_cov=noise_cov, verbose=False
+    )
+    t = power_image(
+        filters, active_cov, baseline_cov=base_cov, noise_cov=noise_cov, kind="pseudo-t"
+    )
+    # Rebuild it from the pieces the function is defined in terms of.
+    z_active = power_image(filters, active_cov, noise_cov=noise_cov, kind="pseudo-z")
+    z_base = power_image(filters, base_cov, noise_cov=noise_cov, kind="pseudo-z")
+    np.testing.assert_allclose(t, (z_active - z_base) / 2.0, rtol=1e-8)
