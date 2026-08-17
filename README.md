@@ -648,10 +648,12 @@ anticonservative if the envelopes still carry their fast sub-band ripple: over
 eight independent 9–11 Hz sources (a complete null) the test rejects 7.5 % of
 edges at $\alpha=0.05$ without the 0.5 Hz envelope low-pass, and 0.4 % with it.
 Use the same envelope settings for the null as for the matrix being tested. The
-test is defined for `method='envelope'` only: the paper prescribes this
-source-level surrogate for the resting-state envelope correlations, and a
-single continuous surrogate segment carries no usable coherence or
-phase-locking estimate. An edge whose null degenerates (zero or non-finite
+default is `method='envelope'`, which is what the paper prescribes for the
+resting-state envelope correlations. The spectral metrics (`'coh'`, `'plv'`,
+`'imcoh'`, `'wpli'`) are supported too, but they need an *epoched*
+`reference_time_courses` of shape `(n_epochs, n_sources, n_times)`: a single
+continuous surrogate segment carries no usable coherence or phase-locking
+estimate. An edge whose null degenerates (zero or non-finite
 spread) is reported as *not* significant, with a warning, never as an effect.
 
 ---

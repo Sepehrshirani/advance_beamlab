@@ -1015,10 +1015,19 @@ def test_negative_energy_warning_points_at_the_covariance(fwd_fixed):
 def test_annihilated_covariance_does_not_warn_about_negative_energy(fwd_fixed):
     """An annihilated covariance raises only the annihilation warning.
 
-    The Eq. 24 ratio divides one norm by another, so it stays large on a
-    covariance the projector has reduced to round-off. Warning about it there
-    reports the ratio of two numerically meaningless quantities on top of the
-    annihilation warning, which is the one that describes the real problem.
+    Warning about the Eq. 24 ratio here would report the ratio of two
+    numerically meaningless quantities on top of the annihilation warning, which
+    is the one that describes the real problem.
+
+    This used to assert that the ratio exceeded the limit first, to show that
+    the second warning was suppressed rather than merely absent. That assertion
+    was not sound: the ratio divides one round-off-level norm by another, so its
+    value is not reproducible. On identical code, inputs and MNE version it read
+    0.92 on one build and 0.11 on another, and CI failed on whichever Python
+    happened to land below the limit. What is stable, and what is asserted here,
+    is that the covariance really is annihilated. That the suppression branch
+    works is covered directly, in both directions, by
+    :func:`test_warn_negative_energy_branches`.
     """
     data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.9)
     info = _avg_ref(mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg"))
@@ -1026,11 +1035,6 @@ def test_annihilated_covariance_does_not_warn_about_negative_energy(fwd_fixed):
     q = len(fwd_fixed["sol"]["row_names"])
     n_sym = q * (q + 1) // 2
 
-    # The ratio is over the limit at this rank, so it is suppression rather than
-    # absence that keeps the second warning away.
-    assert _neg_energy(fwd_fixed, info, data_cov, "whitened", n_sym, 1.0) > (
-        _NEG_ENERGY_LIMIT
-    )
     with pytest.warns(RuntimeWarning, match=r"q\(q\+1\)/2") as rec:
         cov = make_recipsiicos_cov(
             data_cov, fwd_fixed, info, rank=n_sym, method="whitened", pct_var=1.0

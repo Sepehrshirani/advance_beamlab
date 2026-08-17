@@ -172,7 +172,7 @@ def _compute_mcmv_weights(leadfield, cov_inv, *, cond_warn=1e8):
     cond = np.linalg.cond(B)
     if not np.isfinite(cond) or cond > 1.0 / np.finfo(np.float64).eps:
         raise RuntimeError(
-            "H^T R^-1 H is singular (condition number is non-finite): the "
+            f"H^T R^-1 H is singular (condition number {cond:.3g}): the "
             "constrained sources are collinear (coincident location and "
             "orientation) or the beamformer order exceeds the data rank. "
             "Reduce the number of sources or separate them."
@@ -471,8 +471,17 @@ def make_mcmv(
         fixed-orientation. A ``surf_ori=True`` forward stores its gain columns in
         each source's local surface frame; the rotation is applied internally, so
         the same head-coordinate vectors give the same physical dipole for either
-        representation of a forward (e.g. ``forward['source_nn'][2::3]``, the
-        cortical normals, may be passed directly). Data-driven orientation
+        representation of a forward. Take them from the *source space* --
+        ``forward['src'][hemi]['nn'][vertno]`` -- or from
+        :func:`~advance_beamlab.optimal_orientation`. Do **not** reach for
+        ``forward['source_nn'][2::3]``: that holds cortical normals only when
+        ``forward['surf_ori']`` is ``True``, and both
+        :func:`mne.read_forward_solution` and
+        :func:`mne.make_forward_solution` hand back ``surf_ori=False``, where
+        ``source_nn`` is a tiled identity and ``[2::3]`` is the head +z axis for
+        every source. It is a unit vector of the right shape, so it is accepted
+        without complaint, and every source is then constrained to a dipole
+        pointing at the top of the head. Data-driven orientation
         estimation (the generalised-eigenvalue localiser of Moiseev et al., 2011)
         is provided by :func:`~advance_beamlab.scan_mcmv`.
     weight_norm : 'unit-gain' | 'unit-noise-gain' | None

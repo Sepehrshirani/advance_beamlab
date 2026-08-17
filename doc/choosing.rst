@@ -204,7 +204,11 @@ real-EEG demonstration anywhere.
 **The parameters that matter.** ``sources`` (and ``orientations`` for a
 free-orientation forward), and the window ``data_cov`` is estimated from. Take
 orientations from :func:`~advance_beamlab.optimal_orientation`,
-:func:`~advance_beamlab.scan_mcmv` or ``forward['source_nn']``, never by hand.
+:func:`~advance_beamlab.scan_mcmv` or the source space itself
+(``forward['src'][hemi]['nn'][vertno]``), never by hand. In particular
+``forward['source_nn'][2::3]`` is *not* a shortcut to the cortical normals: on
+the ``surf_ori=False`` forward MNE returns by default it is the head +z axis for
+every source, and it is accepted silently.
 Use ``weight_norm='unit-gain'`` when comparing amplitudes with
 :func:`mne.beamformer.make_lcmv` (``weight_norm=None`` there);
 ``'unit-noise-gain'`` rescales both filters and hides the effect. Two
@@ -212,11 +216,12 @@ practical notes: compare *outputs*, not ``filters['weights']``, since MNE stores
 its weights in the whitened space and :func:`~advance_beamlab.make_mcmv` folds
 the whitener in; and although the tuning table advises an integer ``rank`` after
 SSP/ICA/SSS, :func:`~advance_beamlab.make_mcmv` rejects a bare integer, because
-the rank must be resolved per sensor type. One in-repository statement is wrong
-and worth knowing: ``examples/plot_mcmv_simulation.py`` claims that
-``pick_ori='max-power'`` steers around the cancellation. It does not. Measured
-LCMV RMS at r = 0.95 is 0.2192 fixed-orientation and 0.2191 with
-``'max-power'``.
+the rank must be resolved per sensor type. One assumption is worth
+discouraging explicitly, because it is the natural one to make:
+``pick_ori='max-power'`` does not steer around the cancellation. Measured LCMV
+RMS at r = 0.95 is 0.2192 fixed-orientation and 0.2191 with ``'max-power'``.
+Re-optimising one source's orientation cannot undo a cancellation that comes
+from the other source sitting in the same filter.
 
 ReciPSIICOS: a forward-only projector when you cannot name the sources
 ----------------------------------------------------------------------
@@ -347,11 +352,13 @@ repairs (the example forces the mask to proceed) and retained A-C, whose
 envelopes are independent. Scope limits: the real-MEG section of
 :ref:`ex-apw-mcmv-connectivity` shows the pipeline running but has no ground
 truth, so every quantitative claim above rests on the simulation;
-:func:`~advance_beamlab.ar1_surrogate_significance` raises for anything other
-than ``method='envelope'``, so the APW gating step is
-unavailable for ``'coh'``/``'plv'``/``'imcoh'``/``'wpli'`` and you must supply
-your own mask; and the spectral metrics are tested only for shape, finiteness
-and symmetry. For low-power transients there is no connectivity route here at
+:func:`~advance_beamlab.ar1_surrogate_significance` supports
+``'coh'``/``'plv'``/``'imcoh'``/``'wpli'`` as well as the default
+``'envelope'``, but the spectral ones need an *epoched*
+``reference_time_courses`` of shape ``(n_epochs, n_sources, n_times)``, since a
+single continuous surrogate segment carries no usable coherence or
+phase-locking estimate; and the spectral metrics are tested only for shape,
+finiteness and symmetry. For low-power transients there is no connectivity route here at
 all: ABMC addresses their *localisation*, not coupling between them.
 
 **The parameters that matter.** ``sources`` (and ``orientations``): the exact
