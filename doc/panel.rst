@@ -409,9 +409,16 @@ underlying shape, so all four rendered identically. Measured, the fraction of th
 grid above half the display maximum was 0.500 for every method. Normalising
 without compression goes too far the other way and leaves two bright dots on an
 empty brain. The cube root sits between and separates them: averaged over the
-whole grid, that same fraction now reads 10.6 per cent for LCMV, 7.0 for MCMV,
-15.8 for ReciPSIICOS and 33.9 for ABMC, which is the spread the methods actually
-have.
+whole grid, that same fraction now reads 10.6 per cent for LCMV, 7.0 for MCMV
+and 15.8 for ReciPSIICOS.
+
+ABMC has to be quoted per template, and the numbers say something worth
+knowing. Its map covers 33.9 per cent of the grid when it is handed the target's
+own waveform, 86.4 with an independent signal from the same band, and 95.6 with
+a wrong-band one. The oracle template is what makes ABMC's localiser look sharp;
+give it the template an experiment can actually supply and the map is much more
+diffuse. That is the honest cost of a method whose localiser scores template
+match rather than power.
 
 The markers on the simulated sources are drawn as unfilled rings for a related
 reason: a filled marker sitting on a peak hides the one thing you are trying to

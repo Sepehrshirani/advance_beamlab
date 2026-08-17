@@ -124,9 +124,16 @@
    * ReciPSIICOS projects in, ABMC's template and its iteration counts -- comes
    * from the build in P.model.algorithms, because a table that did not change
    * with the method left those terms with no size at all. */
-  function dimensions(P, n, method) {
-    var C = P.n_channels, V = P.n_sources;
-    var T = (P.model && P.model.n_times_simulated) || P.n_times_simulated;
+  function dimensions(P, n, method, isRecorded) {
+    /* The recorded half has its own grid and its own time axis, so the sizes
+     * have to follow the dataset. They did not: selecting Recorded MEG left the
+     * table reporting the simulated grid and a sample count from a simulation
+     * that is not on screen. */
+    var C = P.n_channels;
+    var V = isRecorded ? P.n_real_sources : P.n_sources;
+    var T = isRecorded
+      ? P.real_n_times
+      : (P.model && P.model.n_times_simulated) || P.n_times_simulated;
     var rows = [
       ["X", "sensor recording", C + " &times; " + T, "channels &times; samples"],
       ["R", "data covariance", C + " &times; " + C, "channels &times; channels"],
@@ -1056,9 +1063,29 @@
       }
       return realPeakCache[scene];
     }
+    /* Normalised per scene, both halves. The build stores each simulated field
+     * divided by its own peak, so those maps always span the full range. The
+     * recorded field is read out of the recording, which is scaled to the
+     * loudest sample in the whole recorded half -- so without this the quietest
+     * scenes never reach the first iso-contour and the map draws blank. That is
+     * backwards: averaging 143 trials gave an emptier map than a single noisy
+     * one. The peak is per scene and per instant, so it is cached with the
+     * instant it belongs to. */
+    var topoPeakCache = {};
+    function topoPeak(scene) {
+      if (topoPeakCache[scene] === undefined) {
+        var t = topoTime(scene), hi = 0;
+        for (var k = 0; k < nCh; k++) {
+          var v = Math.abs(sensorAt(scene, k, t));
+          if (v > hi) hi = v;
+        }
+        topoPeakCache[scene] = hi > 0 ? hi : 1;
+      }
+      return topoPeakCache[scene];
+    }
     function topoValue(scene, channel) {
       return recorded()
-        ? sensorAt(scene, channel, topoTime(scene))
+        ? sensorAt(scene, channel, topoTime(scene)) / topoPeak(scene)
         : topo[scene * nCh + channel] / wscale;
     }
 
@@ -1244,9 +1271,13 @@
        * are put back on one scale here, which is what makes a reconstruction
        * that lost half its amplitude look like it did. */
       /* Recorded data has no simulated trace to draw beside the recovered one,
-       * so only the reconstruction is drawn, each source normalised to its own
-       * peak. There is nothing to compare an amplitude against here; what the
-       * filter did to it is the constraint table's business. */
+       * so only the reconstruction is drawn. The build normalises the pair
+       * jointly, by the larger of the two peaks, so the quieter hemisphere
+       * genuinely draws quieter -- which is the point, and is why this does not
+       * renormalise per source. There is nothing to compare an amplitude
+       * against here; what the filter did to it is the constraint table's
+       * business, and real_recon_scale carries the physical peaks if a reader
+       * of the payload wants them back. */
       var samples = recorded() ? nRealT : nW;
       var tScale = recorded() ? 1 : P.true_scale[cur.scene];
       var rScale = recorded() ? 1 : P.recon_scale[cur.result];
@@ -1328,8 +1359,11 @@
             ].join("|");
             r = P.results[resultOf[sceneOf[key] + "|" + mm + "|" + templateFor(mm)]];
           }
+          // The worst peak, not the best. Each entry is already the distance
+          // from one peak to its nearest dipole, so a further minimum reports
+          // the best of four pairings and hides a peak 100 mm away.
           var e = recorded()
-            ? Math.min.apply(null, r.reference_distance)
+            ? Math.max.apply(null, r.reference_distance)
             : r.peak_errors[0];
           amp.push(r.amplitude_ratio[0]);
           err.push(e);
@@ -1361,12 +1395,18 @@
           ctx.lineWidth = on ? 2.4 : 1.3;
           ctx.beginPath();
           for (var i = 0; i < n; i++) {
-            var y = top + height - Math.min(1, s[key][i] / maxV) * height;
+            // Clamped both ways. Only the top was clamped, so a negative
+            // delivered amplitude -- which the page elsewhere calls out as
+            // important -- was drawn below the amplitude panel's zero line and
+            // over the error plot underneath it.
+            var y = top + height -
+              Math.max(0, Math.min(1, s[key][i] / maxV)) * height;
             if (i === 0) ctx.moveTo(xOf(i), y); else ctx.lineTo(xOf(i), y);
           }
           ctx.stroke();
           if (on) {
-            var yc = top + height - Math.min(1, s[key][here] / maxV) * height;
+            var yc = top + height -
+              Math.max(0, Math.min(1, s[key][here] / maxV)) * height;
             ctx.fillStyle = COLOURS[s.mi];
             ctx.beginPath();
             ctx.arc(xOf(here), yc, 4.5, 0, 6.2832);
@@ -1445,7 +1485,8 @@
         (res.amplitude_ratio[0] * 100).toFixed(0) + "%</strong></div>" +
         (recorded()
           ? '<div><span>Peak to dipole fit</span><strong>' +
-            Math.min.apply(null, res.reference_distance).toFixed(0) +
+            res.reference_distance.map(function (v) { return v.toFixed(0); })
+              .join(", ") +
             " mm</strong></div>"
           : '<div><span>Localisation error</span><strong>' +
             res.peak_errors[0].toFixed(0) + " mm</strong></div>") +
@@ -1486,8 +1527,8 @@
         " &nbsp;&rarr;&nbsp; " + (res.amplitude_ratio[0] * 100).toFixed(0) +
         "% of the amplitude survives, peak " +
         (recorded()
-          ? Math.min.apply(null, res.reference_distance).toFixed(0) +
-            " mm from the dipole fit"
+          ? res.reference_distance.map(function (v) { return v.toFixed(0); })
+              .join(" and ") + " mm from the dipole fit"
           : res.peak_errors[0].toFixed(0) + " mm from the source") +
         "</div>" +
         '<p class="cp-note-block"><b>What &ldquo;amplitude delivered&rdquo; ' +
@@ -1522,7 +1563,7 @@
           : HEAD_NOTE[P.head_models[state.head]]) +
         "</div>" +
         "<h5>The sizes of everything in that equation</h5>" +
-        dimensions(P, n, P.methods[state.method]) +
+        dimensions(P, n, P.methods[state.method], recorded()) +
         (recorded() && m
           ? '<p class="cp-provenance">Recording: MNE\u2019s <code>' +
             m.subject + "</code> dataset, " + m.channels + " " +

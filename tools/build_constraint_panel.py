@@ -324,8 +324,11 @@ def build_forward(verbose=True):
     cortex = np.vstack([s["rr"][s["vertno"]] for s in fine["src"][:2]])
     cortex = cortex[:: max(1, len(cortex) // N_BACKDROP)]
 
-    # Decimate the cortex but keep every subcortical source, so the structures
-    # the layouts name are all actually scannable.
+    # Decimate the cortex, and decimate the subcortical sources far less, so the
+    # structures the layouts name stay properly scannable. Keeping every
+    # subcortical source, which is what this did at first, left the realistic
+    # head model with nothing to displace a deep source to -- see the comment on
+    # SUBCORTICAL_DECIMATION.
     verts = [s["vertno"][::DECIMATION] for s in fine["src"][:2]]
     verts += [s["vertno"][::SUBCORTICAL_DECIMATION] for s in fine["src"][2:]]
     n = sum(len(v) for v in verts)
@@ -1455,8 +1458,10 @@ def pack(
     # maximum was 0.500 for every one of them. Normalising alone is too peaky to
     # show any structure (0.2 per cent of the grid above half). The cube root
     # sits between, and separates the methods: over the whole grid the fraction
-    # above half the display maximum is 4.6, 11.9, 33.2 and 29.2 per cent for
-    # LCMV, MCMV, ReciPSIICOS and ABMC.
+    # above half the display maximum is 10.6 per cent for LCMV, 7.0 for MCMV and
+    # 15.8 for ReciPSIICOS. ABMC depends on which template it was given -- 33.9
+    # with the target's own waveform, 86.4 with a same-band one and 95.6 with a
+    # wrong-band one -- because its map scores template match rather than power.
     maps = []
     for r in results:
         m = np.asarray(r["power_map"], float)
