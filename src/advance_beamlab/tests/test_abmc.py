@@ -849,3 +849,53 @@ def test_abmc_warns_from_the_critical_p_upwards_and_not_below(sphere_fwd):
         with pytest.warns(RuntimeWarning) as records:
             make_abmc(info, local, x, template, P=P)
         assert any("at or above the critical value" in str(r.message) for r in records)
+
+
+def test_template_match_is_a_centred_correlation(sphere_fwd):
+    """It is documented as |corr(W'X, u)|, so check it against that definition.
+
+    The map centres both the filter output and the lag-aligned template before
+    taking their inner product. Drop either and the quantity silently becomes a
+    cosine similarity, which rewards a constant offset shared with the template
+    rather than a shared shape.
+
+    Tested on the scoring step directly, with a deliberate offset on both
+    arguments. Through the full pipeline it is invisible: a spike and broadband
+    noise are already near zero mean, so the centring changes nothing and the
+    bug goes unnoticed -- which is exactly what happened.
+    """
+    from advance_beamlab._abmc import _abmc_map
+
+    fwd, info = sphere_fwd
+    del info
+    rng = np.random.default_rng(7)
+    n_col = fwd["nsource"]
+    n_ch, n_times = 8, 300
+
+    # A template and an output that both carry a large constant. Correlation is
+    # blind to it by construction; an uncentred inner product is dominated by it.
+    base = _spike(n_times, 120)
+    u_shift = np.tile(base + 6.0, (n_col, 1))
+    x = rng.standard_normal((n_ch, n_times)) + 9.0
+    w = rng.standard_normal((n_ch, n_col))
+    prep = dict(
+        x=x,
+        u_shift=u_shift,
+        n_columns=n_col,
+        col_lag=np.zeros(n_col, dtype=int),
+        r=np.eye(n_ch),
+        sd=np.ones(n_ch),
+    )
+    tmatch = np.asarray(_abmc_map(prep, w, fwd)["template_match"])
+
+    out = w.T @ x
+    out_c = out - out.mean(axis=1, keepdims=True)
+    us_c = u_shift - u_shift.mean(axis=1, keepdims=True)
+    expected = np.abs(
+        np.einsum("kt,kt->k", out_c, us_c)
+        / (np.linalg.norm(out_c, axis=1) * np.linalg.norm(us_c, axis=1))
+    )
+    assert_allclose(tmatch, expected, rtol=1e-9, atol=1e-12)
+    # And a correlation magnitude is bounded, which the uncentred form is not
+    # once a shared offset dominates both arguments.
+    assert tmatch.max() <= 1.0 + 1e-9
