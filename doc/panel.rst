@@ -1,7 +1,7 @@
 .. _constraint-panel:
 
-What a beamformer constraint actually does
-==========================================
+Interactive panel
+=================
 
 The algebra of a beamformer is short enough to fit on one line and hard enough
 to leave most people none the wiser. An LCMV filter for source :math:`i` is the

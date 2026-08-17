@@ -18,7 +18,7 @@ Where to go next
       actually demonstrates for each method, including the cases where a
       plain LCMV is the better answer.
 
-   .. grid-item-card:: What a constraint does
+   .. grid-item-card:: Interactive panel
       :link: panel
       :link-type: doc
 
@@ -60,7 +60,7 @@ Where to go next
    :maxdepth: 2
 
    Which method should I use? <choosing>
-   What a constraint does <panel>
+   Interactive panel <panel>
    Examples <auto_examples/index>
    Mathematical background <background>
    Parameter tuning <tuning>

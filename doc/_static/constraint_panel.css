@@ -522,3 +522,121 @@ html[data-theme="dark"] .cp-root {
 .cp-root.cp-showing-abmc .cp-abmc-only {
   display: contents;
 }
+
+/* ---------------------------------------------------------------------------
+   Living inside the documentation theme.
+
+   The panel is developed against a plain standalone page and then embedded in
+   the pydata theme, which is a much more opinionated host: it constrains the
+   article to a prose-width column, and it styles tables, buttons and headings
+   for documentation rather than for a control surface. Dropped in unprotected
+   the panel came out narrower and looser than it was designed to be -- cards
+   squeezed into a column meant for text, table rows striped and padded on the
+   theme's terms, and control chips inheriting documentation button spacing.
+
+   Two things fix it. The panel takes the width available to the article rather
+   than the width of a paragraph, and everything inside it is scoped away from
+   the theme's element styles. Scoped under .cp-root, so nothing here can affect
+   the surrounding documentation.
+   --------------------------------------------------------------------------- */
+
+.cp-root {
+  /* Wider than the prose column where the viewport allows, centred, and never
+     wider than the article itself. 100% keeps it inside its container on narrow
+     screens; the vw term lets it use the margins the theme leaves on wide ones. */
+  width: min(100%, 1180px);
+  margin-inline: auto;
+}
+
+@media (min-width: 1400px) {
+  .cp-root {
+    width: min(88vw, 1180px);
+    margin-inline: calc((100% - min(88vw, 1180px)) / 2);
+  }
+}
+
+/* The theme styles every table in the article: borders, striping, block
+   display, its own margins. The constraint table and the sizes tables are
+   layout, not documentation tables, so they opt out. */
+.cp-root table {
+  display: table;
+  width: 100%;
+  margin: 0;
+  border-collapse: collapse;
+  background: none;
+  box-shadow: none;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.cp-root table tr,
+.cp-root table tbody tr,
+.cp-root table tbody tr:nth-child(odd),
+.cp-root table tbody tr:hover {
+  background: none;
+  box-shadow: none;
+}
+
+.cp-root th,
+.cp-root td {
+  vertical-align: top;
+  background: none;
+}
+
+/* Buttons: the theme gives documentation buttons their own padding, radius and
+   transitions. The chips define all of those themselves, so reset first. */
+.cp-root button {
+  font-family: inherit;
+  letter-spacing: inherit;
+  text-transform: none;
+  box-shadow: none;
+  transition: none;
+}
+
+/* Paragraph and heading rhythm inside a card is the card's business. The theme
+   sets generous documentation margins, which is right for prose and leaves a
+   control surface looking gappy and unaligned. */
+.cp-root p,
+.cp-root h4,
+.cp-root h5 {
+  margin-block: 0;
+}
+
+.cp-root p + p {
+  margin-top: 0.6rem;
+}
+
+.cp-root canvas {
+  max-width: 100%;
+}
+
+/* The control strip is the first thing a reader meets, so its alignment matters
+   more than anywhere else. Each control is a column with its label above its
+   chips, and the columns share a baseline whatever the label wraps to. */
+.cp-controls {
+  align-items: start;
+  row-gap: 0.9rem;
+}
+
+.cp-control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.cp-control > label {
+  line-height: 1.2;
+}
+
+/* The shape check reads as an argument rather than a lookup, so the arithmetic
+   column carries the emphasis and the middle columns stay quiet. */
+.cp-shapes td.cp-size {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--cp-muted);
+}
+
+.cp-shapes td.cp-size + td.cp-size {
+  color: var(--cp-text);
+  font-weight: 600;
+}

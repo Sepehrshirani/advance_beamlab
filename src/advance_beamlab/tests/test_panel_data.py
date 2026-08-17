@@ -655,3 +655,100 @@ def test_the_recording_is_stored_at_unit_amplitude(header, payload):
     unit = rec / header["real_recording_scale"]
     assert 0.5 < np.abs(unit).max() <= 1.0
     assert header["real_recording_peak"] > 0
+
+
+PANEL_JS = ROOT / "doc" / "_static" / "constraint_panel.js"
+
+
+def _shape_rows():
+    """The shape-check rows out of the browser code, as (expr, sizes, result)."""
+    text = PANEL_JS.read_text()
+    block = text[text.index("var SHAPES = {") :]
+    block = block[: block.index("\n  };")]
+    # Every row is a four-string array; the method is whichever key most
+    # recently opened. Slicing at the first "]," instead cut each method's
+    # array off after its first row.
+    starts = {
+        m: block.index(m + ": [") for m in ("lcmv", "mcmv", "recipsiicos", "abmc")
+    }
+    rows = []
+    for match in re.finditer(
+        r'\[\s*"(.*?)",\s*"(.*?)",\s*"(.*?)",\s*"(.*?)"\s*\]', block, re.S
+    ):
+        method = max(
+            (m for m, i in starts.items() if i < match.start()),
+            key=lambda m: starts[m],
+            default="?",
+        )
+        rows.append((method, *match.groups()))
+    return rows
+
+
+def _dims(text, values):
+    """Every ``(a×b)`` in a filled size string, as integer pairs."""
+    filled = re.sub(r"\{(\w+)\}", lambda m: str(values[m.group(1)]), text)
+    filled = filled.replace("&times;", "x").replace("&thinsp;", "")
+    return [
+        (int(a), int(b)) for a, b in re.findall(r"\((\d+)\s*x\s*(\d+)\)", filled)
+    ], filled
+
+
+def test_the_shape_check_multiplies_out(header):
+    """Every line of the shape table has to be arithmetic a reader can follow.
+
+    This is teaching material: it tells the reader that an objective collapses
+    to one number and that a constraint is as many equations as its result has
+    entries. A mistyped dimension there teaches something false, and nothing
+    else in the suite would notice, because the browser substitutes the numbers
+    and draws whatever it is given.
+    """
+    model = header["model"]
+    values = dict(
+        C=header["n_channels"],
+        V=header["n_sources"],
+        T=model["n_times_simulated"],
+        n=2,
+        n2=4,
+        K=model["recipsiicos_rank"],
+        q=model["recipsiicos_virtual"],
+    )
+    values["q2"] = values["q"] ** 2
+
+    rows = _shape_rows()
+    assert len(rows) >= 12, f"only found {len(rows)} shape rows"
+    checked = 0
+    for method, _expr, sizes, result, _note in rows:
+        chain, filled = _dims(sizes, values)
+        if len(chain) < 2:
+            continue  # a single factor, or prose such as "unrolled"
+        # The result is written bare, without the brackets the factors carry.
+        want, _ = _dims("(" + result + ")", values)
+        assert want, f"{method}: result {result!r} is not a dimension"
+        if "+" in filled:
+            # A sum, not a product: every term must already be the same shape,
+            # and that shape is the answer.
+            assert len(set(chain)) == 1, (
+                f"{method}: {filled} adds terms of different shapes {set(chain)}"
+            )
+            expected = chain[0]
+        else:
+            for (_, inner), (outer, _) in zip(chain, chain[1:], strict=False):
+                assert inner == outer, (
+                    f"{method}: {filled} does not conform ({inner} against {outer})"
+                )
+            expected = (chain[0][0], chain[-1][1])
+        assert want[0] == expected, (
+            f"{method}: {filled} gives {expected[0]}x{expected[1]}, "
+            f"table says {want[0][0]}x{want[0][1]}"
+        )
+        checked += 1
+    assert checked >= 10, f"only {checked} rows were multiplied out"
+
+
+def test_the_shape_check_uses_only_known_placeholders():
+    """An unresolved brace would reach the page as a literal '{q3}'."""
+    unknown = set()
+    for _method, expr, sizes, result, note in _shape_rows():
+        for text in (expr, sizes, result, note):
+            unknown.update(re.findall(r"\{(\w+)\}", text))
+    assert unknown <= PLACEHOLDERS, f"unknown: {sorted(unknown - PLACEHOLDERS)}"

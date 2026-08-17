@@ -108,6 +108,75 @@
     },
   };
 
+
+  /* The same equations again, with the sizes put in and multiplied out.
+   *
+   * The table above says how big each symbol is; this says why those sizes are
+   * the ones that work. Readers get the dimensions of the parts and still have
+   * to do the conformability in their head, which is exactly the step the
+   * algebra is usually skipped over at: that w'Rw collapses to one number is
+   * the reason "minimise" is meaningful, and that W'G is n by n is the reason
+   * MCMV writes n squared equations where LCMV writes one.
+   *
+   * Same {C}-style placeholders as the sizes table, filled from the model. */
+  var SHAPES = {
+    lcmv: [
+      ["w<sub>1</sub><sup>T</sup>R&thinsp;w<sub>1</sub>",
+       "(1&times;{C})({C}&times;{C})({C}&times;1)", "1&times;1",
+       "one number, which is what there is to minimise"],
+      ["w<sub>1</sub><sup>T</sup>g<sub>1</sub> = 1",
+       "(1&times;{C})({C}&times;1)", "1&times;1",
+       "one equation, the whole constraint"],
+      ["R<sup>&minus;1</sup>g<sub>1</sub>",
+       "({C}&times;{C})({C}&times;1)", "{C}&times;1",
+       "a filter, one weight per channel"],
+      ["g<sub>1</sub><sup>T</sup>R<sup>&minus;1</sup>g<sub>1</sub>",
+       "(1&times;{C})({C}&times;{C})({C}&times;1)", "1&times;1",
+       "a scalar, so dividing by it leaves the filter's shape alone"],
+    ],
+    mcmv: [
+      ["W<sup>T</sup>R&thinsp;W",
+       "({n}&times;{C})({C}&times;{C})({C}&times;{n})", "{n}&times;{n}",
+       "a table, whose trace is the single number being minimised"],
+      ["W<sup>T</sup>G = I",
+       "({n}&times;{C})({C}&times;{n})", "{n}&times;{n}",
+       "{n2} equations, not one -- the whole table is pinned"],
+      ["G<sup>T</sup>R<sup>&minus;1</sup>G",
+       "({n}&times;{C})({C}&times;{C})({C}&times;{n})", "{n}&times;{n}",
+       "small, and inverted; this is what fails when two sources coincide"],
+      ["R<sup>&minus;1</sup>G&thinsp;(G<sup>T</sup>R<sup>&minus;1</sup>G)<sup>&minus;1</sup>",
+       "({C}&times;{C})({C}&times;{n})({n}&times;{n})", "{C}&times;{n}",
+       "all {n} filters at once, which is why they cannot be built separately"],
+    ],
+    recipsiicos: [
+      ["vec(R)", "({q}&times;{q}) unrolled", "{q2}&times;1",
+       "the covariance as a vector, which is the space the edit happens in"],
+      ["U<sub>K</sub><sup>T</sup>vec(R)",
+       "({K}&times;{q2})({q2}&times;1)", "{K}&times;1",
+       "the covariance's coordinates in the retained subspace"],
+      ["U<sub>K</sub>(U<sub>K</sub><sup>T</sup>vec(R))",
+       "({q2}&times;{K})({K}&times;1)", "{q2}&times;1",
+       "back to a vectorised covariance, minus what was projected away"],
+      ["w<sub>1</sub><sup>T</sup>R&#771;&thinsp;w<sub>1</sub>",
+       "(1&times;{C})({C}&times;{C})({C}&times;1)", "1&times;1",
+       "LCMV's objective again, on the edited covariance"],
+    ],
+    abmc: [
+      ["w<sub>1</sub><sup>T</sup>X",
+       "(1&times;{C})({C}&times;{T})", "1&times;{T}",
+       "the filter's output, a time course the template is compared with"],
+      ["(w<sub>1</sub><sup>T</sup>X)&middot;u",
+       "(1&times;{T})({T}&times;1)", "1&times;1",
+       "one number: how much the output looks like the template"],
+      ["g<sub>1</sub> + P&thinsp;c<sub>1</sub>",
+       "({C}&times;1) + ({C}&times;1)", "{C}&times;1",
+       "the leadfield steered towards the template, P setting how far"],
+      ["R<sup>&minus;1</sup>(g<sub>1</sub> + P&thinsp;c<sub>1</sub>)",
+       "({C}&times;{C})({C}&times;1)", "{C}&times;1",
+       "a filter again, the same shape LCMV's has"],
+    ],
+  };
+
   /* Sizes written by the build with {C}-style placeholders, so the numbers
    * come from the model that was actually used rather than from this file. */
   function fillSizes(text, S) {
@@ -185,6 +254,39 @@
             return [r[0], r[1], fillSizes(r[2], S), fillSizes(r[3], S)];
           })
         );
+    }
+
+    /* And the equations again, with those sizes multiplied out. Knowing how big
+     * each symbol is still leaves the reader to check conformability in their
+     * head, which is the step the algebra is usually skipped over at. */
+    var shapes = SHAPES[method];
+    var check = "";
+    if (shapes) {
+      var S2 = {
+        C: C, V: V, T: T, n: n, n2: n * n,
+        K: (P.model && P.model.recipsiicos_rank) || 0,
+        q: (P.model && P.model.recipsiicos_virtual) || 0,
+      };
+      S2.q2 = S2.q * S2.q;
+      check =
+        "<h5>The same equations, with the sizes put in</h5>" +
+        '<p class="cp-hint">Every line multiplies out to the shape on its ' +
+        "right. It is worth reading down the last column: an objective has to " +
+        "collapse to a single number before &ldquo;minimise&rdquo; means " +
+        "anything, and a constraint is as many equations as its result has " +
+        "entries.</p>" +
+        '<table class="cp-dims cp-shapes"><tr><th>expression</th>' +
+        "<th>sizes</th><th>gives</th><th></th></tr>" +
+        shapes
+          .map(function (r) {
+            return '<tr><td class="cp-sym">' + fillSizes(r[0], S2) +
+              '</td><td class="cp-size">' + fillSizes(r[1], S2) +
+              '</td><td class="cp-size">' + fillSizes(r[2], S2) +
+              "</td><td>" + fillSizes(r[3], S2) + "</td></tr>";
+          })
+          .join("") +
+        "</table>";
+      extra += check;
     }
 
     return (
