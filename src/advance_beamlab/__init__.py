@@ -79,6 +79,7 @@ from ._recipsiicos import (
     make_recipsiicos_lcmv,
     recipsiicos_rank_curve,
 )
+from ._stats import permutation_image_test
 
 __all__ = [
     "make_mcmv",
@@ -90,6 +91,7 @@ __all__ = [
     "localizer_value",
     "optimal_orientation",
     "estimate_rank",
+    "permutation_image_test",
     "power_image",
     "rank_spectrum",
     "make_recipsiicos_cov",

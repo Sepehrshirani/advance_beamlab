@@ -116,6 +116,22 @@ spectrum actually says.
    estimate_rank
    rank_spectrum
 
+Deciding whether it is real
+---------------------------
+
+A beamformer image is not something a parametric test can be pointed at: its
+values are ratios of quadratic forms, and its spatial smoothness is neither
+uniform nor known in advance, because the filter's resolution varies with depth,
+geometry and source strength. :func:`permutation_image_test` judges an image
+against the distribution its own relabellings produce, and corrects across the
+image by the maximum statistic, which controls the family-wise error rate
+without assuming anything about the smoothing.
+
+.. autosummary::
+   :toctree: generated/
+
+   permutation_image_test
+
 Understanding the constraint
 -----------------------------
 
