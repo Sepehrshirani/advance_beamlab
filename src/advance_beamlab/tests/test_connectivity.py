@@ -1307,3 +1307,36 @@ def test_augmented_accepts_epoched_data():
     assert np.allclose(out, out.T)
     # Non-significant edges keep their PW value; the significant one is redone.
     assert out[0, 2] == conn[0, 2]
+
+
+def test_the_pair_is_reconstructed_in_the_order_it_was_asked_for(scenario):
+    """Row 0 of a pair's reconstruction is the pair's first source.
+
+    Checked against an independently built two-source MCMV rather than against
+    the same function called the other way round. Comparing the function with
+    itself cannot see this: reversing the order inside the loop reverses both
+    calls, so the relationship between them is unchanged and the swap is
+    invisible. Only an outside reference pins which row is which.
+    """
+    d = scenario
+    pair = [d["A"], d["B"]]
+    pairs, tcs = reconstruct_pairwise_mcmv(
+        d["evoked"].data, d["info"], d["fwd"], d["dcov"], pair, noise_cov=d["ncov"]
+    )
+    assert pairs == [(0, 1)]
+
+    reference = (
+        make_mcmv(
+            d["info"],
+            d["fwd"],
+            d["dcov"],
+            sources=pair,
+            noise_cov=d["ncov"],
+            weight_norm="unit-gain",
+        )["weights"]
+        @ d["evoked"].data
+    )
+    assert_allclose(tcs[0], reference, rtol=1e-5, atol=1e-14)
+    # And the rows are not interchangeable: the two sources differ, so a swap
+    # would be a real error rather than a relabelling.
+    assert not np.allclose(reference[0], reference[1], rtol=1e-3)
