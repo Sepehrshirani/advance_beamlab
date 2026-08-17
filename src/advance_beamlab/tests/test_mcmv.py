@@ -651,3 +651,65 @@ def test_orientations_are_head_coordinates(fwd_info):
     w_head = make_mcmv(info, fwd_head, cov, sources, orientations=ori)["weights"]
     w_surf = make_mcmv(info, fwd_surf, cov, sources, orientations=ori)["weights"]
     assert_allclose(w_surf, w_head, rtol=1e-8, atol=0)
+
+
+def test_array_gain_states_its_constraint_on_the_raw_leadfield(fwd_info):
+    """``w'l = ||l||``, and the zero-gain constraint survives the rescaling.
+
+    Array gain exists because unit gain is biased towards deep sources: a deep
+    leadfield is small, so the filter has to amplify to reach unit gain, and the
+    amplified noise comes with it. Normalising the leadfield first removes that
+    without needing a noise covariance to normalise against.
+
+    The norm has to be of the *raw* leadfield. Taking it in the whitened space
+    folds the whitener's own scale into the output -- on a fixture with 1e-8
+    noise that was a factor of 1e8 -- and the result is no longer in the units
+    of the array.
+    """
+    fwd, info = fwd_info
+    fwd = mne.convert_forward_solution(fwd, force_fixed=True, use_cps=False)
+    rng = np.random.default_rng(0)
+    n_ch = len(info["ch_names"])
+    data = rng.standard_normal((n_ch, 4000)) * 1e-8
+    cov = mne.compute_covariance(
+        mne.EpochsArray(data[None], info, verbose=False),
+        method="empirical",
+        verbose=False,
+    )
+    gain = fwd["sol"]["data"]
+    sources = [3, 11]
+
+    bf = make_mcmv(
+        info,
+        fwd,
+        cov,
+        sources,
+        noise_cov=cov,
+        reg=0.05,
+        weight_norm="array-gain",
+        verbose=False,
+    )
+    weights = bf["weights"]
+    for i, s in enumerate(sources):
+        assert weights[i] @ gain[:, s] == pytest.approx(
+            np.linalg.norm(gain[:, s]), rel=1e-6
+        )
+    # Rescaling each row cannot break the null on the other source.
+    assert weights[0] @ gain[:, sources[1]] == pytest.approx(0.0, abs=1e-9)
+    assert weights[1] @ gain[:, sources[0]] == pytest.approx(0.0, abs=1e-9)
+
+    # And it is a pure rescaling of the unit-gain filter, one factor per row.
+    plain = make_mcmv(
+        info,
+        fwd,
+        cov,
+        sources,
+        noise_cov=cov,
+        reg=0.05,
+        weight_norm="unit-gain",
+        verbose=False,
+    )["weights"]
+    for i, s in enumerate(sources):
+        np.testing.assert_allclose(
+            weights[i], plain[i] * np.linalg.norm(gain[:, s]), rtol=1e-6
+        )

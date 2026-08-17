@@ -99,6 +99,23 @@ from each method's public apply path rather than from its stored weights.
 
    power_image
 
+Knowing the rank
+----------------
+
+Every method here inverts a covariance, and every one behaves badly if that
+covariance is rank deficient and the inverse is not told. Prefer
+:func:`mne.compute_rank` when the data's provenance is available, since it reads
+the recorded bookkeeping rather than inferring anything. These are for the
+common case where it is not -- someone else's data, or a pipeline whose steps
+are not separately recorded -- and for checking a recorded rank against what the
+spectrum actually says.
+
+.. autosummary::
+   :toctree: generated/
+
+   estimate_rank
+   rank_spectrum
+
 Understanding the constraint
 -----------------------------
 

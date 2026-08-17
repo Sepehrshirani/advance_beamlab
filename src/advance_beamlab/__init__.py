@@ -73,6 +73,7 @@ from ._mcmv import (
     apply_mcmv_cov,
     make_mcmv,
 )
+from ._rank import estimate_rank, rank_spectrum
 from ._recipsiicos import (
     make_recipsiicos_cov,
     make_recipsiicos_lcmv,
@@ -88,7 +89,9 @@ __all__ = [
     "MCMVScanResult",
     "localizer_value",
     "optimal_orientation",
+    "estimate_rank",
     "power_image",
+    "rank_spectrum",
     "make_recipsiicos_cov",
     "make_recipsiicos_lcmv",
     "recipsiicos_rank_curve",

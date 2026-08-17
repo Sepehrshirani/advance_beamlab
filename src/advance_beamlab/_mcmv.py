@@ -49,7 +49,7 @@ from mne.beamformer._compute_beamformer import _reg_pinv
 from mne.forward import is_fixed_orient
 from mne.utils import _check_option, _validate_type, logger, verbose
 
-_ALLOWED_WEIGHT_NORM = ("unit-gain", "unit-noise-gain", None)
+_ALLOWED_WEIGHT_NORM = ("unit-gain", "array-gain", "unit-noise-gain", None)
 
 
 def _cov_as_matrix(cov, ch_names):
@@ -484,11 +484,19 @@ def make_mcmv(
         pointing at the top of the head. Data-driven orientation
         estimation (the generalised-eigenvalue localiser of Moiseev et al., 2011)
         is provided by :func:`~advance_beamlab.scan_mcmv`.
-    weight_norm : 'unit-gain' | 'unit-noise-gain' | None
+    weight_norm : 'unit-gain' | 'array-gain' | 'unit-noise-gain' | None
         Output normalisation. ``'unit-gain'`` (and ``None``) returns the literal
         Eq. (5) filter (the unit-gain / zero-gain constraint
         :math:`\mathbf{W}^{\mathsf T}\mathbf{H}=\mathbf{I}` holds on the raw
-        leadfield). ``'unit-noise-gain'`` rescales each filter to unit Euclidean
+        leadfield). ``'array-gain'`` imposes
+        :math:`\mathbf{w}_i^{\mathsf T}\mathbf{l}_i = \lVert\mathbf{l}_i
+        \rVert` instead, by normalising each leadfield before the constraint:
+        the output is in measurement units rather than a dipole moment, and it
+        does not inherit unit-gain's bias towards deep sources, which arises
+        because a deep leadfield is small and the filter must amplify to reach
+        unit gain :footcite:`SekiharaNagarajan2008`. It is the depth-neutral
+        choice when no noise covariance is available to normalise against.
+        ``'unit-noise-gain'`` rescales each filter to unit Euclidean
         norm *in the whitened space* :footcite:`SekiharaNagarajan2008`, which is
         MNE's definition and is used by :func:`mne.beamformer.make_lcmv`. That
         equals :math:`\mathbf{w}_i^{\mathsf T}\mathbf{C}_n\mathbf{w}_i = 1`
@@ -677,6 +685,22 @@ def make_mcmv(
     # In whitened space the noise covariance is the identity, so unit-noise-gain
     # is exactly unit Euclidean norm of each whitened filter
     # :footcite:`SekiharaNagarajan2008`. This matches MNE's definition.
+    if weight_norm == "array-gain":
+        # w'l = ||l||, i.e. the leadfield is normalised before the constraint is
+        # imposed. Unit-gain returns a dipole moment, which is biased towards
+        # deep sources because a deep leadfield is small and the filter has to
+        # amplify to reach unit gain; array-gain returns a value in measurement
+        # units instead, which is the depth-neutral choice when a noise
+        # covariance is not available to normalise against
+        # :footcite:`SekiharaNagarajan2008`.
+        # The norm of the *raw* leadfield, not the whitened one. The returned
+        # weights act on raw sensor data, so that is the leadfield the
+        # constraint has to be stated against; using the whitened norm would
+        # fold the whitener's own scale into the output and the units would no
+        # longer be the array's.
+        scale = np.linalg.norm(H, axis=0)  # one norm per constrained source
+        weights_w = weights_w * scale[:, None]
+
     if weight_norm == "unit-noise-gain":
         if adhoc_noise:
             warnings.warn(
