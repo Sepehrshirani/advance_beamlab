@@ -60,6 +60,7 @@ from ._fem import (
     ny_head_scalp,
     read_ny_head_forward,
 )
+from ._imaging import power_image
 from ._localizers import (
     MCMVScanResult,
     localizer_value,
@@ -87,6 +88,7 @@ __all__ = [
     "MCMVScanResult",
     "localizer_value",
     "optimal_orientation",
+    "power_image",
     "make_recipsiicos_cov",
     "make_recipsiicos_lcmv",
     "recipsiicos_rank_curve",

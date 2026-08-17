@@ -82,6 +82,23 @@ is downloaded on demand and is not redistributed with this package.
    ny_head_plot_indices
    ny_head_picks
 
+Reporting a result
+------------------
+
+A beamformer's raw output power is not comparable between locations: it grows
+with depth, with the filter's noise gain, and with whatever the covariance
+happened to contain. :func:`power_image` applies the normalisations that make it
+interpretable, and that nearly every beamformer result in the literature is
+reported in -- pseudo-Z against the noise floor, the differential pseudo-T
+against a control window, and the ratio pseudo-F for multiplicative changes.
+They work on any of the filter sets in this package, because the power is taken
+from each method's public apply path rather than from its stored weights.
+
+.. autosummary::
+   :toctree: generated/
+
+   power_image
+
 Understanding the constraint
 -----------------------------
 
