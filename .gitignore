@@ -42,3 +42,5 @@ env/
 .DS_Store
 Thumbs.db
 
+# Local editor and tooling state (never tracked)
+.vscode/
