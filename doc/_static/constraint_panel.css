@@ -5,10 +5,10 @@
 .cp-root {
   --cp-bg: #ffffff;
   --cp-panel: #f7f7f9;
-  --cp-border: #d5d7de;
+  --cp-border: #868c96;
   --cp-text: #202124;
   --cp-muted: #63666e;
-  --cp-grid: #a9aebb;
+  --cp-grid: #868c96;
   --cp-chip: #ffffff;
   --cp-chip-edge: #82888f;
   --cp-true: #6b7078;
@@ -19,10 +19,20 @@
   color: var(--cp-text);
 }
 
-html[data-theme="dark"] .cp-root {
+/* Both attributes, and the media query.
+
+   The theme carries the user's *setting* in data-theme (auto, light or dark)
+   and the *resolved* mode in data-mode. The default setting is "auto", so on a
+   dark page data-theme is still "auto" and a rule keyed on data-theme="dark"
+   never matches: the panel kept its light palette on a dark page, which is why
+   the text and the card borders had no contrast and why anything drawn on a
+   canvas -- the sensor traces especially -- vanished into the background. The
+   media query covers a host that resolves the mode without saying so. */
+html[data-theme="dark"] .cp-root,
+html[data-mode="dark"] .cp-root {
   --cp-bg: #14181c;
   --cp-panel: #1c2128;
-  --cp-border: #333a44;
+  --cp-border: #64707e;
   --cp-text: #e6e8eb;
   --cp-muted: #9aa0aa;
   --cp-grid: #6d7887;
@@ -33,6 +43,25 @@ html[data-theme="dark"] .cp-root {
   --cp-warm: #e2705a;
   --cp-cool: #6b9fd4;
 }
+
+@media (prefers-color-scheme: dark) {
+  html[data-theme="auto"] .cp-root,
+  html:not([data-theme]):not([data-mode]) .cp-root {
+    --cp-bg: #14181c;
+    --cp-panel: #1c2128;
+    --cp-border: #64707e;
+    --cp-text: #e6e8eb;
+    --cp-muted: #9aa0aa;
+    --cp-grid: #6d7887;
+    --cp-chip: #2b323b;
+    --cp-chip-edge: #6f7c8a;
+    --cp-true: #9aa0aa;
+    --cp-accent: #4aa3df;
+    --cp-warm: #e2705a;
+    --cp-cool: #6b9fd4;
+  }
+}
+
 
 .cp-controls {
   display: flex;

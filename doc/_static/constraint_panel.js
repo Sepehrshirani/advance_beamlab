@@ -1789,12 +1789,33 @@
       topoCache = {};
       pending = setTimeout(render, 120);
     });
+    /* Redraw when the page's theme changes. Every colour on a canvas is read
+     * out of a CSS custom property at draw time, so a canvas painted under one
+     * palette keeps those colours until something asks for another frame.
+     *
+     * Watch both attributes: the theme records the user's setting in data-theme
+     * and the resolved mode in data-mode, and switching between light and dark
+     * while the setting stays on "auto" changes only the second. */
     new MutationObserver(function () {
       topoCache = {};
+      realPeakCache = {};
       render();
     }).observe(document.documentElement, {
-      attributes: true, attributeFilter: ["data-theme"],
+      attributes: true, attributeFilter: ["data-theme", "data-mode", "class"],
     });
+
+    /* And when the system flips under an "auto" setting, which changes no
+     * attribute at all. */
+    if (window.matchMedia) {
+      var dark = window.matchMedia("(prefers-color-scheme: dark)");
+      var onScheme = function () {
+        topoCache = {};
+        realPeakCache = {};
+        render();
+      };
+      if (dark.addEventListener) dark.addEventListener("change", onScheme);
+      else if (dark.addListener) dark.addListener(onScheme);
+    }
 
     render();
   }
