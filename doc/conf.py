@@ -244,6 +244,8 @@ _FIG_DARK = {
     "ink": "#e2e8ee",  # titles, axis labels, tick labels
     "chrome": "#96a0ab",  # spines and tick marks
     "grid": "#8b949e",
+    # A marked band: separated from the page, but not brighter than the data.
+    "band": "#2b313a",
 }
 
 
@@ -262,9 +264,27 @@ def _is_default_chrome(colour):
     return alpha > 0 and max(red, green, blue) <= 0.35
 
 
+def _is_light_neutral(colour):
+    """Whether *colour* is a pale grey, the conventional shade for a marked band.
+
+    Achromatic and light: a coloured fill is carrying data and is left alone,
+    and so is a dark one, which already reads against the dark page.
+    """
+    from matplotlib.colors import to_rgba
+
+    try:
+        red, green, blue, alpha = to_rgba(colour)
+    except (ValueError, TypeError):
+        return False
+    return alpha > 0 and max(red, green, blue) - min(red, green, blue) < 0.04 and (
+        min(red, green, blue) > 0.70
+    )
+
+
 def _save_dark_variant(fig, path):
     """Save *fig* against the dark ground, then restore every colour changed."""
     from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
     from matplotlib.text import Text
 
     undo = []
@@ -277,8 +297,10 @@ def _save_dark_variant(fig, path):
 
     furniture = set()
     for ax in fig.get_axes():
+        furniture.add(id(ax.patch))
         swap(ax.set_facecolor, ax.get_facecolor(), _FIG_DARK["ground"])
         for spine in ax.spines.values():
+            furniture.add(id(spine))
             if _is_default_chrome(spine.get_edgecolor()):
                 swap(spine.set_edgecolor, spine.get_edgecolor(), _FIG_DARK["chrome"])
         for gridline in ax.get_xgridlines() + ax.get_ygridlines():
@@ -312,6 +334,17 @@ def _save_dark_variant(fig, path):
                 line.get_markeredgecolor(),
                 _FIG_DARK["ink"],
             )
+
+    # Shading drawn to mark a region -- an excluded range behind the curves --
+    # is picked in a pale neutral grey because the page is white. On the dark
+    # page that same grey is the brightest thing in the figure, so the band a
+    # reader is told to disregard becomes the first thing they look at. Only
+    # achromatic, light fills are moved: a coloured band is carrying data.
+    for patch in fig.findobj(Patch):
+        if id(patch) in furniture or patch is fig.patch:
+            continue
+        if _is_light_neutral(patch.get_facecolor()):
+            swap(patch.set_facecolor, patch.get_facecolor(), _FIG_DARK["band"])
 
     # Covers titles, axis labels, tick labels, legend entries and annotations in
     # one pass, including those belonging to colorbars.

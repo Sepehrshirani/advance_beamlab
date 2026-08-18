@@ -181,13 +181,19 @@ for k, ax in enumerate(axes):
             ax.annotate(
                 f"#{r}",
                 (t, 1.09),
-                ha="center",
+                # Beside the rule, not centred on it. The dashed rule marking
+                # the same source spans the full height of the panel, so a
+                # centred label had the rule drawn straight through its digits.
+                textcoords="offset points",
+                xytext=(5, 0),
+                ha="left",
+                va="center",
                 fontsize=9,
                 annotation_clip=False,
             )
     for s in found[:k]:
         ax.plot(s, 1.16, "v", color="C0", ms=9, mec="white", mew=1.0, clip_on=False)
-    ax.set(ylabel="normalised", ylim=(0, 1.3))
+    ax.set(ylabel="MAI localiser (normalised)", ylim=(0, 1.3))
     ax.set_title(f"iteration {k + 1}", loc="left")
     ax.grid(axis="x", visible=False)
     ax.margins(x=0.01)
@@ -225,7 +231,9 @@ ax.set(
     ylabel=r"pseudo-$Z$",
     xticks=np.arange(1, len(pz) + 1),
 )
-ax.set_title("The elbow tells you when to stop", loc="left")
+ax.set_title(
+    "Pseudo-$Z$ falls to a baseline once the search fits noise", loc="left"
+)
 fig.tight_layout()
 print(f"pseudo-Z by iteration: {np.round(pz, 1).tolist()}")
 
@@ -254,16 +262,28 @@ labels = [t for t in truth if t in found[:3]]
 
 fig, axes = plt.subplots(len(order), 1, figsize=(8, 5.4), sharex=True)
 t_ms = times * 1e3
-for ax, row, label in zip(axes, order, labels, strict=True):
+# The two keys are the same in every panel, so they are drawn once, above the
+# first. What actually differs panel to panel is the correlation, which belongs
+# in each panel's own title rather than in a legend repeated three times.
+for i, (ax, row, label) in enumerate(zip(axes, order, labels, strict=True)):
     injected = amp * sources[truth.index(label)]
     est = recovered[row]
     r = np.corrcoef(est[active], injected[active])[0, 1]
-    ax.plot(t_ms, injected, color="#111111", lw=2.4, alpha=0.45, label="injected")
-    ax.plot(t_ms, est, color="C3", lw=1.4, label=f"MCMV (r = {abs(r):.3f})")
+    first = i == 0
+    ax.plot(
+        t_ms,
+        injected,
+        color="#111111",
+        lw=2.4,
+        alpha=0.45,
+        label="injected" if first else "_nolegend_",
+    )
+    ax.plot(t_ms, est, color="C3", lw=1.4, label="MCMV" if first else "_nolegend_")
     ax.axvline(0, color="k", lw=0.5)
-    ax.set(ylabel="Am")
-    ax.set_title(f"grid index {label}", loc="left")
-    ax.legend(loc="lower right", bbox_to_anchor=(1.0, 1.0), ncol=2, fontsize=9)
+    ax.set(ylabel="source amplitude (A m)")
+    ax.set_title(f"grid index {label}   (r = {abs(r):.3f})", loc="left")
+    if first:
+        ax.legend(loc="lower right", bbox_to_anchor=(1.0, 1.0), ncol=2, fontsize=9)
 axes[-1].set_xlabel("time (ms)")
 fig.tight_layout()
 

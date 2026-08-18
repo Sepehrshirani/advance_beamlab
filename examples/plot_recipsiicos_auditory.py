@@ -200,6 +200,14 @@ try:
         size=(1000, 500),
         clim=dict(kind="percent", lims=[90, 95, 99]),
         time_viewer=False,  # static image: no interactive picking (offscreen-safe)
+        # Fewer labels than the default eight, which do not fit the bar's width
+        # and are drawn butted together, and a title so the numbers on it state
+        # what they measure.
+        add_data_kwargs=dict(
+            colorbar_kwargs=dict(
+                n_labels=3, fmt="%.2f", title="source power (unit-noise-gain)"
+            )
+        ),
     )
 except Exception as exc:  # 3-D rendering is optional
     brain = None
@@ -211,8 +219,21 @@ except Exception as exc:  # 3-D rendering is optional
 # open, which the CI runner needs.
 if brain is not None:
     fig, ax = plt.subplots(figsize=(10, 5), constrained_layout=True)
-    ax.imshow(brain.screenshot())
+    shot = brain.screenshot()
+    ax.imshow(shot)
     ax.set_axis_off()
+    # "split" puts one hemisphere in each half of the render, and nothing in the
+    # image says which. This example's stated subject is hemispheric balance, so
+    # the figure has to name the sides it is being read for.
+    for frac, side in ((0.25, "Left hemisphere"), (0.75, "Right hemisphere")):
+        ax.text(
+            frac * shot.shape[1],
+            0.03 * shot.shape[0],
+            side,
+            ha="center",
+            va="top",
+            fontsize=10,
+        )
 
 # %%
 # Finally, the reconstructed time courses at the two hemispheric peaks: the same
@@ -260,7 +281,12 @@ for ax, idx, hemi in zip(axes, peaks, ("Left", "Right"), strict=True):
         title=f"{hemi} auditory peak  (ReciPSIICOS/LCMV = {ratio:.2f})",
         ylabel="amplitude (a.u.)",
     )
-    ax.legend(loc="upper right")
+    # Lower right, and only on the first panel. In the upper right the keys
+    # met the descending traces end-to-end, so key and curve read as one line,
+    # and a curve ran through the legend text; with frameon=False globally there
+    # is no patch to separate them. The lower right of both panels is empty.
+    if ax is axes[0]:
+        ax.legend(loc="lower right")
     # Printed as well as drawn, because the paragraph above quotes these two
     # numbers and a reader should be able to check them against the run.
     base = evoked.times < 0.0

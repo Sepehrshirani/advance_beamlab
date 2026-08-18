@@ -345,7 +345,13 @@ for ax, err, val, name in (
     bars = ax.bar(methods, err, color=colors, zorder=3)
     ax.bar_label(bars, labels=[f"{v:+.3f}" for v in val], padding=3, fontsize=9)
     ax.set_title(name, loc="left")
-    ax.set_ylim(0, max(max(ab_err), max(cb_err)) * 1.35)
+    # Each panel scaled to its own errors. Held to a common limit, the panel
+    # whose errors are the smaller was flattened to the axis: its bars had no
+    # readable height and the smallest read as missing data rather than as a
+    # near-zero error. The comparison the figure is making is between the three
+    # methods within an edge, not between the two edges, so a shared limit buys
+    # nothing and costs the right-hand panel entirely.
+    ax.set_ylim(0, max(err) * 1.35)
     ax.grid(axis="x", visible=False)
 ax1.set_ylabel(r"$|\hat r - r_{\mathrm{true}}|$")
 fig.suptitle(
@@ -366,6 +372,10 @@ ax.bar(
     color=["C1", "C3"],
 )
 ax.set_yscale("log")
+# Give the axis a decade above the taller bar. Left to autoscale, the top of
+# that bar sat above the highest labelled tick, so the one value the figure
+# exists to report could not be read off the axis at all.
+ax.set_ylim(top=10.0 ** np.ceil(np.log10(alpha_c_pw) + 0.35))
 ax.set_ylabel(r"$|\alpha_C| = |\mathbf{w}_A^{\mathsf{T}} \mathbf{g}_C|$")
 ax.set_title("Leakage onto the conductor C")
 fig2.tight_layout()

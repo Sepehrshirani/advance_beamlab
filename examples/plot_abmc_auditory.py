@@ -212,8 +212,13 @@ for x, y, s in zip(n_avg, errors, shares, strict=True):
         f"{s:.0f}%",
         (x, y),
         textcoords="offset points",
-        xytext=(0, 8),
+        # Below the marker, not above it. The LCMV reference sits at about
+        # 11 mm and the ABMC medians from two trials on sit just under 9, so a
+        # label eight points above a marker landed on the line and was struck
+        # through by it.
+        xytext=(0, -12),
         ha="center",
+        va="top",
         fontsize=9,
         color="0.35",
     )

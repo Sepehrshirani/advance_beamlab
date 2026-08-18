@@ -215,14 +215,15 @@ ax1.plot(alpha / alpha.max(), color=C_ABMC, lw=1.0)
 ax1.axvline(true_src, color=C_TRUE, ls=(0, (5, 3)), lw=1.5, label="true source")
 ax1.set(xlabel="source grid index", ylabel=r"normalised $\alpha$", ylim=(0, 1.25))
 ax1.set_title(f"Stage 1 source power (true source ranked {alpha_rank})", loc="left")
-ax1.legend(loc="upper right")
+ax1.legend(loc="best")
 ax1.grid(axis="x", visible=False)
 
 ax2.semilogy(ev_emp / ev_emp.max(), color=C_LCMV, label="empirical")
 ax2.semilogy(ev_sbl / ev_sbl.max(), color=C_ABMC, label="SBL model")
 ax2.set(xlabel="eigenvalue index", ylabel="normalised eigenvalue")
 ax2.set_title(
-    f"condition number {ev_emp[0] / ev_emp[-1]:.3g} vs {ev_sbl[0] / ev_sbl[-1]:.3g}",
+    f"Covariance conditioning: empirical {ev_emp[0] / ev_emp[-1]:.3g}, "
+    f"SBL {ev_sbl[0] / ev_sbl[-1]:.3g}",
     loc="left",
 )
 ax2.legend(loc="lower left")
@@ -256,10 +257,22 @@ i_src = worst["i_src"]
 gi = np.arange(leadfield.shape[1])
 fig, axes = plt.subplots(2, 1, figsize=(9, 5.2), sharex=True)
 panels = [
-    ("ABMC template-match map", worst["a_map"], worst["a_pk"], C_ABMC),
-    ("LCMV power map (unit-noise-gain)", worst["l_map"], worst["l_pk"], C_LCMV),
+    (
+        "ABMC template-match map",
+        worst["a_map"],
+        worst["a_pk"],
+        C_ABMC,
+        "normalised template match",
+    ),
+    (
+        "LCMV power map (unit-noise-gain)",
+        worst["l_map"],
+        worst["l_pk"],
+        C_LCMV,
+        "normalised power",
+    ),
 ]
-for ax, (name, m, pk, col) in zip(axes, panels, strict=True):
+for ax, (name, m, pk, col, quantity) in zip(axes, panels, strict=True):
     mm = m / m.max()
     ax.fill_between(gi, mm, color=col, alpha=0.22, lw=0)
     ax.plot(gi, mm, color=col, lw=1.1)
@@ -276,11 +289,11 @@ for ax, (name, m, pk, col) in zip(axes, panels, strict=True):
         label=f"peak ({err:.1f} cm off)",
     )
     # Headroom above 1.0 so the legend never sits on top of the curve.
-    ax.set(ylabel="normalised", ylim=(0, 1.42))
+    ax.set(ylabel=quantity, ylim=(0, 1.42))
     # Median/peak is the contrast of the map: low means a well-isolated peak,
     # close to one means a flat map that barely discriminates.
     ax.set_title(f"{name}:  median/peak = {np.median(mm):.2f}", loc="left")
-    ax.legend(loc="upper right", ncol=2)
+    ax.legend(loc="best", ncol=2)
     ax.margins(x=0.01)
     ax.grid(axis="x", visible=False)
 axes[-1].set_xlabel("source grid index")
@@ -390,7 +403,7 @@ stable = np.array([np.linalg.norm(rr[pk] - rr[i_src]) * 100 for pk in peaks])
 print(f"stability sweep over {len(P_grid)} values; selected P = {P_opt:.4g}")
 
 fig, ax = plt.subplots(figsize=(7, 3.4), constrained_layout=True)
-ax.semilogx(P_grid, stable, "o-", ms=3, label="peak error")
+ax.semilogx(P_grid, stable, "o-", ms=3, color=C_ABMC, label="ABMC peak error")
 ax.axvline(P_opt, color="#D55E00", lw=1.2, label=f"selected P = {P_opt:.3g}")
 ax.set(
     xlabel="P",

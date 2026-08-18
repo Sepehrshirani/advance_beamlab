@@ -128,6 +128,14 @@ try:
         size=(1000, 500),
         clim=dict(kind="percent", lims=[90, 95, 99]),
         time_viewer=False,  # static image: no interactive picking (offscreen-safe)
+        # Three labels, not the default eight. Eight five-character values do
+        # not fit the bar's width and were drawn butted together as one run of
+        # digits. The title is what makes the remaining numbers mean anything.
+        add_data_kwargs=dict(
+            colorbar_kwargs=dict(
+                n_labels=3, fmt="%.2f", title="LCMV power (unit-noise-gain)"
+            )
+        ),
     )
 except Exception as exc:  # 3-D rendering is optional
     brain = None
@@ -139,8 +147,21 @@ except Exception as exc:  # 3-D rendering is optional
 # open, which the CI runner needs.
 if brain is not None:
     fig, ax = plt.subplots(figsize=(10, 5), constrained_layout=True)
-    ax.imshow(brain.screenshot())
+    shot = brain.screenshot()
+    ax.imshow(shot)
     ax.set_axis_off()
+    # "split" puts one hemisphere in each half of the render, and nothing in the
+    # image says which. In a figure whose subject is a bilateral pair that is
+    # the one thing a reader has to be told.
+    for frac, side in ((0.25, "Left hemisphere"), (0.75, "Right hemisphere")):
+        ax.text(
+            frac * shot.shape[1],
+            0.03 * shot.shape[0],
+            side,
+            ha="center",
+            va="top",
+            fontsize=10,
+        )
 
 # %%
 # Build the MCMV joint filter on those two sources, and a per-source LCMV, both
@@ -191,7 +212,12 @@ print(
 
 times = evoked.times * 1e3
 post = evoked.times >= 0.0
-fig, axes = plt.subplots(2, 1, sharex=True, figsize=(7, 5), constrained_layout=True)
+# sharey as well as sharex: both panels plot source amplitude, and on separate
+# limits a millimetre of ink meant a different amplitude in each, which is
+# exactly the comparison the figure is for.
+fig, axes = plt.subplots(
+    2, 1, sharex=True, sharey=True, figsize=(7, 5), constrained_layout=True
+)
 for ax, i, hemi in zip(axes, range(2), ("Left", "Right"), strict=True):
     ratio = np.abs(s_mcmv[i, post]).max() / np.abs(s_lcmv[i, post]).max()
     ax.plot(times, s_lcmv[i], color="C0", label="LCMV (per-source)")
@@ -201,7 +227,8 @@ for ax, i, hemi in zip(axes, range(2), ("Left", "Right"), strict=True):
         title=f"{hemi} auditory source  (MCMV/LCMV peak = {ratio:.2f})",
         ylabel="amplitude (Am)",
     )
-    ax.legend(loc="upper right")
+    if ax is axes[0]:
+        ax.legend(loc="upper right")
 axes[-1].set_xlabel("time (ms)")
 
 # %%
@@ -217,6 +244,7 @@ src_corr = src_cov / np.outer(std, std)  # scale-invariant correlation matrix
 
 fig, ax = plt.subplots(constrained_layout=True, figsize=(4.2, 3.6))
 im = ax.imshow(src_corr, cmap="RdBu_r", vmin=-1, vmax=1)
+ax.grid(False)  # the global grid was being drawn across the cells
 ax.set(
     xticks=[0, 1],
     yticks=[0, 1],
@@ -226,7 +254,21 @@ ax.set(
 )
 for a in range(2):
     for b in range(2):
-        ax.text(b, a, f"{src_corr[a, b]:.2f}", ha="center", va="center", color="k")
+        # Read the ink off the cell it sits on rather than off a threshold in
+        # the data: RdBu_r only darkens near the ends of its range, so a cut at
+        # some correlation guesses at where that happens. Fixed black put the
+        # two diagonal labels on the darkest red in the map, well under any
+        # readable contrast.
+        red, green, blue, _ = im.cmap(im.norm(src_corr[a, b]))
+        luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+        ax.text(
+            b,
+            a,
+            f"{src_corr[a, b]:.2f}",
+            ha="center",
+            va="center",
+            color="w" if luminance < 0.5 else "k",
+        )
 fig.colorbar(im, ax=ax, label="correlation")
 
 # %%

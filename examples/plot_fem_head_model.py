@@ -145,13 +145,18 @@ ax.set(
     title="Forward gain: FEM vs BEM",
 )
 ax.legend()
-ax2.plot(centres, np.array(med_bem) / np.array(med_fem), "k^-")
+ratio = np.array(med_bem) / np.array(med_fem)
+ax2.plot(centres, ratio, "k^-")
 ax2.axhline(1.0, color="0.6", lw=1)
 ax2.set(
     xlabel="depth below nearest electrode (mm)",
     ylabel="BEM / FEM",
     title="BEM overestimates scalp potential",
-    ylim=(0, None),
+    # Anchored just under unity rather than at zero. The quantity is a ratio
+    # read against the line at one, so that line is the baseline worth showing;
+    # starting the axis at zero pushed the whole curve into the top of the panel
+    # and left most of it empty, which makes a large overestimate look small.
+    ylim=(min(0.95, ratio.min() * 0.95), ratio.max() * 1.05),
 )
 
 # %%

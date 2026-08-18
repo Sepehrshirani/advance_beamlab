@@ -338,6 +338,9 @@ ax.set(
     ylabel="source amplitude (a.u.)",
     title=f"Recovery of the true source (peak 1.0) at $\\rho = {rho_demo}$",
 )
-ax.legend(loc="upper right")
+# "best", not a fixed corner. Pinned to the upper right the legend sat exactly
+# where the MCMV trace peaks, so the text was struck through by the curve it was
+# labelling; matplotlib places it where it overlaps the data least.
+ax.legend(loc="best")
 
 # sphinx_gallery_thumbnail_number = 1

@@ -123,7 +123,18 @@ fig, ax = plt.subplots(figsize=(7, 3.8))
 ax.plot(ranks, p_pwr, color="C3", label="power subspace retained")
 ax.plot(ranks, p_cor, color="C0", label="correlation subspace retained")
 ax.axvline(k_opt, color="k", ls="--", lw=1.2, label=f"$K^*$ = {k_opt}")
-ax.set(xlabel="projection rank $K$", ylabel="retained energy fraction", ylim=(0, 1.05))
+# Both curves saturate long before the largest rank the covariance space admits,
+# so the axis stops where they stop changing. Drawn to the full range the entire
+# trade-off -- and the selected rank with it -- was compressed into the left
+# fifth of the panel, with the rest two flat lines carrying no information.
+_reached = np.flatnonzero(p_pwr >= 0.99)
+_saturated = int(ranks[_reached[0]]) if _reached.size else int(ranks[-1])
+ax.set(
+    xlabel="projection rank $K$",
+    ylabel="retained energy fraction",
+    ylim=(0, 1.05),
+    xlim=(0, min(int(ranks[-1]), max(2 * k_opt, int(1.2 * _saturated)))),
+)
 ax.set_title("The rank trade-off, and the rank it selects", loc="left")
 ax.legend(loc="center right")
 fig.tight_layout()
@@ -326,11 +337,22 @@ for ax, series, ylabel, ref in (
         ax.axhline(ref, color="C0", ls="--", lw=1.2, label="LCMV")
     ax.set(xlabel="projection rank $K$", ylabel=ylabel)
     ax.set_xlim(min(test_ranks) * 0.7, max(test_ranks) * 1.4)
+    # Tick the ranks that were actually tested, and nothing else. A log axis
+    # spanning well under two decades gets labelled minor ticks by default, and
+    # those labels overprinted one another across the decade the tested ranks
+    # sit in, leaving the axis unreadable exactly where it is read.
+    ax.set_xticks(list(test_ranks))
+    ax.set_xticklabels([str(int(r)) for r in test_ranks])
+    ax.xaxis.set_minor_locator(plt.NullLocator())
 ax1.set_ylim(0, 1.3)
 ax2.set_ylim(0, None)
 ax1.set_title("what the amplitude metric shows", loc="left", fontsize=10)
 ax2.set_title("what it cannot show", loc="left", fontsize=10)
-ax1.legend(loc="lower left", fontsize=8)
+# Centre left. The LCMV reference sits at about 0.31 and the data ride near 1.0,
+# so the lower left -- where the legend was -- is exactly the height that line
+# crosses, and it was drawn through the legend text. The band between them is
+# empty in both panels.
+ax1.legend(loc="center left", fontsize=8)
 fig.suptitle(
     rf"Rank sensitivity at $\rho$ = {rho_fixed}, with the invalid range shaded",
     x=0.008,
