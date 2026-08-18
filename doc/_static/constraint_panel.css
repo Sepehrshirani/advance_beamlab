@@ -136,7 +136,13 @@ html[data-mode="dark"] .cp-root,
 .cp-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: stretch;
+  /* Each card is as tall as its own contents. Stretching them to a common
+     height looks tidy while the pair is a similar length, but these rows pair a
+     figure with several paragraphs of commentary, and the shorter card then
+     carries a few hundred pixels of empty panel below its legend. A card that
+     ends where its content ends reads as deliberate; one padded out with a void
+     reads as broken. */
+  align-items: start;
   gap: 1rem;
 }
 
