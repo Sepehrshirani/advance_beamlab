@@ -187,6 +187,24 @@ def _mesh(rr, tris):
 # ``off_screen`` per plotter, not globally: it lets ``screenshot`` render
 # without opening a window, while the global setting stays on-screen for the
 # ``stc.plot()`` figures elsewhere in the gallery, which need a display.
+def _trim(img):
+    """Crop the empty border the renderer leaves around the scene.
+
+    A plotter sizes its viewport to the window, not to the object, so a head
+    occupying a third of the frame arrives with the rest as margin. Pasted into
+    an axis that margin becomes dead canvas, and the head is rendered smaller
+    than the space allows for no reason. With the background transparent the
+    margin is exactly the fully transparent border, so it can be measured rather
+    than guessed at.
+    """
+    alpha = img[..., 3]
+    rows = np.flatnonzero(alpha.any(axis=1))
+    cols = np.flatnonzero(alpha.any(axis=0))
+    if rows.size == 0 or cols.size == 0:
+        return img
+    return img[rows[0] : rows[-1] + 1, cols[0] : cols[-1] + 1]
+
+
 plotter = pv.Plotter(window_size=(900, 600), off_screen=True)
 plotter.add_mesh(
     _mesh(scalp_rr, scalp_tris), color="#e8d5c4", opacity=0.25, smooth_shading=True
@@ -205,7 +223,7 @@ plotter.camera.elevation = 15
 # matplotlib axis and published as a PNG, so a white ground would be baked into
 # the image and appear as a lit rectangle on a dark documentation page. With the
 # background carried by alpha, the page shows through in whichever colour it is.
-img = plotter.screenshot(transparent_background=True)
+img = _trim(plotter.screenshot(transparent_background=True))
 fig, ax = plt.subplots(figsize=(9, 6), constrained_layout=True)
 ax.imshow(img)
 ax.set_axis_off()
@@ -347,7 +365,7 @@ def _render_power(mark):
         )
     plotter.camera_position = "xy"
     plotter.camera.elevation = 65
-    img = plotter.screenshot(transparent_background=True)
+    img = _trim(plotter.screenshot(transparent_background=True))
     plotter.close()
     return img
 
