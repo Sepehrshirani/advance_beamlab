@@ -14,7 +14,12 @@ on:
 
 concurrency:
   group: docs-deploy
-  cancel-in-progress: true
+  # Queue, do not cancel. A full build takes about twenty minutes, so with
+  # cancel-in-progress a run of pushes closer together than that cancels each
+  # other in turn and nothing is ever published: four consecutive pushes once
+  # left the site a day stale while every run showed as started. Queueing costs
+  # a few idle minutes and guarantees the last push reaches the site.
+  cancel-in-progress: false
 
 jobs:
   deploy:
