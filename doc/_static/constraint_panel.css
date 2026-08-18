@@ -155,10 +155,15 @@ html[data-mode="dark"] .cp-root,
   padding: 0.75rem 0.85rem 0.85rem;
 }
 
-/* The hint text is the part that varies in length between cards; letting it
-   grow pushes every canvas onto the same baseline. */
+/* The hint does not grow. It used to, so that the canvases in a row started at
+   the same height, and that works while the two cards are a similar length. It
+   stops working when they are not: beside a card carrying several paragraphs of
+   explanation the hint absorbed some three hundred pixels of slack, which reads
+   as a hole punched between the caption and the controls rather than as
+   alignment. Cards still stretch to a common height, so the slack now collects
+   at the bottom of the shorter one, where it looks like padding. */
 .cp-card p.cp-hint {
-  flex: 1 0 auto;
+  flex: 0 0 auto;
 }
 
 .cp-half {
