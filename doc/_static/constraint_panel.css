@@ -29,7 +29,8 @@
    canvas -- the sensor traces especially -- vanished into the background. The
    media query covers a host that resolves the mode without saying so. */
 html[data-theme="dark"] .cp-root,
-html[data-mode="dark"] .cp-root {
+html[data-mode="dark"] .cp-root,
+.cp-root.cp-dark {
   --cp-bg: #14181c;
   --cp-panel: #1c2128;
   --cp-border: #64707e;

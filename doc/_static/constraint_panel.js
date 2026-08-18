@@ -382,6 +382,37 @@
     ];
   }
 
+  /* Which palette to use, decided by looking rather than by asking.
+   *
+   * The host signals its mode through attributes, and the panel guessed wrong
+   * for a long time because the theme keeps the user's *setting* in data-theme
+   * ("auto" by default) and the resolved mode in data-mode. Reading either is
+   * guessing at a convention. Measuring the page's own background colour is
+   * not: whatever attribute a host uses, and whether it uses one at all, the
+   * page is either dark or it is not, and the panel has to match it.
+   *
+   * The class is applied to the root element, so the whole palette -- including
+   * every colour the canvases read at draw time -- follows from one decision. */
+  function applyPalette(root) {
+    var probe = document.body || document.documentElement;
+    var colour = getComputedStyle(probe).backgroundColor || "";
+    var parts = colour.match(/[\d.]+/g);
+    var dark = false;
+    if (parts && parts.length >= 3 && (parts.length < 4 || parseFloat(parts[3]) > 0)) {
+      // Relative luminance, the same weighting the contrast ratios use.
+      var lin = [0, 1, 2].map(function (i) {
+        var v = parseFloat(parts[i]) / 255;
+        return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+      });
+      dark = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2] < 0.5;
+    } else if (window.matchMedia) {
+      // A transparent body tells us nothing; fall back to the system setting.
+      dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    }
+    root.classList.toggle("cp-dark", dark);
+    return dark;
+  }
+
   function css(el, name) {
     return getComputedStyle(el).getPropertyValue(name).trim();
   }
@@ -1704,6 +1735,7 @@
     }
 
     function render() {
+      applyPalette(root);
       [[methodsBox, "method"], [layoutBox, "layout"], [morphBox, "morph"],
        [headBox, "head"]].forEach(
         function (pair) {
