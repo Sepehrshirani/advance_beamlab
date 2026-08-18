@@ -582,12 +582,15 @@ html[data-mode="dark"] .cp-root,
   margin-inline: auto;
 }
 
-@media (min-width: 1400px) {
-  .cp-root {
-    width: min(88vw, 1180px);
-    margin-inline: calc((100% - min(88vw, 1180px)) / 2);
-  }
-}
+/* No wider than the column it sits in. An earlier version pulled the panel out
+   of the prose column on wide screens with a negative inline margin, to win back
+   the space the theme leaves as margin. That space is not empty: the sidebars
+   are in it. At a 1500 px viewport the rule made the panel 1180 px wide inside a
+   752 px article, so it reached 198 px past the left edge and 230 px past the
+   right, and both sidebars painted over the overhang -- which cut the first chip
+   off every row and ran the cards under "On this page". The theme widens the
+   article itself on larger screens, so the panel gets its extra width there
+   anyway, and inside the column it can never collide. */
 
 /* The theme styles every table in the article: borders, striping, block
    display, its own margins. The constraint table and the sizes tables are

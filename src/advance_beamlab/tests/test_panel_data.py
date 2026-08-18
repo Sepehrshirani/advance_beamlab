@@ -752,3 +752,52 @@ def test_the_shape_check_uses_only_known_placeholders():
         for text in (expr, sizes, result, note):
             unknown.update(re.findall(r"\{(\w+)\}", text))
     assert unknown <= PLACEHOLDERS, f"unknown: {sorted(unknown - PLACEHOLDERS)}"
+
+
+PANEL_RST = ROOT / "doc" / "panel.rst"
+PANEL_JS = ROOT / "doc" / "_static" / "constraint_panel.js"
+
+
+def test_the_mount_id_is_not_also_a_cross_reference_label():
+    """A label and the mount cannot share an id, or the panel builds in the label.
+
+    A ``.. _name:`` label renders as an empty ``<span id="name">`` placed above
+    the block it labels. Giving the mount the same id puts two elements with
+    that id on the page, and ``getElementById`` returns the first, so the panel
+    built itself inside the span: an inline element carrying none of the
+    classes the stylesheet keys on. Every palette token is defined on
+    ``.cp-root``, so each ``var(--cp-*, fallback)`` quietly used its light
+    fallback in both themes, and the layout ran inline. Nothing errored -- the
+    panel just looked wrong everywhere except a standalone page, which has no
+    label to collide with.
+    """
+    rst = PANEL_RST.read_text()
+    mount = re.search(r'<div id="([^"]+)" class="cp-root">', rst)
+    assert mount, "the panel mount div is not in panel.rst"
+    labels = set(re.findall(r"^\.\. _([^:]+):", rst, flags=re.MULTILINE))
+    assert mount.group(1) not in labels, (
+        f"the mount id {mount.group(1)!r} is also a cross-reference label, so "
+        "two elements on the page share it and the panel mounts in the wrong one"
+    )
+
+
+def test_the_script_and_the_page_agree_on_where_to_mount():
+    """The id lives in two files, and nothing else would notice them drifting."""
+    rst_id = re.search(r'<div id="([^"]+)" class="cp-root">', PANEL_RST.read_text())
+    js_id = re.search(r'var MOUNT = "([^"]+)";', PANEL_JS.read_text())
+    assert rst_id and js_id, "could not find the mount id in both files"
+    assert rst_id.group(1) == js_id.group(1), (
+        f"panel.rst mounts {rst_id.group(1)!r} but the script looks for "
+        f"{js_id.group(1)!r}"
+    )
+
+
+def test_the_stylesheet_and_the_script_are_requested_at_the_same_version():
+    """Half a cache-busted pair is worse than neither: the two disagree."""
+    rst = PANEL_RST.read_text()
+    versions = dict(re.findall(r"constraint_panel\.(css|js)\?v=(\d+)", rst))
+    assert set(versions) == {"css", "js"}, f"expected both assets, got {versions}"
+    assert versions["css"] == versions["js"], (
+        f"stylesheet is at v={versions['css']} but the script is at "
+        f"v={versions['js']}, so a browser can cache one and not the other"
+    )

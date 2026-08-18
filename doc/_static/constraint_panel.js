@@ -13,7 +13,13 @@
 (function () {
   "use strict";
 
-  var MOUNT = "constraint-panel";
+  /* Not "constraint-panel": the page carries a Sphinx cross-reference label of
+ * that name, which renders as an empty <span> with the same id *earlier* in the
+ * document. getElementById returns the first match, so the panel built itself
+ * inside that span -- an inline element with no cp-root class. Every palette
+ * token is defined on .cp-root, so each var() silently fell back to its light
+ * default in both themes, and the whole panel laid out inline. */
+  var MOUNT = "advance-beamlab-panel";
   var METHOD_LABEL = {
     lcmv: "LCMV",
     mcmv: "MCMV",
@@ -1853,8 +1859,13 @@
   }
 
   function start() {
-    var root = document.getElementById(MOUNT);
+    /* By class first. The id is a convenience for linking, but the class is
+       what the stylesheet keys on, so selecting by it means a mount that is
+       found is always a mount that is styled. */
+    var root = document.querySelector("#" + MOUNT + ".cp-root") ||
+      document.querySelector(".cp-root") || document.getElementById(MOUNT);
     if (!root) return;
+    root.classList.add("cp-root");
     var P = window.CONSTRAINT_PANEL;
     if (!P) {
       root.innerHTML = '<div class="cp-status">The panel data file did not load.</div>';

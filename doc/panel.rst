@@ -99,10 +99,10 @@ says anything on its own.
 
 .. raw:: html
 
-   <div id="constraint-panel" class="cp-root"></div>
-   <link rel="stylesheet" href="_static/constraint_panel.css?v=5">
+   <div id="advance-beamlab-panel" class="cp-root"></div>
+   <link rel="stylesheet" href="_static/constraint_panel.css?v=6">
    <script src="_static/constraint_panel_data.js?v=4"></script>
-   <script src="_static/constraint_panel.js?v=5"></script>
+   <script src="_static/constraint_panel.js?v=6"></script>
 
 The controls, and what they are for
 -----------------------------------
