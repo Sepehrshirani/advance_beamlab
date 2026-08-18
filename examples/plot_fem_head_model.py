@@ -201,7 +201,11 @@ plotter.add_points(
 plotter.camera_position = "yz"
 plotter.camera.azimuth = 210
 plotter.camera.elevation = 15
-img = plotter.screenshot()
+# Transparent, not the renderer's default white. The screenshot is pasted into a
+# matplotlib axis and published as a PNG, so a white ground would be baked into
+# the image and appear as a lit rectangle on a dark documentation page. With the
+# background carried by alpha, the page shows through in whichever colour it is.
+img = plotter.screenshot(transparent_background=True)
 fig, ax = plt.subplots(figsize=(9, 6), constrained_layout=True)
 ax.imshow(img)
 ax.set_axis_off()
@@ -304,8 +308,15 @@ scalars = [dense[:n_lh_dense], dense[n_lh_dense:]]
 # sub-threshold background they are supposed to stand out from. Starting the
 # colormap a quarter of the way up fixes that.
 lo, hi = np.percentile(power, 95), power.max()
+# The upper three quarters of "inferno" rather than of "hot". The truncation is
+# the point above and is unchanged; only the base map differs. "hot" is not
+# perceptually uniform -- its red-to-yellow leg covers far more apparent
+# brightness than its black-to-red leg, so equal differences in power do not
+# look equal -- and that same leg is what a red-green colour deficiency
+# compresses hardest. "inferno" runs dark-to-bright like "hot", so the figure
+# reads the same way, but its lightness rises linearly.
 cmap = LinearSegmentedColormap.from_list(
-    "hot_upper", plt.get_cmap("hot")(np.linspace(0.25, 1.0, 256))
+    "inferno_upper", plt.get_cmap("inferno")(np.linspace(0.25, 1.0, 256))
 )
 
 
@@ -322,8 +333,10 @@ def _render_power(mark):
             clim=(lo, hi),
             below_color="#3a3226",
             smooth_shading=True,
-            show_scalar_bar=True,
-            scalar_bar_args=dict(title="LCMV power (unit noise gain)", n_labels=4),
+            # The scale bar is added by matplotlib below instead. Drawn here it
+            # would be rendered into the raster with black labels, which no
+            # later step can recolour for a dark page.
+            show_scalar_bar=False,
         )
     if mark:
         plotter.add_points(
@@ -334,7 +347,7 @@ def _render_power(mark):
         )
     plotter.camera_position = "xy"
     plotter.camera.elevation = 65
-    img = plotter.screenshot()
+    img = plotter.screenshot(transparent_background=True)
     plotter.close()
     return img
 
@@ -354,6 +367,12 @@ for ax, mark, title in zip(
     ax.imshow(_render_power(mark))
     ax.set_axis_off()
     ax.set_title(title, fontsize=10)
+fig.colorbar(
+    plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=lo, vmax=hi)),
+    ax=axes,
+    label="LCMV power (unit noise gain)",
+    shrink=0.85,
+)
 
 # %%
 # Standard montages, and why 10-20 is not enough here
