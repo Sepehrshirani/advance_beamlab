@@ -1,5 +1,5 @@
-Which beamformer should I use?
-==============================
+Which method should I use?
+==========================
 
 Start with :func:`mne.beamformer.make_lcmv`. On most recordings it is not merely
 an acceptable baseline but the right answer, and every method in this package is

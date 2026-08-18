@@ -100,12 +100,12 @@ says anything on its own.
 .. raw:: html
 
    <div id="advance-beamlab-panel" class="cp-root"></div>
-   <link rel="stylesheet" href="_static/constraint_panel.css?v=6">
+   <link rel="stylesheet" href="_static/constraint_panel.css?v=7">
    <script src="_static/constraint_panel_data.js?v=4"></script>
-   <script src="_static/constraint_panel.js?v=6"></script>
+   <script src="_static/constraint_panel.js?v=7"></script>
 
-The controls, and what they are for
------------------------------------
+The controls
+------------
 
 **Sources** chooses the scene, and the options come in three groups.
 
@@ -216,8 +216,8 @@ mixes one shared factor and one private factor per source in proportions
 :math:`\sqrt{r}` and :math:`\sqrt{1-r}`. Every pair then correlates at exactly
 :math:`r` whatever the rhythm or the count.
 
-How honest the simulation is
-----------------------------
+Limitations of the simulation
+-----------------------------
 
 Two things about it are worth knowing, because they decide whether the numbers
 mean anything.
@@ -295,8 +295,8 @@ changes the source placement and nothing else. Read the realistic errors as a
 lower bound even so: the head model is still exact, the coregistration is still
 perfect, and the noise is still stationary.
 
-The same four methods on a real recording
------------------------------------------
+The four methods on a recorded dataset
+--------------------------------------
 
 Everything above is simulated, which is the only reason any of it can be checked
 against a truth. The **Dataset** control switches to MNE's ``sample`` dataset,
@@ -378,8 +378,8 @@ auditory pair's 11.2 cm, and LCMV's off-diagonal comes out *positive*, around
 :math:`+0.47`: the neighbour is added rather than subtracted. It is the same
 failure to control the off-diagonal, in the other direction.
 
-What you are looking at
------------------------
+How the panel is computed
+-------------------------
 
 Every configuration was computed ahead of time by
 ``tools/build_constraint_panel.py``, which calls

@@ -18,8 +18,8 @@ MCMV beamformer
    apply_mcmv_cov
    MCMVBeamformer
 
-Source discovery (localizers and search)
-----------------------------------------
+Source discovery (localizers and sequential search)
+---------------------------------------------------
 
 .. autosummary::
    :toctree: generated/
@@ -82,8 +82,8 @@ is downloaded on demand and is not redistributed with this package.
    ny_head_plot_indices
    ny_head_picks
 
-Reporting a result
-------------------
+Normalised power images (pseudo-Z, pseudo-T, pseudo-F)
+------------------------------------------------------
 
 A beamformer's raw output power is not comparable between locations: it grows
 with depth, with the filter's noise gain, and with whatever the covariance
@@ -99,8 +99,8 @@ from each method's public apply path rather than from its stored weights.
 
    power_image
 
-Knowing the rank
-----------------
+Covariance rank from the eigenspectrum
+--------------------------------------
 
 Every method here inverts a covariance, and every one behaves badly if that
 covariance is rank deficient and the inverse is not told. Prefer
@@ -116,8 +116,8 @@ spectrum actually says.
    estimate_rank
    rank_spectrum
 
-Deciding whether it is real
----------------------------
+Permutation significance for beamformer images
+----------------------------------------------
 
 A beamformer image is not something a parametric test can be pointed at: its
 values are ratios of quadratic forms, and its spatial smoothness is neither
@@ -132,8 +132,8 @@ without assuming anything about the smoothing.
 
    permutation_image_test
 
-Understanding the constraint
------------------------------
+Measuring the constraint (simulated scenes and real recordings)
+---------------------------------------------------------------
 
 The methods here differ from an ordinary LCMV in their *constraint*, which is
 the part hardest to picture from the algebra. :func:`constraint_demo` turns it

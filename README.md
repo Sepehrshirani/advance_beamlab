@@ -62,7 +62,7 @@ Requires Python ≥ 3.10 and MNE-Python ≥ 1.10. The FEM head model additionall
 needs `h5py` (`pip install -e ".[fem]"`), because the model ships as a MATLAB
 v7.3/HDF5 file; everything else works without it.
 
-### The FEM head model
+### The New York Head FEM forward model
 
 ```python
 from advance_beamlab import read_ny_head_forward, make_ny_head_info
@@ -194,7 +194,7 @@ $\mathbf{R}=\mathbf{G}\,\mathbf{C_s}\,\mathbf{G}^{\mathsf T}+\mathbf{C_n}$. Keep
 this identity in mind: it is the reason the localizers below peak at the true
 sources, and the reason the ReciPSIICOS decomposition works.
 
-## 2. The beamformer, and LCMV
+## 2. The spatial filter, and the LCMV solution
 
 A **spatial filter** is a vector $\mathbf{w}$ that estimates one source's time
 course as a weighted sum of sensors, $\hat s(t)=\mathbf{w}^{\mathsf T}\mathbf{x}(t)$.
@@ -222,7 +222,7 @@ $$\boxed{\;\mathbf{w}=\dfrac{\mathbf{R}^{-1}\mathbf{g}}{\mathbf{g}^{\mathsf T}\m
 Scanning $1/(\mathbf{g}(\mathbf{r})^{\mathsf T}\mathbf{R}^{-1}\mathbf{g}(\mathbf{r}))$
 over $\mathbf{r}$ is the classic beamformer power map.
 
-## 3. Why correlated sources break LCMV
+## 3. Signal cancellation with correlated sources
 
 Suppose two sources with fields $\mathbf{g_1},\mathbf{g_2}$ have correlation
 $\rho$. The LCMV filter for source 1 is free to place a null anywhere except
@@ -233,7 +233,7 @@ $\mathbf{g_1}$ is still satisfied instant by instant, but the variance is
 reduced by exploiting the correlation. The result is **signal cancellation**:
 the reconstructed power of source 1 is suppressed by roughly a factor
 $(1-\rho^2)$, collapsing to zero as $\rho\to 1$. Amplitudes are underestimated,
-locations are pulled toward each other, and spurious "connectivity" appears
+locations are pulled towards each other, and spurious "connectivity" appears
 because each filter leaks a copy of the other source. This single failure mode
 is what MCMV and ReciPSIICOS each remove, in two different ways.
 
@@ -307,7 +307,7 @@ still act on raw sensor data ($\hat{\mathbf{s}}=\tilde{\mathbf{W}}^{\mathsf T}\m
 In whitened coordinates every channel is dimensionless with unit noise variance,
 so all sensor types are commensurable.
 
-Two consequences worth internalising:
+Two consequences follow:
 
 - **Single sensor type** (e.g. a CTF gradiometer array): with no `noise_cov` the
   ad-hoc model is a *scalar* multiple of the identity, so the whitener is a
@@ -341,7 +341,7 @@ Two consequences worth internalising:
   locations, which is what you want for *maps* (so deep, low-SNR locations are
   not penalised) at the cost of no longer preserving physical amplitude.
 
-## 7. Finding the sources: the localizers
+## 7. The scanning localizers: MAI, MPZ, MER and rMER
 
 MCMV needs to know *which* sources to constrain. The localizers are scalar maps
 that peak at the true sources. They are built from four $n\times n$ matrices
@@ -379,14 +379,14 @@ Everything is computed in the whitened space where $\mathbf{C_n}=\mathbf{I}$; th
 localizers are **invariant** under whitening, so the values are identical to the
 raw-space formulas above.
 
-## 8. Data-driven orientation (no orientation search)
+## 8. Data-driven orientation in closed form
 
 For a free-orientation forward each candidate location contributes an $M\times 3$
 block $\mathbf{H_k}=[\mathbf{h}^x_k,\mathbf{h}^y_k,\mathbf{h}^z_k]$, and we must
 pick the orientation $\mathbf{u_k}$ (so that $\mathbf{g_k}=\mathbf{H_k}\mathbf{u_k}$)
 that maximises the localizer, *given* the sources already found (their fields
 form the reference block $\mathbf{H_R}$). Moiseev et al. show the maximiser is
-the top eigenvector of a $3\times 3$ generalized eigenproblem
+the top eigenvector of a $3\times 3$ generalised eigenproblem
 $\mathbf{D}\,\mathbf{u_k}=\lambda\,\mathbf{F}\,\mathbf{u_k}$ (no scan over angles
 is needed):
 
@@ -450,7 +450,7 @@ $$\mathrm{vec}(\mathbf{R})=\sum_i [\mathbf{C_s}]_{ii}\,\mathrm{vec}(\mathbf{g_i}
 The first sum collects the **auto-products** (the source powers); the second
 collects the symmetric **cross-products** (the source couplings). The couplings
 are *exactly* what an LCMV beamformer exploits to cancel correlated sources.
-Kill the cross-product part of the covariance and the cancellation has nothing
+Remove the cross-product part of the covariance and the cancellation has nothing
 to feed on.
 
 **A working space that makes it device-agnostic and tractable.** The original
@@ -530,7 +530,7 @@ leadfield is reduced to its two dominant *tangential* topographies by a local
 SVD; the power set then expands to three columns per location and the
 correlation set to four columns per location pair.
 
-**The one knob is $K$.** The projector depends only on the forward model, so it
+**The one free parameter is $K$.** The projector depends only on the forward model, so it
 is built once and reused across datasets sharing that forward.
 `recipsiicos_rank_curve(...)` returns the retained power/correlation energy
 versus $K$ (Eqs. 20–21), computed in closed form over all ranks from a single
@@ -732,7 +732,7 @@ $|\mathrm{corr}(W^\mathsf{T}X,\,u_{j^\ast})|$, maximised over orientation: the g
 location whose output best matches the desired morphology at the best lag (LCMV, by
 contrast, localises on output power). The same correlation also picks the
 orientation at each grid point. The output variance $\tfrac12 W^\mathsf{T}RW$ is the
-beamformer's minimisation objective, not the localiser; it is returned per grid point
+beamformer's minimisation objective, not the localizer; it is returned per grid point
 as a diagnostic only and nothing in the scan reads it.
 
 The ratio $P$ trades the two constraints: too small and the template term vanishes
@@ -814,7 +814,7 @@ for the matrix under test, plus its `sfreq`.
 | Parameter | What it controls | Effect of changing it |
 |---|---|---|
 | `cov` | The beamformer covariance $R$ | `None` (default) estimates the SBL covariance from the data, which is the intended ABMC pipeline. Pass a precomputed `sbl_covariance` result, or any `mne.Covariance`, to override. |
-| `P` | Ratio $\beta_2/\beta_1$ weighting the template constraint | The one genuinely free parameter. The paper states it "is empirically adjusted" and reports no value, because the useful setting depends on the recording (its own data is 20–32 subdural contacts). Pass **`P="auto"`** to have `abmc_stability_curve` choose it on your data (see below), or set it yourself: the constraint column is rescaled to its leadfield column so `P` is dimensionless, and 0.01–0.1 is the live range. Below it the constraint is inert and ABMC reduces to a plain LCMV (a warning fires). Above it the localised peak starts to move well before anything blows up: measured on the example fixture, every peak is still on its $P\to 0$ location up to $P=0.18$, but by $P=1$ half of them have moved and the mean error has risen from 0.85 cm to 2.20 cm, while the first weights only blow up at $P=2.3$. So do not read `blowup_fraction` as an all-clear: it is zero again for large $P$, where the weights are finite but the answer is wrong. Use `result.critical_p`, the smallest $P$ at which some column's gain denominator vanishes, which is predicted before the solve and is never below 1. |
+| `P` | Ratio $\beta_2/\beta_1$ weighting the template constraint | The one genuinely free parameter. The paper states it "is empirically adjusted" and reports no value, because the useful setting depends on the recording (its own data is 20–32 subdural contacts). Pass **`P="auto"`** to have `abmc_stability_curve` choose it on your data (see below), or set it yourself: the constraint column is rescaled to its leadfield column so `P` is dimensionless, and 0.01–0.1 is the working range. Below it the constraint is inert and ABMC reduces to a plain LCMV (a warning fires). Above it the localised peak starts to move well before anything blows up: measured on the example fixture, every peak is still on its $P\to 0$ location up to $P=0.18$, but by $P=1$ half of them have moved and the mean error has risen from 0.85 cm to 2.20 cm, while the first weights only blow up at $P=2.3$. So do not read `blowup_fraction` as an all-clear: it is zero again for large $P$, where the weights are finite but the answer is wrong. Use `result.critical_p`, the smallest $P$ at which some column's gain denominator vanishes, which is predicted before the solve and is never below 1. |
 | `reg` | Diagonal loading of $R$ for the Stage-2 solve | **Default 0**, which is what the paper does. Its $R = G\alpha G^{\mathsf T} + \Lambda$ carries an *estimated* per-channel noise term and is positive definite by construction (condition number ~20 on the MNE `sample` data, against ~10¹⁵ for the empirical covariance of the same segment), so no loading is needed. Raise it only when you supply your own ill-conditioned `cov`. |
 | `method` | How Stage 2 is solved | `"closed-form"` (default) solves at the fixed point of the paper's Eqs. 17–19 directly. `"iterative"` runs the paper's gradient descent verbatim, for exact reproduction; `mu`, `max_iter` and `tol` apply only to that path. The two agree to ~1e-8 when the descent is run to convergence, and a test pins them together. Note the descent's step count grows with the condition number of $R$: on an ill-conditioned covariance it can need 10⁵ steps, which is why it is not the default. |
 | `mu` / `max_iter` / `tol` (`method="iterative"`) | Descent step size, budget and tolerance | `mu=None` uses $1/\lambda_{\max}(R)$. **`tol` is a distance to the fixed point, not a step size.** Those are not interchangeable: on an ill-conditioned $R$ the steps go small precisely because the descent is crawling along a shallow direction, so a step-size rule reports convergence while the weights are still far away. Because the fixed point is known in closed form, the honest test is available. |

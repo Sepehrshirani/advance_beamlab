@@ -596,11 +596,12 @@
       '<div class="cp-card cp-eq" id="cp-equations"></div>' +
 
       '<div class="cp-grid">' +
-      '<div class="cp-card cp-half"><h4>Where the method says the sources are</h4>' +
-      '<p class="cp-hint">Grey rings are the simulated sources, at their real ' +
-      "positions, which are not points the beamformer can scan. Coloured crosses " +
-      "are the strongest points of its localiser, dashed lines the miss. Drag to " +
-      "rotate.</p>" +
+      '<div class="cp-card cp-half"><h4>Localiser peaks against the reference positions</h4>' +
+      '<p class="cp-hint">Rings mark the reference positions: the simulated ' +
+      "sources at their true coordinates, or, on the recording, an independent " +
+      "dipole fit rather than a ground truth. Neither is a point the beamformer " +
+      "can scan. Coloured crosses are the localiser peaks, and dashed lines the " +
+      "displacement between the two. Drag to rotate.</p>" +
       '<div class="cp-views" id="cp-views"></div>' +
       '<canvas id="cp-brain"></canvas>' +
       '<div class="cp-legend"><span>low</span><div class="cp-ramp" id="cp-ramp"></div>' +
@@ -633,7 +634,7 @@
       '<table class="cp-table" id="cp-gains"></table>' +
       '<div class="cp-readout" id="cp-readout"></div></div>' +
 
-      '<div class="cp-card cp-wide"><h4>What the sensors record</h4>' +
+      '<div class="cp-card cp-wide"><h4>Sensor time courses and field topography</h4>' +
       '<p class="cp-hint">All ' + nCh + " gradiometers. Drag the traces to move " +
       "through channels and time, scroll to zoom, or use the sliders. The map is " +
       "the field at the instant marked on the traces.</p>" +
@@ -647,14 +648,14 @@
       'value="50"></label>' +
       '<span class="cp-value" id="cp-chan-v"></span></div></div></div></div>' +
 
-      '<div class="cp-card cp-half"><h4>True and recovered source waveforms</h4>' +
+      '<div class="cp-card cp-half"><h4>Reconstructed source time courses</h4>' +
       '<p class="cp-hint">One shared scale per scene, so a reconstruction that lost ' +
-      "half its amplitude looks like it did. Grey is simulated, colour is the " +
-      "selected method.</p>" +
+      "half its amplitude looks like it did. Where a simulated time course exists " +
+      "it is drawn in grey behind the reconstruction, which is in colour.</p>" +
       '<canvas id="cp-wave"></canvas>' +
       '<div class="cp-legend" id="cp-wave-key"></div></div>' +
 
-      '<div class="cp-card cp-half"><h4>How it changes with correlation</h4>' +
+      '<div class="cp-card cp-half"><h4>Amplitude and localisation error against correlation</h4>' +
       '<p class="cp-hint">The whole correlation axis at the current settings, for ' +
       "all four methods. The marker is where the sliders are.</p>" +
       '<canvas id="cp-sweep"></canvas>' +
@@ -1625,16 +1626,16 @@
         '<div><span>Largest off-diagonal</span><strong>' +
         (n > 1 ? (worst >= 0 ? "+" : "") + worst.toFixed(3) : "n/a") +
         "</strong></div>" +
-        '<div><span>Amplitude delivered</span><strong>' +
+        '<div><span>Amplitude retained</span><strong>' +
         (res.amplitude_ratio[0] * 100).toFixed(0) + "%</strong></div>" +
         (recorded()
-          ? '<div><span>Peak to dipole fit</span><strong>' +
+          ? '<div><span>Distance to dipole fit</span><strong>' +
             res.reference_distance.map(function (v) { return v.toFixed(0); })
               .join(", ") +
             " mm</strong></div>"
           : '<div><span>Localisation error</span><strong>' +
             res.peak_errors[0].toFixed(0) + " mm</strong></div>") +
-        '<div><span>Neighbour</span><strong>' + behaviour + "</strong></div>";
+        '<div><span>Neighbour effect</span><strong>' + behaviour + "</strong></div>";
     }
 
     function drawEquations() {
@@ -1650,7 +1651,7 @@
       }
       var m = P.model || null;
       root.querySelector("#cp-equations").innerHTML =
-        "<h4>What " + (METHOD_LABEL[P.methods[state.method]]) + " is solving</h4>" +
+        "<h4>The problem " + (METHOD_LABEL[P.methods[state.method]]) + " solves</h4>" +
         '<div class="cp-eq-row"><span class="cp-eq-main">' + eq.objective +
         '</span><span class="cp-eq-sub">subject to</span><span class="cp-eq-main">' +
         eq.subject + "</span></div>" +
