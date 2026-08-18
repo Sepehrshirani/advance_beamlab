@@ -264,6 +264,7 @@ def _is_default_chrome(colour):
 
 def _save_dark_variant(fig, path):
     """Save *fig* against the dark ground, then restore every colour changed."""
+    from matplotlib.lines import Line2D
     from matplotlib.text import Text
 
     undo = []
@@ -274,15 +275,18 @@ def _save_dark_variant(fig, path):
 
     swap(fig.set_facecolor, fig.get_facecolor(), _FIG_DARK["ground"])
 
+    furniture = set()
     for ax in fig.get_axes():
         swap(ax.set_facecolor, ax.get_facecolor(), _FIG_DARK["ground"])
         for spine in ax.spines.values():
             if _is_default_chrome(spine.get_edgecolor()):
                 swap(spine.set_edgecolor, spine.get_edgecolor(), _FIG_DARK["chrome"])
         for gridline in ax.get_xgridlines() + ax.get_ygridlines():
+            furniture.add(id(gridline))
             swap(gridline.set_color, gridline.get_color(), _FIG_DARK["grid"])
         for axis in (ax.xaxis, ax.yaxis):
             for tickline in axis.get_ticklines():
+                furniture.add(id(tickline))
                 if _is_default_chrome(tickline.get_color()):
                     swap(tickline.set_color, tickline.get_color(), _FIG_DARK["chrome"])
         legend = ax.get_legend()
@@ -290,6 +294,24 @@ def _save_dark_variant(fig, path):
             frame = legend.get_frame()
             swap(frame.set_facecolor, frame.get_facecolor(), _FIG_DARK["ground"])
             swap(frame.set_edgecolor, frame.get_edgecolor(), _FIG_DARK["chrome"])
+
+    # A rule an example drew in black -- ``axvline(0)`` marking stimulus onset, a
+    # dashed marker at a chosen rank -- is furniture rather than a measurement,
+    # and on the dark ground it would be a black line on a black field. The same
+    # near-black test that protects deliberately tinted text identifies them, so
+    # a curve carrying data keeps the colour it was given. Grid and tick lines
+    # are skipped: they were coloured just above, and are Line2D objects too.
+    for line in fig.findobj(Line2D):
+        if id(line) in furniture:
+            continue
+        if _is_default_chrome(line.get_color()):
+            swap(line.set_color, line.get_color(), _FIG_DARK["ink"])
+        if _is_default_chrome(line.get_markeredgecolor()):
+            swap(
+                line.set_markeredgecolor,
+                line.get_markeredgecolor(),
+                _FIG_DARK["ink"],
+            )
 
     # Covers titles, axis labels, tick labels, legend entries and annotations in
     # one pass, including those belonging to colorbars.

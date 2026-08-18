@@ -249,7 +249,24 @@ power = apply_lcmv_cov(data_cov, lcmv_grid).data[:, 0]
 rr_mm = source_rr * 1e3
 order = np.argsort(power)  # draw faint sources first so the peaks sit on top
 fig, ax = plt.subplots(constrained_layout=True)
-sctr = ax.scatter(rr_mm[order, 1], rr_mm[order, 2], c=power[order], cmap="hot", s=35)
+# "magma" rather than "hot": both run dark-to-bright, so the map reads the same
+# way, but magma is perceptually uniform. In "hot" the step from red to yellow
+# covers far more apparent brightness than the step from black to red, so equal
+# differences in power do not look equal, and its red-to-yellow span is the
+# range a red-green colour deficiency compresses hardest.
+# A hairline edge in mid-grey, which holds its own against either page colour.
+# Without it the top of the map -- a near-white cream -- is invisible against a
+# white ground, so the two peaks, the whole point of the figure, disappear in
+# light mode. "hot" had the same failing, its top being white outright.
+sctr = ax.scatter(
+    rr_mm[order, 1],
+    rr_mm[order, 2],
+    c=power[order],
+    cmap="magma",
+    s=35,
+    edgecolors="#7a7a7a",
+    linewidths=0.3,
+)
 ax.scatter(
     rr_mm[sources, 1],
     rr_mm[sources, 2],
