@@ -1,6 +1,6 @@
-# advance_beamlab
+# Advance Beam Lab
 
-Advanced minimum-variance beamformers for MEG/EEG source reconstruction, built
+`advance_beamlab` — advanced minimum-variance beamformers for MEG/EEG source reconstruction, built
 to be fully compatible with [MNE-Python](https://mne.tools) and to its
 contribution standards, so that each algorithm can be upstreamed into
 `mne.beamformer`.

@@ -9,7 +9,10 @@ import os
 import advance_beamlab
 
 # -- Project information ----------------------------------------------------- #
-project = "advance_beamlab"
+# The name the documentation presents itself under. The distribution and
+# import name is still advance_beamlab; this is the human-readable form,
+# which is what belongs in a page title and a site header.
+project = "Advance Beam Lab"
 author = "Sepehr Shirani and Muzhi Wang"
 copyright = "2026, Sepehr Shirani and Muzhi Wang"
 release = advance_beamlab.__version__
@@ -477,7 +480,7 @@ sphinx_gallery_conf = {
 
 # -- HTML output ------------------------------------------------------------- #
 html_theme = "pydata_sphinx_theme"
-html_title = f"advance_beamlab {release}"
+html_title = f"{project} {release}"
 html_static_path = ["_static"]
 html_css_files = ["custom.css"]
 html_favicon = "_static/favicon.svg"

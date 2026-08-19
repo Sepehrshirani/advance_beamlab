@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "advance_beamlab"
-version = "0.1.0.dev0"
+version = "1.0"
 description = "Advanced minimum-variance beamformers for MEG/EEG, compatible with MNE-Python"
 readme = "README.md"
 requires-python = ">=3.10"
