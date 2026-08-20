@@ -899,3 +899,169 @@ def test_template_match_is_a_centred_correlation(sphere_fwd):
     # And a correlation magnitude is bounded, which the uncentred form is not
     # once a shared offset dominates both arguments.
     assert tmatch.max() <= 1.0 + 1e-9
+
+
+def test_the_fit_reads_every_channel_relative_to_its_own_noise_level(sphere_fwd):
+    """Rescaling a channel's gain, recording and noise together only rescales R.
+
+    Stage 1 is fitted after dividing every channel by its noise standard
+    deviation, which is what lets magnetometers, gradiometers and EEG be fitted
+    together and what makes the fit independent of the units the data arrive in.
+    The consequence is that the inferred model depends on a channel only through
+    its signal-to-noise ratio: express one channel in different units -- its
+    leadfield row, its recording and its noise variance all by the same factor --
+    and the same model must come back, in the new units. Apply that normalisation
+    the wrong way round and the arithmetic still runs, but the noisiest channels
+    are the ones the fit trusts most, and on a mixed-sensor array the source
+    powers are decided by whichever sensor type carries the larger numbers.
+    """
+    fwd, info = sphere_fwd
+    (i,) = _shell_sources(fwd, 1)
+    ch = list(info["ch_names"])
+    x = _si_data(fwd, i, n=200, t0=100, seed=13)
+    var = (0.3 * _EEG_SCALE) ** 2
+    ncov = mne.Covariance(var * np.eye(len(ch)), ch, [], [], nfree=1)
+
+    # A per-channel change of units spanning a factor of forty.
+    s = np.geomspace(0.2, 8.0, len(ch))
+    fwd_s = fwd.copy()
+    fwd_s["sol"]["data"] = fwd_s["sol"]["data"] * s[:, None]
+    ncov_s = mne.Covariance(var * np.diag(s**2), ch, [], [], nfree=1)
+
+    with warnings.catch_warnings():  # a truncated run is enough to compare
+        warnings.simplefilter("ignore", RuntimeWarning)
+        reference = sbl_covariance(info, fwd, _cov(x, ch), noise_cov=ncov, max_iter=30)
+        scaled = sbl_covariance(
+            info, fwd_s, _cov(s[:, None] * x, ch), noise_cov=ncov_s, max_iter=30
+        )
+    assert_allclose(scaled.data, reference.data * np.outer(s, s), rtol=1e-8)
+
+
+def test_the_weights_deliver_the_distortionless_gain_that_was_asked_for(sphere_fwd):
+    """``G^T W`` must equal ``f``, which is what fixes the amplitude of the output.
+
+    The gain constraint is the only thing tying the filter output to the physical
+    amplitude of the source: a caller who asks for ``f`` and gets 1 reads every
+    recovered waveform, and every power, off by a constant factor with nothing in
+    the result to say so. The default ``f=1`` hides such a slip, since there the
+    right answer and the ungained one coincide.
+    """
+    fwd, info = sphere_fwd
+    lf = fwd["sol"]["data"]
+    (i,) = _shell_sources(fwd, 1)
+    x = _si_data(fwd, i, n=200, t0=100, seed=14)
+    template = _spike(200, 100)
+
+    reference = make_abmc(info, fwd, x, template, return_weights=True)
+    assert_allclose(np.einsum("mk,mk->k", lf, reference.weights), 1.0, rtol=1e-8)
+    for f in (2.5, 0.4):
+        res = make_abmc(info, fwd, x, template, f=f, return_weights=True)
+        assert_allclose(np.einsum("mk,mk->k", lf, res.weights), f, rtol=1e-8)
+        # The gain scales the filter, so the localiser -- a correlation -- is
+        # untouched by it and the peak cannot move with the requested amplitude.
+        assert_allclose(res.template_match, reference.template_match, rtol=1e-9)
+        assert_allclose(res.weights, reference.weights * f, rtol=1e-9)
+
+
+def test_the_power_is_half_the_output_variance_over_all_three_orientations(sphere_fwd):
+    """``power`` is the filter's own objective at each grid point, not a share of it.
+
+    It is documented as ``1/2 W^T R W`` summed over orientations, and it is the
+    map a reader compares against an LCMV one, so both halves of that matter. A
+    free-orientation grid point radiates through three columns; reporting only
+    the largest of the three understates every source that is not aligned with an
+    axis, by up to a factor of three, and makes the diagnostic disagree with the
+    variance the returned weights actually produce on the data.
+    """
+    _, info = sphere_fwd
+    sphere = mne.make_sphere_model("auto", "auto", info)
+    src = mne.setup_volume_source_space(sphere=sphere, pos=30.0)
+    free = mne.make_forward_solution(info, None, src, sphere, eeg=True, meg=False)
+    lf = free["sol"]["data"]
+    n_sources = free["nsource"]
+    assert lf.shape[1] == 3 * n_sources
+
+    rng = np.random.default_rng(15)
+    xs = np.outer(lf[:, 1], _spike(200, 100))
+    x = xs + 0.3 * np.abs(xs).max() * rng.standard_normal(xs.shape)
+    ch = list(info["ch_names"])
+    cov = _cov(x, ch)
+
+    res = make_abmc(info, free, x, _spike(200, 100), cov=cov, return_weights=True)
+    per_column = 0.5 * np.einsum("mk,mn,nk->k", res.weights, cov.data, res.weights)
+    per_column = per_column.reshape(n_sources, 3)
+    assert_allclose(res.power, per_column.sum(1), rtol=1e-8)
+    # Every grid point spreads its variance over the three orientations, so the
+    # sum and the largest single share are far apart compared with round-off.
+    assert (per_column.sum(1) > 1.1 * per_column.max(1)).all()
+    assert np.median(per_column.sum(1) / per_column.max(1)) > 1.5
+
+
+def test_every_grid_point_reports_its_own_lag_inside_an_inclusive_window(sphere_fwd):
+    """The lag is per grid point, and ``max_lag`` bounds it inclusively.
+
+    The lag says where in the segment each location's output matches the
+    template, so it is read alongside the map to time the event; one number
+    copied across the whole grid would date every candidate location by whatever
+    the first grid point happened to prefer. ``max_lag`` is documented as
+    ``|j| <= max_lag``: an exclusive bound would quietly forbid the window the
+    caller asked for, and ``max_lag=0``, the way to pin the template where it was
+    handed in, would leave no lag admissible at all.
+    """
+    fwd, info = sphere_fwd
+    lf = fwd["sol"]["data"]
+    rng = np.random.default_rng(16)
+    (i,) = _shell_sources(fwd, 1)
+    xs = np.outer(lf[:, i], _spike(400, 250))
+    x = xs + 0.4 * np.abs(xs).max() * rng.standard_normal(xs.shape)
+    template = _spike(400, 200)  # the data spike sits 50 samples later
+
+    res = make_abmc(info, fwd, x, template)
+    col_lag = _abmc_prepare(info, fwd, x, template, None, None, 0.0, None)["col_lag"]
+    assert_allclose(res.lag, col_lag)
+    peak = int(np.argmax(res.template_match))
+    assert abs(int(res.lag[peak]) - 50) <= 3
+    # the grid disagrees about the lag, so a single copied value cannot pass
+    assert (res.lag != res.lag[peak]).mean() > 0.3
+    assert res.lag.std() > 5.0
+
+    narrow = make_abmc(info, fwd, x, template, max_lag=3)
+    assert np.abs(narrow.lag).max() == 3
+    assert (np.abs(narrow.lag) == 3).mean() > 0.2  # the boundary is reachable
+    assert (np.abs(make_abmc(info, fwd, x, template, max_lag=0).lag) == 0).all()
+
+
+def test_only_a_vanishing_gain_denominator_makes_a_column_degenerate():
+    """A negative denominator flips a column's sign; it does not disqualify it.
+
+    Eq. 19 divides by ``g^T R^-1 (g + P c)``, which is positive while the
+    constraint column agrees with the leadfield and passes through zero as ``P``
+    grows for a column where it does not. Only the crossing itself is degenerate:
+    past it the weights are finite, still hold ``G^T W = f``, and give the same
+    absolute correlation with the template, because a beamformer and its negative
+    describe the same source. Rejecting the sign rather than the magnitude would
+    blank those columns out of the map and warn about a fault that is not there,
+    over exactly the range of ``P`` where the template constraint has started to
+    do something.
+
+    Written on arrays rather than on a grid: the sign of the denominator is a
+    joint property of a column, the covariance and ``P``, so no choice of grid
+    points can be relied on to produce one.
+    """
+    from advance_beamlab._abmc import _abmc_fixed_point
+
+    leadfield = np.eye(3)
+    # Constraint columns that agree with, oppose, and exactly cancel their own
+    # leadfield column at P = 1: the denominators are 2, -1 and 0.
+    c = np.array([[1.0, 0.0, -1.0], [0.0, -2.0, 0.0], [0.0, 0.0, -1.0]])
+    f = 2.5
+
+    w, degenerate = _abmc_fixed_point(
+        dict(leadfield=leadfield, c=c, r_reg=np.eye(3)), 1.0, f
+    )
+
+    assert list(degenerate) == [False, False, True]
+    assert_allclose(np.einsum("mk,mk->k", leadfield, w), [f, f, 0.0], rtol=1e-12)
+    # the opposed column is the flipped one, and it is not blanked
+    assert_allclose(w[:, 1], [0.0, f, 0.0], rtol=1e-12)
+    assert_allclose(w[:, 2], 0.0)

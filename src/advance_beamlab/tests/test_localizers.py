@@ -606,3 +606,114 @@ def test_scan_returns_head_coordinate_orientations(sphere_fwd):
         np.abs(res["filters"]["weights"]),
         rtol=1e-6,
     )
+
+
+# --------------------------------------------------------------------------- #
+# 13. What each reported quantity is measured on.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("localizer", ["mer", "rmer"])
+def test_event_related_scan_recovers_both_correlated_sources(sphere_fwd, localizer):
+    """A correlated pair driving one evoked response is recovered in full.
+
+    The event-related localizers reach the averaged field only through the
+    Table-2 matrix E, in which the averaged-field covariance is weighted by the
+    data-covariance inverse on *both* sides; that two-sided form is what makes E
+    the evoked power seen through the beamformer rather than raw evoked power.
+    A single strong source is found whichever way the three factors are
+    arranged, because the peak stays put; a correlated second source is not. Get
+    E wrong and the scan still returns the requested number of sources -- with
+    the second one sitting somewhere no source was ever implanted, and nothing
+    in the result to say so.
+    """
+    fwd, info = sphere_fwd
+    locs = [10, 45]
+    oris = [np.array([1.0, 0.0, 0.3]), np.array([0.0, 1.0, -0.2])]
+    cov = _implanted_cov(fwd, info, locs, oris, corr=0.8, snr=16.0)
+    evoked_cov = _evoked_cov(fwd, info, locs, oris)
+
+    res = scan_mcmv(
+        info, fwd, cov, localizer=localizer, n_sources=2, evoked_cov=evoked_cov
+    )
+    assert res["sources"] == locs
+    for ori, u in zip(oris, res["orientations"], strict=True):
+        assert np.abs(u @ (ori / np.linalg.norm(ori))) > 0.95
+
+
+def test_last_pseudo_z_is_measured_on_the_newest_filter_row(sphere_fwd):
+    """Each pseudo-Z belongs to the source its own iteration added.
+
+    Every row of a joint MCMV filter has its own pseudo-Z, and the rows differ
+    substantially: an early row has been sharpened by the constraints added
+    after it. ``pseudo_z[k]`` is what the user reads to judge whether the k-th
+    source is genuine, so it has to be measured on that source's row -- the row
+    the k-th iteration just added -- of the k+1-source filter. Measured on an
+    older row it would keep re-reporting the strength of a source already
+    accepted, and every further source would look as convincing as the first.
+    """
+    fwd, info = sphere_fwd
+    locs = [10, 45]
+    oris = [np.array([1.0, 0.0, 0.3]), np.array([0.0, 1.0, -0.2])]
+    cov = _implanted_cov(fwd, info, locs, oris, corr=0.8, snr=16.0)
+    # An explicit unit noise covariance, so the pseudo-Z of a filter row is
+    # exactly (w R w) / (w w) in sensor space.
+    ncov = mne.Covariance(
+        np.eye(len(info["ch_names"])),
+        info["ch_names"],
+        [],
+        list(info["projs"]),
+        nfree=1,
+    )
+
+    res = scan_mcmv(info, fwd, cov, localizer="mpz", n_sources=2, noise_cov=ncov)
+    assert res["sources"] == locs
+
+    ch = res["filters"]["ch_names"]
+    R, N = _cov_as_matrix(cov, ch), _cov_as_matrix(ncov, ch)
+    z = np.array([(w @ R @ w) / (w @ N @ w) for w in res["filters"]["weights"]])
+    assert_allclose(res["pseudo_z"][-1], z[-1], rtol=1e-9)
+    # The rows are far apart here, so the reported value does identify its row.
+    assert z[0] > 2.0 * z[-1]
+
+
+def test_scan_raises_when_no_location_can_be_evaluated(sphere_fwd):
+    """A grid on which nothing can be evaluated is reported, not guessed at.
+
+    Skipping a degenerate location is safe only while some other location
+    survives. When none does -- a corrupted forward, a covariance whose inverse
+    has lost every direction -- the candidate values are all still at the
+    placeholder the scan starts them from. Those placeholders are not source
+    strengths, so no location may be chosen from them: the user must be told the
+    scan failed rather than handed grid location 0 with a pseudo-Z attached to
+    it.
+    """
+    fwd, info = sphere_fwd
+    fwd = deepcopy(fwd)
+    cov = _implanted_cov(fwd, info, [26], [[1.0, -1.0, 0.5]], snr=16.0)
+    fwd["sol"]["data"][:] = np.nan  # every location is now degenerate
+
+    with pytest.raises(RuntimeError, match="No valid source location"):
+        scan_mcmv(info, fwd, cov, localizer="mai", n_sources=1)
+
+
+@pytest.mark.parametrize("name", ["mai", "mpz", "mer", "rmer"])
+def test_orientation_dominant_component_is_never_negative(name):
+    """The orientation's sign follows a fixed convention, not the eigensolver.
+
+    An eigenvector is defined only up to sign and every localizer is even in the
+    orientation, so LAPACK may return either of the two. The convention settles
+    it: the largest component of the returned unit vector is positive. Without
+    it the polarity of the reconstructed time course, and the direction of a
+    dipole drawn from ``orientations``, would flip from one location, run or
+    machine to the next with nothing in the data behind the change -- and source
+    estimates that ought to be identical could no longer be averaged, subtracted
+    or compared.
+    """
+    H, R, N, Rbar, rng = _setup(n_ch=16, n_src=1, seed=13, evoked=True)
+    for _ in range(20):
+        H_loc = rng.standard_normal((16, 3))
+        for n_ref in (0, 1):  # first source, then one already-found reference
+            u = optimal_orientation(name, H[:, :n_ref], H_loc, R, N, evoked_cov=Rbar)
+            assert_allclose(np.linalg.norm(u), 1.0, atol=1e-12)
+            # A unit 3-vector's dominant component has magnitude >= 1/sqrt(3),
+            # so the convention puts it comfortably above zero.
+            assert u[np.argmax(np.abs(u))] > 0.5
