@@ -231,9 +231,7 @@ ax.set(
     ylabel=r"pseudo-$Z$",
     xticks=np.arange(1, len(pz) + 1),
 )
-ax.set_title(
-    "Pseudo-$Z$ falls to a baseline once the search fits noise", loc="left"
-)
+ax.set_title("Pseudo-$Z$ falls to a baseline once the search fits noise", loc="left")
 fig.tight_layout()
 print(f"pseudo-Z by iteration: {np.round(pz, 1).tolist()}")
 

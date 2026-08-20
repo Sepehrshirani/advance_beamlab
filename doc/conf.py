@@ -279,8 +279,10 @@ def _is_light_neutral(colour):
         red, green, blue, alpha = to_rgba(colour)
     except (ValueError, TypeError):
         return False
-    return alpha > 0 and max(red, green, blue) - min(red, green, blue) < 0.04 and (
-        min(red, green, blue) > 0.70
+    return (
+        alpha > 0
+        and max(red, green, blue) - min(red, green, blue) < 0.04
+        and (min(red, green, blue) > 0.70)
     )
 
 
@@ -399,7 +401,10 @@ def _dual_theme_scraper(block, block_vars, gallery_conf):
     css_class = "sphx-glr-single-img" if len(fignums) == 1 else "sphx-glr-multi-img"
 
     blocks = []
-    for fig_num, image_path in zip(fignums, image_path_iterator):
+    # strict=False, deliberately: the path iterator is open-ended, handing out
+    # as many names as are asked of it, so the figures are what must run out
+    # first. Pairing them is meant to stop at the last figure.
+    for fig_num, image_path in zip(fignums, image_path_iterator, strict=False):
         fig = plt.figure(fig_num)
         light_path = image_path
         stem, suffix = _os.path.splitext(str(light_path))
