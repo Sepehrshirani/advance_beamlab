@@ -1065,3 +1065,482 @@ def test_only_a_vanishing_gain_denominator_makes_a_column_degenerate():
     # the opposed column is the flipped one, and it is not blanked
     assert_allclose(w[:, 1], [0.0, f, 0.0], rtol=1e-12)
     assert_allclose(w[:, 2], 0.0)
+
+
+def test_the_blow_up_share_is_measured_against_a_robust_centre():
+    """Runaway columns must not lift the bar that is meant to catch them.
+
+    ``blowup_fraction`` is the only thing ``make_abmc`` learns from the weights
+    *after* the solve, and it is what raises the "P is likely too large"
+    warning. The centre it measures against has to be a robust one. A handful of
+    columns whose norms have run away are heavy enough to drag a mean past
+    themselves, so the share would *fall* as those columns got worse and the
+    warning would fall silent exactly where the weights are least usable -- the
+    reader is then told nothing is wrong by the very columns that are wrong.
+    Against the median the share counts how many columns have run away and is
+    indifferent to how far, which is also what makes it comparable from one
+    ``P`` to the next along a stability curve.
+
+    Written on arrays rather than on a grid: which columns run away is a joint
+    property of the grid, the covariance and ``P``, so no choice of grid points
+    fixes the shape of the norm distribution the statistic is computed on.
+    """
+    from advance_beamlab._abmc import _abmc_map
+
+    n_channels, n_columns, n_times, n_runaway = 4, 100, 8, 10
+    rng = np.random.default_rng(21)
+    prep = dict(
+        x=rng.standard_normal((n_channels, n_times)),
+        u_shift=rng.standard_normal((n_columns, n_times)),
+        r=np.eye(n_channels),
+        sd=np.ones(n_channels),
+        col_lag=np.zeros(n_columns, dtype=int),
+        n_columns=n_columns,
+    )
+    forward = dict(nsource=n_columns)
+
+    def share(col_norm):
+        w = np.zeros((n_channels, n_columns))
+        w[0] = col_norm
+        return _abmc_map(prep, w, forward)["blowup"]
+
+    # Ten columns have run away; ten more are merely large, at eight times the
+    # bulk, and are below the ten-fold threshold that defines a blow-up.
+    shares = {}
+    for size in (11.0, 1e3, 1e6, 1e12):
+        col_norm = np.ones(n_columns)
+        col_norm[:n_runaway] = size
+        col_norm[n_runaway : 2 * n_runaway] = 8.0
+        shares[size] = share(col_norm)
+    assert set(shares.values()) == {n_runaway / n_columns}
+
+    # a grid whose weights are all of a size reports nothing at all
+    assert share(1.0 + 0.1 * rng.random(n_columns)) == 0.0
+
+
+def test_each_update_moves_by_the_square_root_of_its_ratio(sphere_fwd):
+    r"""The Eq. 9-10 steps are half-steps in the log, and that is what bounds them.
+
+    Both rules are convex-bounding (majorization-minimization) updates, and the
+    square root is exactly what makes them so: it is the half-step in
+    :math:`\log\alpha` and :math:`\log\lambda` that keeps each iterate on the
+    bounding surface, so no step can climb the Eq. 6 cost. Take the ratio
+    without its root and nothing complains -- the two forms agree wherever the
+    ratio is one, so the fit still has the same fixed point and still descends on
+    easy data -- but every step is doubled in the log, the bound that guaranteed
+    the descent is gone, and ``alpha`` concentrates about twice as fast: the
+    sparsity the fit should reach after sixteen iterations it now reaches after
+    eight. A caller who stops the fit early with ``max_iter``, or who reads
+    ``source_power`` off a run that hit it, is then handed a map far sparser than
+    the data supports, with the weaker sources already squeezed out of it.
+
+    Pinned against the rules as published rather than against a stored number,
+    and from a state the fit produced itself: a truncated run exposes
+    :math:`(\alpha, \Lambda)` in full -- :math:`\alpha` directly, :math:`\Lambda`
+    as whatever is left on the diagonal of :math:`R` once
+    :math:`G\alpha G^\mathsf{T}` is taken off it -- so the next iterate can be
+    predicted independently and must come back exactly. It holds at any
+    iteration, which is why two are checked.
+    """
+    from advance_beamlab._abmc import _aligned_leadfield_and_cov
+
+    fwd, info = sphere_fwd
+    (i,) = _shell_sources(fwd, 1)
+    dcov = _cov(_si_data(fwd, i, n=200, t0=100, seed=20), info["ch_names"])
+    g, c, names = _aligned_leadfield_and_cov(info, fwd, dcov)
+
+    def state(n_iter):
+        """``(alpha, Lambda, R)`` after exactly ``n_iter`` updates."""
+        with warnings.catch_warnings():  # a truncated run warns about convergence
+            warnings.simplefilter("ignore", RuntimeWarning)
+            r_cov, alpha = sbl_covariance(
+                info, fwd, dcov, max_iter=n_iter, return_source_power=True
+            )
+        assert r_cov.ch_names == names
+        lam = np.diag(r_cov.data) - np.einsum("mk,k,mk->m", g, alpha, g)
+        return alpha, lam, r_cov.data
+
+    for n_iter in (3, 8):
+        alpha, lam, r = state(n_iter)
+        precision = np.linalg.inv(r)
+        precision = 0.5 * (precision + precision.T)
+        prec_c_prec = precision @ c @ precision
+        ratio_alpha = np.einsum("mk,mk->k", g, prec_c_prec @ g) / np.einsum(
+            "mk,mk->k", g, precision @ g
+        )
+        ratio_lam = np.diag(prec_c_prec) / np.diag(precision)
+
+        alpha_next, lam_next, _ = state(n_iter + 1)
+        assert_allclose(alpha_next, alpha * np.sqrt(ratio_alpha), rtol=1e-9)
+        assert_allclose(lam_next, lam * np.sqrt(ratio_lam), rtol=1e-9)
+        # Both iterates have to be moving, or this would only be the trivial
+        # agreement at a fixed point, where the two forms coincide.
+        assert np.abs(alpha_next / alpha - 1).max() > 0.1
+        assert np.abs(lam_next / lam - 1).max() > 5e-3
+
+
+def test_a_silent_column_or_a_flat_channel_leaves_a_factorisable_covariance(sphere_fwd):
+    r"""Neither degeneracy may reach the Cholesky as a LinAlgError from inside the fit.
+
+    Both arrive from ordinary use. A leadfield column can be identically zero: a
+    dipole radial to a spherically symmetric head model produces no external
+    magnetic field at all, so its MEG column is exactly zero, and a gain matrix
+    masked upstream carries such columns too. Eq. 9 then asks that column for
+    ``0 / 0``. A channel can be identically flat: an electrode shorted, or
+    interpolated to zero and never marked bad, drives its own :math:`\lambda`
+    down until :math:`R` stops being positive definite. Left unguarded, either
+    one aborts the whole fit with a ``LinAlgError`` raised out of the solver,
+    naming neither the column nor the channel responsible, and the caller is left
+    with no covariance and nothing to say which input caused it.
+
+    Absorbed instead, both have the answer the model implies: a column that
+    radiates nothing is assigned no power, and a channel that recorded nothing
+    keeps a variance that is positive but far below anything that could shift the
+    fit, so :math:`R` stays invertible and the remaining channels are still fitted.
+    """
+    fwd, info = sphere_fwd
+    (i,) = _shell_sources(fwd, 1)
+    ch = list(info["ch_names"])
+    x = _si_data(fwd, i, n=200, t0=100, seed=21)
+
+    # (a) a grid point none of the sensors can see
+    gain = np.asarray(fwd["sol"]["data"], float).copy()
+    gain[:, 0] = 0.0
+    silent = fwd.copy()
+    silent["sol"]["data"] = gain
+    r_cov, alpha = sbl_covariance(info, silent, _cov(x, ch), return_source_power=True)
+    np.linalg.cholesky(r_cov.data)  # raises unless R is positive definite
+    assert np.all(np.isfinite(alpha))
+    assert alpha[0] == 0.0
+    # and the rest of the grid is fitted as though the column were not there
+    peak = int(np.argmax(alpha))
+    assert np.linalg.norm(fwd["source_rr"][peak] - fwd["source_rr"][i]) < 0.03
+
+    # (b) a channel that recorded nothing
+    flat = ch[3]
+    x_flat = x.copy()
+    x_flat[ch.index(flat)] = 0.0
+    r_cov = sbl_covariance(info, fwd, _cov(x_flat, ch))
+    np.linalg.cholesky(r_cov.data)
+    variance = np.diag(r_cov.data)
+    m = r_cov.ch_names.index(flat)
+    assert variance[m] > 0
+    assert variance[m] < 1e-12 * variance.max()  # and negligible, as it should be
+
+
+def test_the_selected_p_sits_at_the_geometric_centre_of_its_plateau(sphere_fwd):
+    """A plateau found on a logarithmic grid has a geometric centre, not an average.
+
+    The sweep steps in ratios, so the value with equal room on either side of it
+    is ``sqrt(lo * hi)``. Averaging the two edges instead lands within a hair of
+    the upper one -- on this fixture two hundred times higher than the geometric
+    centre, one coarse step below where the peak starts moving -- so ``P='auto'``
+    would hand the caller the most aggressive setting the evidence still
+    tolerates rather than the best-supported one, and the smallest drift in the
+    data would push it off the plateau altogether.
+    """
+    from advance_beamlab._abmc import _plateau
+
+    fwd, info = sphere_fwd
+    (i,) = _shell_sources(fwd, 1)
+    x = _si_data(fwd, i, n=200, t0=100, seed=7)
+    template = _spike(200, 100)
+    critical_p = _abmc_prepare(info, fwd, x, template, None, None, 0.0, None)[
+        "critical_p"
+    ]
+
+    # Wide enough at the bottom that the constraint is still inert there, so the
+    # plateau has room on both sides rather than being clipped by the grid.
+    P, peak, _, blowup, coupling, P_opt = abmc_stability_curve(
+        info, fwd, x, template, P_range=(1e-8, 1e4), n_refine=0, return_optimal=True
+    )
+    # The three viability conditions are the documented ones, so a caller holding
+    # the returned curve can find the same plateau the sweep selected from.
+    viable = (coupling >= 1e-6) & (blowup <= 0.05) & (P < critical_p)
+    span = _plateau(peak, viable)
+    assert span is not None
+    lo, hi = P[span[0]], P[span[1]]
+    assert hi / lo > 10.0  # the premise: the plateau spans more than a decade
+
+    assert lo < P_opt < hi
+    assert_allclose(P_opt / lo, hi / P_opt, rtol=1e-12)
+    assert_allclose(P_opt, np.sqrt(lo * hi), rtol=1e-12)
+
+
+def test_the_refinement_resamples_outside_the_plateau_without_moving_the_answer(
+    sphere_fwd,
+):
+    """The refinement is only worth its solves if it brackets the plateau's edges.
+
+    The edges are not on the coarse grid: all that is known after the coarse
+    sweep is that each one lies somewhere between the last point of the plateau
+    and the first point outside it. A refinement that starts at the plateau's own
+    edge therefore re-samples ground already known to be flat, and every solve it
+    pays for lands inside the answer it was meant to sharpen -- on a grid this
+    regular the refined points can even fall exactly on the coarse ones, so the
+    caller is charged ``n_refine`` extra solves for a curve with no new points in
+    it. Sharpening the edges may shift the centre by a fraction of a coarse step;
+    it may never relocate it.
+    """
+    from advance_beamlab._abmc import _plateau
+
+    fwd, info = sphere_fwd
+    (i,) = _shell_sources(fwd, 1)
+    x = _si_data(fwd, i, n=200, t0=100, seed=7)
+    template = _spike(200, 100)
+    critical_p = _abmc_prepare(info, fwd, x, template, None, None, 0.0, None)[
+        "critical_p"
+    ]
+    kwargs = dict(P_range=(1e-8, 1e4), n_coarse=17, return_optimal=True)
+
+    coarse, peak, _, blowup, coupling, coarse_opt = abmc_stability_curve(
+        info, fwd, x, template, n_refine=0, **kwargs
+    )
+    viable = (coupling >= 1e-6) & (blowup <= 0.05) & (coarse < critical_p)
+    span = _plateau(peak, viable)
+    assert span is not None
+    first, last = span
+    # The premise: the coarse plateau has a neighbour on each side to step back
+    # to, and there are enough refinement points to resolve a bracket that wide.
+    assert 0 < first and last + 1 < len(coarse)
+    n_refine = 21
+    assert last - first + 3 < n_refine
+
+    P, *_, P_opt = abmc_stability_curve(
+        info, fwd, x, template, n_refine=n_refine, **kwargs
+    )
+    assert np.any((P > coarse[first - 1]) & (P < coarse[first]))
+    assert np.any((P > coarse[last]) & (P < coarse[last + 1]))
+
+    step = coarse[1] / coarse[0]
+    assert 1.0 / step < P_opt / coarse_opt < step
+
+
+def test_a_p_beyond_the_pole_cannot_win_the_sweep(sphere_fwd):
+    """Weights frozen on the wrong limit are not evidence of a stable answer.
+
+    Past a column's pole the weights settle onto the finite ``P -> infinity``
+    limit, which is itself a fixed point: the peak sits perfectly still over
+    decades and nothing blows up, so by every statistic measured after the solve
+    that run looks exactly like the plateau the sweep is hunting for -- and here
+    it is the wider of the two. Selecting from it returns a ``P`` three orders of
+    magnitude above the largest usable one and moves the reported source a whole
+    grid step, while the curve handed back to the caller shows a textbook
+    plateau and no warning is raised anywhere.
+    """
+    from advance_beamlab._abmc import _plateau
+
+    fwd, info = sphere_fwd
+    (i,) = _shell_sources(fwd, 1)
+    x = _si_data(fwd, i, n=200, t0=100, seed=7)
+    template = _spike(200, 100)
+    critical_p = _abmc_prepare(info, fwd, x, template, None, None, 0.0, None)[
+        "critical_p"
+    ]
+
+    # A range whose lower half is usable and whose upper half is all past the
+    # poles, which is where the impostor lives.
+    P, peak, _, blowup, coupling, P_opt = abmc_stability_curve(
+        info, fwd, x, template, P_range=(0.1, 1e4), n_refine=0, return_optimal=True
+    )
+    viable = (coupling >= 1e-6) & (blowup <= 0.05) & (P < critical_p)
+    real = _plateau(peak, viable)
+    impostor = _plateau(peak, (P > critical_p) & (blowup <= 0.05))
+    assert real is not None and impostor is not None
+    # The premise: the impostor is there, and it is the run the rule below would
+    # otherwise pick, being the wider of the two.
+    assert impostor[1] - impostor[0] > real[1] - real[0]
+
+    assert P_opt < critical_p
+    res = make_abmc(info, fwd, x, template, P=P_opt)
+    peak_rr = fwd["source_rr"][int(np.argmax(res.template_match))]
+    assert np.linalg.norm(peak_rr - fwd["source_rr"][i]) < 0.01
+
+
+def test_the_reported_coupling_is_a_magnitude(sphere_fwd):
+    """The polarity a spike was recorded with cannot make the constraint inert.
+
+    The coupling is what tells a caller whether the template constraint is doing
+    anything at all -- the sweep refuses to select any ``P`` whose coupling is
+    negligible -- but ``g^T c`` is signed, and its sign says only whether a
+    column's leadfield happens to agree with a template matched against a spike
+    that could as easily have been recorded upside down. Read the largest signed
+    ratio instead of the largest magnitude and the same recording reports one
+    coupling and its inverted copy another, an entirely different column
+    speaking for the grid; on a grid whose columns all oppose the template it
+    reports a negative coupling, and every ``P`` is declared inert.
+    """
+    fwd, info = sphere_fwd
+    (i,) = _shell_sources(fwd, 1)
+    x = _si_data(fwd, i, n=200, t0=100, seed=7)
+    template = _spike(200, 100)
+
+    prep = _abmc_prepare(info, fwd, x, template, None, None, 0.0, None)
+    ratio = prep["gc"] / prep["gg"]
+    # The premise: this grid is mixed in sign, and the most opposed column is
+    # weaker than the most aligned one, so the two readings really do differ.
+    assert ratio.min() < 0 < ratio.max()
+    assert abs(ratio.min()) < 0.9 * ratio.max()
+
+    P_range, n_coarse = (1e-3, 1e-1), 5
+    kwargs = dict(P_range=P_range, n_coarse=n_coarse, n_refine=0)
+    *_, coupling = abmc_stability_curve(info, fwd, x, template, **kwargs)
+    *_, inverted = abmc_stability_curve(info, fwd, -x, template, **kwargs)
+
+    assert np.all(coupling > 0)
+    assert_allclose(inverted, coupling, rtol=1e-12)
+    assert_allclose(
+        coupling, np.geomspace(*P_range, n_coarse) * np.abs(ratio).max(), rtol=1e-12
+    )
+
+
+def _the_model_the_fit_starts_from(leadfield, noise_floor):
+    r"""``R = G alpha G^T + Lambda`` as Stage 1 initialises it, in recorded units.
+
+    ``Lambda`` is the diagonal ``noise_floor``, and ``alpha`` is the one value
+    that gives ``G alpha G^T`` as much power as ``Lambda`` in the noise-normalised
+    space the fit works in, so that the two terms of ``R`` start out equal.
+    """
+    leadfield = np.asarray(leadfield, float)  # a forward is stored single precision
+    g = leadfield / np.sqrt(noise_floor)[:, None]  # where the fit works
+    alpha = leadfield.shape[0] / (g**2).sum()  # tr(Lambda) is n_channels there
+    return alpha * (leadfield @ leadfield.T) + np.diag(noise_floor)
+
+
+def _as_cov(matrix, ch_names):
+    """An ``mne.Covariance`` holding ``matrix`` over ``ch_names``."""
+    return mne.Covariance(matrix, list(ch_names), bads=[], projs=[], nfree=1)
+
+
+def test_the_fit_starts_from_a_model_that_already_carries_the_measured_power(
+    sphere_fwd,
+):
+    """Handed its own starting model as data, Stage 1 must return it and stop.
+
+    Nothing in the updates of Eqs. 9-10 knows what a volt is: both
+    hyperparameters are only ever multiplied by a square root near one, so the
+    *scale* of the fit is settled once and for all by the initialisation, and a
+    start that is orders of magnitude adrift is not corrected but crawled away
+    from, an iteration at a time. Giving ``G alpha G^T`` and ``Lambda`` half of
+    the measured power each is what keeps the two terms of ``R`` comparable
+    whatever the units of the recording and whatever the size of the leadfield.
+    Lean the split either way and the covariance a caller gets from a modest
+    ``max_iter`` -- and with it every filter built on that covariance -- is
+    somewhere else entirely.
+
+    That starting model is a fixed point of both updates, since the two ratios
+    of Eqs. 9-10 are then exactly one, so handing it in as the data covariance
+    must return it unchanged and must be recognised as converged on the second
+    cost evaluation. The second half of that is what holds ``max_iter`` to the
+    passes it promises: one short, and the fit reports failure to converge on a
+    covariance it is already sitting at.
+    """
+    fwd, info = sphere_fwd
+    lf = fwd["sol"]["data"]
+    ch = list(info["ch_names"])
+    n_channels = len(ch)
+
+    # A flat noise floor at a realistic scalp-EEG variance. The ad-hoc model is
+    # one variance per EEG channel, so it rescales every channel by the same
+    # number and the split below is the one the fit makes.
+    floor = np.full(n_channels, _EEG_SCALE**2)
+    start = _the_model_the_fit_starts_from(lf, floor)
+    # half of the measured power in each term is what fixes the total
+    assert_allclose(np.trace(start), 2 * n_channels * _EEG_SCALE**2, rtol=1e-10)
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        r_cov = sbl_covariance(info, fwd, _as_cov(start, ch), max_iter=2)
+    assert [str(r.message) for r in records] == []
+    assert np.abs(r_cov.data - start).max() < 1e-9 * np.abs(start).max()
+
+    # ... and that is a property of this covariance, not of every covariance:
+    # the same total power, split differently, is a place the fit moves away
+    # from and does not settle at in two passes.
+    flat = np.eye(n_channels) * np.trace(start) / n_channels
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        moved = sbl_covariance(info, fwd, _as_cov(flat, ch), max_iter=2)
+    assert np.abs(moved.data - flat).max() > 0.1 * np.abs(flat).max()
+
+
+def test_lambda_starts_at_the_noise_covariance_it_was_given(sphere_fwd):
+    """A ``noise_cov`` is the level the noise term starts at, not merely a shape.
+
+    ``noise_cov`` does two jobs: it normalises the sensors, and it initialises
+    ``Lambda``. Only the first survives if the noise term instead starts at a
+    share of the measured power, because the normalisation has already divided
+    the measured level out; the caller's empty-room estimate is then reduced to
+    a set of relative weights, and a recording whose event carries a hundred
+    times the noise power starts the fit believing its sensors fifty times
+    noisier than they were measured to be. Every iteration after that is spent
+    walking back a number that was handed in correct.
+
+    Checked as in the sibling test above, through the fixed point: a data
+    covariance equal to the model the fit starts from must come back unchanged,
+    which happens for exactly one noise covariance -- the one that built it.
+    """
+    fwd, info = sphere_fwd
+    lf = fwd["sol"]["data"]
+    ch = list(info["ch_names"])
+    n_channels = len(ch)
+
+    # A noise covariance spanning a factor of sixteen across the array, so that
+    # it is a genuine per-channel measurement and not a global scale.
+    noise_var = (0.3 * _EEG_SCALE) ** 2 * np.geomspace(0.25, 4.0, n_channels)
+    ncov = mne.Covariance(np.diag(noise_var), ch, [], [], nfree=1)
+    start = _the_model_the_fit_starts_from(lf, noise_var)
+    # the noise term starts at noise_cov itself, so the data it is the starting
+    # model for carries exactly twice the noise power in the fit's own space
+    assert_allclose((np.diag(start) / noise_var).sum(), 2 * n_channels, rtol=1e-10)
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        r_cov = sbl_covariance(
+            info, fwd, _as_cov(start, ch), noise_cov=ncov, max_iter=2
+        )
+    assert [str(r.message) for r in records] == []
+    assert np.abs(r_cov.data - start).max() < 1e-9 * np.abs(start).max()
+
+    # Tell the fit the sensors are four times noisier and the same data is no
+    # longer where it starts, so it must move: the level comes from noise_cov.
+    loud = mne.Covariance(np.diag(4 * noise_var), ch, [], [], nfree=1)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        moved = sbl_covariance(
+            info, fwd, _as_cov(start, ch), noise_cov=loud, max_iter=2
+        )
+    assert np.abs(moved.data - start).max() > 0.05 * np.abs(start).max()
+
+
+def test_the_stopping_rule_does_not_depend_on_the_units_of_the_data(sphere_fwd):
+    """The same recording in volts and in microvolts must stop at the same place.
+
+    ``tol`` is a *relative* change in the cost, and rescaling the data by ``s``
+    shifts the bare Eq. 6 cost through ``log|R|`` by ``n_channels * log(s**2)``,
+    which on a whole-head array is several times the cost being compared. The
+    relative test then means something different in every unit system: the fit
+    stops after a different number of iterations and returns a different
+    covariance for data that differs only in whether it was read in volts or in
+    microvolts, and two readers of one recording end up comparing maps that
+    disagree for no other reason. Referring the cost to an isotropic covariance
+    of the same total power removes that constant, and being additive it leaves
+    the minimiser untouched.
+
+    The sibling unit-invariance test truncates both runs at a fixed ``max_iter``
+    and so pins the updates alone; this one lets each run stop when it decides
+    it has converged, which is where the constant would show.
+    """
+    fwd, info = sphere_fwd
+    (i,) = _shell_sources(fwd, 1)
+    x = _si_data(fwd, i, seed=17)
+    ch = list(info["ch_names"])
+    s = 1e6  # volts to microvolts
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        reference = sbl_covariance(info, fwd, _cov(x, ch))
+        scaled = sbl_covariance(info, fwd, _cov(x * s, ch))
+    # both runs stopped on the tolerance, not on max_iter
+    assert [str(r.message) for r in records] == []
+    assert_allclose(scaled.data, reference.data * s**2, rtol=1e-8)

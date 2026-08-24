@@ -24,6 +24,7 @@ from advance_beamlab._connectivity import (
     _benjamini_hochberg,
     _envelope_corr_matrix,
     _epoched,
+    _fisher_z,
     _pair_connectivity,
     _select_neighbours,
     _spectral_conn_matrix,
@@ -1765,3 +1766,34 @@ def test_ar1_degenerate_edge_is_silenced_however_strong_its_connectivity():
             conn, ref, sfreq=SFREQ, n_surrogates=20, random_state=0
         )
     assert [bool(mask[i, j]) for i, j in _as_pairs(3)] == [False, False, True]
+
+
+def test_a_perfect_correlation_survives_the_fisher_transform():
+    """A metric that reaches exactly 1 must not decide its own test.
+
+    ``pli`` and ``plv`` are bounded magnitudes that attain 1 exactly -- every
+    epoch agreeing on the sign of the imaginary coherency, or on the phase
+    difference, is all it takes, and a reference at the two-epoch minimum
+    reaches it readily. The z-score is a distance measured in Fisher-:math:`z`
+    units, so an unbounded transform breaks the test in both directions: an edge
+    whose measured value is 1 is significant however wide its null, and a single
+    surrogate that reaches 1 takes that edge's null mean and spread with it and
+    has it silenced as degenerate instead. Either way the decision is made by
+    the transform rather than by the evidence. Holding it just inside the
+    singularity keeps a perfect correlation what it should be -- the top of the
+    scale -- while leaving everything a real estimate can resolve untouched.
+    """
+    r = np.array([-1.0, -0.999, -0.5, 0.0, 0.5, 0.999, 1.0])
+    z = _fisher_z(r)
+    assert np.isfinite(z).all()
+    # still a strictly increasing odd map, and untouched away from the ends
+    assert (np.diff(z) > 0).all()
+    assert_allclose(z, -z[::-1], rtol=1e-12)
+    assert_allclose(z[1:-1], np.arctanh(r[1:-1]), rtol=1e-12)
+    # the bound sits within a millionth of the singularity, so no correlation
+    # two estimates could tell apart is flattened onto it
+    assert 1.0 - np.tanh(z[-1]) < 1e-5
+
+    # a null one of whose surrogates reached 1 still has a usable mean and spread
+    null_z = _fisher_z(np.array([0.4, 0.6, 1.0]))
+    assert np.isfinite(null_z.mean()) and np.isfinite(null_z.std(ddof=1))
