@@ -17,6 +17,9 @@ jobs:
   lint:
     name: ruff
     runs-on: ubuntu-latest
+    # Well under a minute in practice; the ceiling is only there so a wedged
+    # runner fails instead of idling.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -37,6 +40,8 @@ jobs:
   test:
     name: pytest (py${{ matrix.python-version }}, mne ${{ matrix.mne }})
     runs-on: ubuntu-latest
+    # Five to nine minutes per matrix entry.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -67,12 +72,15 @@ jobs:
         run: pytest -q --cov=advance_beamlab --cov-report=term-missing
 
   test-with-dataset:
-    # The integration tests in ``test_integration_sample.py`` skip themselves
-    # when the ``sample`` dataset is absent, which on a bare runner means they
-    # never run at all. Fetch and cache the dataset on one job so the real-data
-    # pipeline is genuinely covered.
+    # Tests that need real data skip themselves when it is absent, which on a
+    # bare runner means they never run at all. Fetch and cache the datasets on
+    # one job and run the full suite there, so every data-gated path is covered
+    # somewhere.
     name: pytest (sample dataset)
     runs-on: ubuntu-latest
+    # Twenty-six minutes before this job ran the whole suite, so the ceiling
+    # leaves room for it to grow.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -98,14 +106,17 @@ jobs:
           python -c "import mne; mne.datasets.sample.data_path()"
           python -c "import mne; mne.datasets.fetch_fsaverage()"
           python -c "from advance_beamlab import fetch_ny_head; fetch_ny_head()"
-      - name: Run the integration tests
-        # Both suites skip themselves when their data is absent, which on a bare
-        # runner means neither runs at all; this is the job that has the data, so
-        # it is the only place they are genuinely exercised.
-        run: |
-          pytest -q \
-            src/advance_beamlab/tests/test_integration_sample.py \
-            src/advance_beamlab/tests/test_fem.py
+      - name: Run the whole suite, with the data present
+        # The WHOLE suite, not a list of files. Tests gate themselves on the data
+        # they need, and on a bare runner every one of them skips, so this job is
+        # the only place they are genuinely exercised. Naming the files here meant
+        # the list had to be kept in step with where the gated tests happened to
+        # live, and it was not: two in test_abmc.py and three in
+        # test_recipsiicos.py gated themselves on the sample dataset, were skipped
+        # by every matrix job for want of it, and were not in the list either, so
+        # they had never run anywhere. Running everything costs a few minutes on a
+        # job already dominated by fetching 1.5 GB, and cannot fall out of step.
+        run: pytest -q src/advance_beamlab
 
   doc:
     # Fast pass: no gallery execution, so this fails quickly on a broken
@@ -114,6 +125,8 @@ jobs:
     # cross-reference target.
     name: docs (no gallery)
     runs-on: ubuntu-latest
+    # Under a minute: no gallery is executed here.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -146,6 +159,8 @@ jobs:
     # which performs the same build and then publishes it.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    # Around twenty minutes, the gallery being executed in full.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -159,6 +174,10 @@ jobs:
         # ``xvfb-run`` did not give VTK a usable GLX visual and every
         # cortical-surface figure failed with RenderWindowUnavailable.
         uses: pyvista/setup-headless-display-action@v4
+        # Seconds when it works, three minutes at worst. This is the step
+        # that hung, so it gets a ceiling of its own rather than relying on
+        # the job's.
+        timeout-minutes: 10
         with:
           qt: true
       - name: Install package with doc extras

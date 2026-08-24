@@ -24,6 +24,11 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # Eighteen minutes in practice. A ceiling matters here because a step that
+    # hangs rather than fails is indistinguishable from a slow one unless
+    # somebody is watching the individual steps, and this job publishes: a
+    # wedged run leaves the site silently stale. One sat for 2 h 43 m.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -38,6 +43,10 @@ jobs:
         # ``xvfb-run`` did not give VTK a usable GLX visual and every
         # cortical-surface figure failed with RenderWindowUnavailable.
         uses: pyvista/setup-headless-display-action@v4
+        # Seconds when it works, three minutes at worst. This is the step
+        # that hung, so it gets a ceiling of its own rather than relying on
+        # the job's.
+        timeout-minutes: 10
         with:
           qt: true
 
