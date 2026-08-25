@@ -1302,13 +1302,12 @@ def test_a_label_restricts_the_filters_and_not_the_covariance_modification():
         x @ x.T / n_times, info["ch_names"], [], [], nfree=n_times
     )
 
-    label = mne.read_labels_from_annot(
-        "sample",
-        "aparc",
-        "lh",
-        regexp="superiortemporal",
-        subjects_dir=_SAMPLE.parent.parent / "subjects",
-    )[0]
+    # Built from the forward's own vertices rather than read from an
+    # annotation, which would pull in nibabel to read the surface geometry for
+    # no gain here: what the test needs is any label covering part of the grid.
+    lh_vertno = fwd["src"][0]["vertno"]
+    kept = lh_vertno[: len(lh_vertno) // 4]
+    label = mne.Label(kept, hemi="lh", subject="sample")
     kwargs = dict(noise_cov=noise, weight_norm=None, rank=120)
     whole = make_recipsiicos_lcmv(info, fwd, data_cov, **kwargs)
     restricted = make_recipsiicos_lcmv(info, fwd, data_cov, label=label, **kwargs)
