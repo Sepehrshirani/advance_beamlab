@@ -486,9 +486,16 @@ def test_abmc_matches_the_fixed_point_of_the_papers_iteration(sphere_fwd):
     y0 = w0.T @ xx
     lags = np.arange(-(len(template) - 1), len(template))
     c = np.empty((n_ch, n_col))
+    peak_match, peak_sign = 0.0, 1.0
     for k in range(n_col):
         xc = np.correlate(y0[k], template, mode="full")
-        c[:, k] = xx @ _shift_template(template, int(lags[np.argmax(np.abs(xc))]))
+        best = int(np.argmax(np.abs(xc)))
+        c[:, k] = xx @ _shift_template(template, int(lags[best]))
+        if abs(xc[best]) > peak_match:
+            peak_match, peak_sign = abs(xc[best]), (1.0 if xc[best] >= 0 else -1.0)
+    # Oriented as the solver orients it, so this compares the closed form with
+    # the descent rather than with a differently signed constraint.
+    c *= peak_sign
     c *= (
         np.linalg.norm(lf, axis=0)
         / np.clip(np.linalg.norm(c, axis=0), np.finfo(float).tiny, None)
@@ -587,10 +594,16 @@ def test_abmc_unstable_fraction_matches_the_sign_of_gc(sphere_fwd):
     assert res.unstable_fraction == float((gc < 0).mean())
     assert 0.0 < res.unstable_fraction < 1.0  # the premise: this grid is mixed
 
-    # ``c`` is linear in the data, so negating the data flips every ``g^T c`` and
-    # the two fractions have to partition the grid between them.
+    # ``c`` is linear in the data, so negating the recording negates every
+    # column and would, on its own, flip the sign of every ``g^T c`` and swap
+    # which columns carry a pole. It must not: the polarity of a recording is
+    # the reference it was written against, and which sources are unstable under
+    # a template cannot depend on that. The constraint is oriented against the
+    # strongest match on the grid, which negates with the data, so the two
+    # cancel and the diagnosis is the one the data supports either way.
     flipped = make_abmc(info, fwd, -x, template, P=0.03)
-    assert_allclose(flipped.unstable_fraction, 1.0 - res.unstable_fraction, rtol=1e-12)
+    assert_allclose(flipped.unstable_fraction, res.unstable_fraction, rtol=1e-12)
+    assert_allclose(flipped.critical_p, res.critical_p, rtol=1e-9)
     assert np.isfinite(flipped.critical_p)
 
 
@@ -1544,3 +1557,59 @@ def test_the_stopping_rule_does_not_depend_on_the_units_of_the_data(sphere_fwd):
     # both runs stopped on the tolerance, not on max_iter
     assert [str(r.message) for r in records] == []
     assert_allclose(scaled.data, reference.data * s**2, rtol=1e-8)
+
+
+def test_the_map_does_not_depend_on_the_polarity_of_the_template(sphere_fwd):
+    """Reversing the sign of the recording, or of the template, changes nothing.
+
+    Polarity here is convention rather than physics. A dipole in a
+    fixed-orientation forward has whichever sign the source space gave it, an
+    EEG montage carries the sign of the reference it was written against, and a
+    template drawn by an expert has the sign they happened to draw it with. None
+    of that says anything about where the source is, so none of it may reach the
+    map.
+
+    It reaches the map if the constraint column is built from the template match
+    without its sign. The lag is chosen on the magnitude of the correlation, so
+    the match at the chosen lag can be negative; the Lagrangian term is
+    :math:`+P\\,c`, so an unsigned column pushes the output towards
+    :math:`+\\mathbf{u}` whichever way the source actually points, and for a
+    source of the opposite polarity the constraint pulls away from the source it
+    was meant to hold. The readout would not show it -- the template match is
+    reported as a magnitude, so both branches look alike -- and the two would be
+    told apart only by the localisation being quietly worse for half of all
+    inputs.
+
+    Checked at three values of ``P`` because the constraint's weight is what
+    decides how far a wrong sign can drag the answer: at a small ``P`` the term
+    is nearly inert and even a sign error moves little.
+    """
+    fwd, info = sphere_fwd
+    (i,) = _shell_sources(fwd, 1)
+    x = _si_data(fwd, i, n=400, t0=200, seed=5, snr=0.4)
+    template = _spike(400, 200)
+
+    def evoked(data):
+        return mne.EpochsArray(data[None].copy(), info, tmin=0.0).average()
+
+    for p in (0.03, 0.3, 1.0):
+        kwargs = dict(P=p, max_lag=20)
+        reference = make_abmc(info, fwd, evoked(x), template=template, **kwargs)
+        negated_data = make_abmc(info, fwd, evoked(-x), template=template, **kwargs)
+        negated_template = make_abmc(info, fwd, evoked(x), template=-template, **kwargs)
+
+        peak = int(np.argmax(np.asarray(reference.template_match, float)))
+        for other in (negated_data, negated_template):
+            assert_allclose(other.template_match, reference.template_match, atol=1e-9)
+            assert int(np.argmax(np.asarray(other.template_match, float))) == peak
+        # The constraint has to be doing something at this P, or the agreement
+        # above would only say that the term was too weak to matter either way.
+        if p == 1.0:
+            inert = make_abmc(
+                info, fwd, evoked(x), template=template, P=1e-8, max_lag=20
+            )
+            moved = np.abs(
+                np.asarray(reference.template_match, float)
+                - np.asarray(inert.template_match, float)
+            ).max()
+            assert moved > 1e-3

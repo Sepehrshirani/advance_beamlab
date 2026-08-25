@@ -683,12 +683,47 @@ def _abmc_prepare(info, forward, data, template, cov, noise_cov, reg, max_lag):
     c = np.empty((n_channels, n_columns))
     u_shift = np.empty((n_columns, len(u)))
     col_lag = np.empty(n_columns, dtype=int)
+    peak_match = 0.0
+    peak_sign = 1.0
     for k in range(n_columns):
         xc = np.correlate(y0[k], u, mode="full")
-        j = int(lags_full[lag_mask][np.argmax(np.abs(xc[lag_mask]))])
+        masked = xc[lag_mask]
+        best = int(np.argmax(np.abs(masked)))
+        j = int(lags_full[lag_mask][best])
         col_lag[k] = j
         u_shift[k] = _shift_template(u, j)
         c[:, k] = x @ u_shift[k]
+        # Remember the polarity of the strongest match on the grid. It is the
+        # reference the whole constraint is oriented against, below.
+        if abs(masked[best]) > peak_match:
+            peak_match = abs(masked[best])
+            peak_sign = 1.0 if masked[best] >= 0 else -1.0
+
+    # Orient the constraint against the strongest match on the grid, so that the
+    # answer does not depend on a polarity nobody chose.
+    #
+    # The lag of each column is picked on the magnitude of its correlation, so
+    # the match at that lag may be negative, and c is linear in the data. Negate
+    # the recording -- or the template -- and every column's c negates with it,
+    # while the Lagrangian term stays +P c. The constraint that pulled towards a
+    # source now pulls away from it, and the readout cannot show this because the
+    # template match is reported as a magnitude. Measured on the localisation
+    # example, reversing the dipole moved the mean peak error from 0.85 cm to
+    # 10.37 cm, and flipped unstable_fraction from 0.047 to 0.953, in silence.
+    #
+    # Polarity here is convention, not physics: the sign a source space gave a
+    # dipole, the reference an EEG montage was written against, the sign an
+    # expert drew a template with. A caller cannot know which branch they are on,
+    # so the branch must not exist.
+    #
+    # One global factor, not one per column. Signing each column separately would
+    # also remove the dependence, but it would force g^T c >= 0 everywhere: no
+    # column could oppose its own leadfield, no pole could form, and critical_p,
+    # unstable_fraction and the whole stability curve would describe something
+    # that can no longer happen. The instability is real and worth keeping; only
+    # the arbitrary overall sign is not. A global flip negates every correlation,
+    # so it negates peak_sign too, and the two cancel.
+    c *= peak_sign
 
     # Put the template-constraint column on the same scale as the leadfield
     # column it competes with in Eq. 19, so ``P`` is the dimensionless trade-off

@@ -1265,3 +1265,60 @@ def test_beamformer_records_projectors(fwd_fixed):
     # filtered with the wrong operator -- the check this restores.
     with pytest.raises(ValueError, match="SSP projections present in the data"):
         _proj_whiten_data(data, [], filters)
+
+
+@requires_sample
+def test_a_label_restricts_the_filters_and_not_the_covariance_modification():
+    """``label`` selects which filters come back, and changes nothing else.
+
+    The projector has to be built from the whole forward. Its power subspace
+    spans the auto-products of the sources the data actually contains, and that
+    is what lets the modification remove the cross-terms while leaving each
+    source's own power alone. Build it from a label's sources instead and the
+    subspace no longer spans the rest of the head, so the projection strips the
+    genuine power of every source outside the label out of the covariance. The
+    filters then lose the interference rejection the method exists to provide,
+    and nothing says so: the call succeeds, the filters look ordinary, and only
+    the leakage is worse.
+
+    So a label may restrict the output and nothing else. The filters it returns
+    have to be exactly the rows the unrestricted call would have returned for
+    those same sources -- which is what ``label`` means everywhere in
+    :mod:`mne.beamformer`, and what a reader carrying that habit will assume.
+    """
+    info = mne.io.read_info(_SAMPLE / "sample_audvis-ave.fif")
+    info = mne.pick_info(info, mne.pick_types(info, meg="grad", exclude="bads"))
+    fwd = _sample_forward(info)
+    noise = mne.read_cov(_SAMPLE / "sample_audvis-cov.fif")
+
+    rng = np.random.default_rng(0)
+    lead = fwd["sol"]["data"]
+    n_times = 2000
+    sources = np.zeros((lead.shape[1], n_times))
+    sources[lead.shape[1] // 3] = rng.standard_normal(n_times)
+    sources[2 * lead.shape[1] // 3] = 4.0 * rng.standard_normal(n_times)
+    x = lead @ sources + 1e-13 * rng.standard_normal((lead.shape[0], n_times))
+    data_cov = mne.Covariance(
+        x @ x.T / n_times, info["ch_names"], [], [], nfree=n_times
+    )
+
+    label = mne.read_labels_from_annot(
+        "sample",
+        "aparc",
+        "lh",
+        regexp="superiortemporal",
+        subjects_dir=_SAMPLE.parent.parent / "subjects",
+    )[0]
+    kwargs = dict(noise_cov=noise, weight_norm=None, rank=120)
+    whole = make_recipsiicos_lcmv(info, fwd, data_cov, **kwargs)
+    restricted = make_recipsiicos_lcmv(info, fwd, data_cov, label=label, **kwargs)
+
+    assert restricted["weights"].shape[0] < whole["weights"].shape[0]
+    offset, rows = 0, []
+    for full, kept in zip(whole["vertices"], restricted["vertices"], strict=True):
+        full, kept = np.asarray(full), np.asarray(kept)
+        rows.append(offset + np.searchsorted(full, kept))
+        offset += len(full)
+    rows = np.concatenate(rows)
+    assert len(rows) == restricted["weights"].shape[0]
+    assert_array_equal(restricted["weights"], whole["weights"][rows])

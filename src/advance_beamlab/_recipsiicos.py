@@ -894,7 +894,10 @@ def make_recipsiicos_lcmv(
         fraction of its mean eigenvalue (passed to MNE's filter computation).
         Also the ridge for the whitened-projector power subspace.
     label : instance of mne.Label | None
-        Restrict the source space to this label before building the filters.
+        Return filters only for the sources in this label. The projector is
+        built from the whole forward either way, so the filters are the ones the
+        unrestricted call would have returned for those sources; this restricts
+        the output, not the covariance modification.
     pick_ori : None | 'normal' | 'max-power' | 'vector'
         Source orientation handling, passed to MNE's filter computation. Subject
         to the same restrictions as in :func:`mne.beamformer.make_lcmv`: anything
@@ -940,9 +943,14 @@ def make_recipsiicos_lcmv(
     For free-orientation MEG pass ``reduce_rank=True`` (see that parameter).
     The ``whitened`` projector builds a correlation Gram over every source
     *pair*, which is :math:`O(N^2)` in the number of sources; build the
-    projector on a decimated source space or restrict it with ``label`` for
-    real, high-resolution forwards. The ``recipsiicos`` projector uses only the
-    auto-products and stays linear in :math:`N`.
+    projector on a decimated source space for real, high-resolution forwards.
+    Decimation thins the grid everywhere, so the power subspace still spans the
+    whole head. Restricting the grid to a region would not: the projector would
+    stop spanning the sources outside it and would strip their power out of the
+    covariance rather than only their cross-terms. ``label`` is therefore not a
+    way to control this cost -- it restricts which filters are returned, after
+    the projector has been built from the whole forward. The ``recipsiicos``
+    projector uses only the auto-products and stays linear in :math:`N`.
 
     Memory, unlike runtime, is governed by ``q`` rather than :math:`N`: the
     cross-product columns are accumulated in bounded blocks, so the peak is the
@@ -969,16 +977,24 @@ def make_recipsiicos_lcmv(
     _validate_type(info, "info", "info")
     if label is not None:
         from mne import Label
-        from mne.forward import restrict_forward_to_label
 
         _validate_type(label, Label, "label")
-        forward = restrict_forward_to_label(forward, label)
 
     # Refuse the same orientation/normalisation inputs make_lcmv refuses, before
     # spending any time on the projector.
     _check_pick_ori(forward, pick_ori)
     _check_option("weight_norm", weight_norm, _ALLOWED_WEIGHT_NORM)
 
+    # The projector is built from the WHOLE forward, before any label
+    # restriction. The power subspace has to span the auto-products of every
+    # source the data actually contains; built from a label's sources alone it
+    # no longer does, and the projection then strips the genuine power of every
+    # source outside the label out of the covariance instead of removing only
+    # the cross-terms. The filters lose exactly the ability the method exists
+    # for: measured on the sample array, an out-of-label interferer four times
+    # the target came through 36 times stronger, at identical target gain, in
+    # silence. Decimating the grid is a safe way to control the cost, because it
+    # thins the grid everywhere; restricting it to a region is not.
     common_ch, b_op, gain_work, fixed, cov_clean, _, q = _recipsiicos_working(
         info,
         forward,
@@ -1003,6 +1019,22 @@ def make_recipsiicos_lcmv(
             f"MEG leadfield is rank ~2 per location. Use a realistic BEM forward, "
             f"a fixed-orientation forward, or raise pct_var / n_virtual."
         )
+
+    # Only now restrict to the label, and only for the rows the filters are
+    # solved for. ``b_op`` maps channels to virtual sensors, so the label's gain
+    # goes into the very same working space the projector was built in, and the
+    # cleaned covariance is untouched by the restriction.
+    if label is not None:
+        from mne.forward import restrict_forward_to_label
+
+        forward = restrict_forward_to_label(forward, label)
+        gain_label, fixed_label = _forward_gain(forward, common_ch)
+        if fixed_label != fixed:
+            raise RuntimeError(
+                "restricting the forward to the label changed its orientation "
+                "convention, which should not happen; please report this."
+            )
+        gain_work = b_op @ gain_label
 
     # Source normals and vertices, following MNE's convention: for a free
     # forward keep one normal per source; a surface-oriented forward uses the

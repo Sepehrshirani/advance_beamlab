@@ -121,3 +121,43 @@ def test_a_multi_plateau_spectrum_stops_at_the_first_collapse():
     cov = (basis * scale) @ basis.T
     cov = 0.5 * (cov + cov.T)
     assert estimate_rank(cov, method="cliff") == 15
+
+
+def test_a_correlated_full_rank_spectrum_is_not_mistaken_for_a_projection():
+    """A steep first step is not a cliff when there is real signal beneath it.
+
+    The spectrum of a real M/EEG covariance is not white. Its largest eigenvalue
+    is a common-mode or reference component and stands well clear of the rest, so
+    the very first step of the spectrum is a large one -- on the ``sample``
+    recording it is 1.17 decades for EEG and 0.95 for magnetometers. Judged on
+    the size of the step alone that looks exactly like the collapse a projection
+    leaves behind, and the estimator returned a rank of **one** on an ordinary,
+    entirely full-rank recording. Handed to a beamformer as ``rank`` that
+    silently destroys the inverse, and nothing in the call says so.
+
+    What separates the two cases is not the fall but what lies under it. A
+    projection leaves its discarded directions at round-off, some 1e-16 of the
+    largest eigenvalue. A steep first step in a full-rank covariance still has
+    whole percent of the largest eigenvalue below it -- 6.7e-2 for that EEG
+    recording -- and that is real signal.
+
+    The spectrum here reproduces the shape without needing the dataset: one
+    dominant component, then a decade of ordinary correlated signal.
+    """
+    rng = np.random.default_rng(4)
+    n = 40
+    basis = np.linalg.qr(rng.standard_normal((n, n)))[0]
+    # A first eigenvalue 15x the next -- a 1.2-decade step, as on real EEG --
+    # and a decade of genuine signal spread beneath it.
+    scale = np.concatenate([[15.0], np.logspace(0, -1, n - 1)])
+    cov = basis * scale @ basis.T
+    cov = 0.5 * (cov + cov.T)
+
+    drops = -np.diff(np.log10(np.linalg.eigvalsh(cov)[::-1]))
+    assert drops[0] > 1.0  # the premise: the first step really is that steep
+    assert estimate_rank(cov, method="cliff") == n
+
+    # And a genuine projection of the same spectrum is still found.
+    projected = basis[:, :25] * scale[:25] @ basis[:, :25].T
+    projected = 0.5 * (projected + projected.T)
+    assert estimate_rank(projected, method="cliff") == 25

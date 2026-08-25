@@ -50,6 +50,14 @@ _CLIFF_Z = 5.0
 # largest drop on a well-conditioned full-rank covariance is 0.04 -- so a floor
 # of one decade separates them with three orders of magnitude to spare.
 _CLIFF_DECADES = 1.0
+# What a projection leaves below its cliff, relative to the largest eigenvalue.
+# Measured on the ``sample`` recording, the residual below the steepest drop of
+# a FULL-RANK covariance is 6.7e-2 (EEG), 1.1e-1 (magnetometers) and 4.0e-1
+# (gradiometers) -- real signal, whole percent of the largest eigenvalue. A
+# genuine projection leaves round-off, some 1e-16. Six orders of magnitude
+# separate the two, so the line is drawn in the middle of that gap rather than
+# at either edge of it.
+_CLIFF_RESIDUAL = 1e-6
 
 
 def _eigenvalues(cov):
@@ -142,8 +150,14 @@ def estimate_rank(cov, *, method="cliff", threshold=None, pct_var=0.999, verbose
     decades, and the largest drop on a well-conditioned full-rank covariance is
     about four hundredths of one.
 
-    On a covariance of full rank both methods return ``n_channels``. Where they
-    disagree, plot :func:`rank_spectrum` and decide by eye.
+    On a covariance of full rank ``'cliff'`` returns ``n_channels``.
+    ``'variance'`` does so only when the spectrum is nearly flat: it answers
+    "how many dimensions hold ``pct_var`` of the variance", and a real M/EEG
+    spectrum is coloured, so at the default 0.999 a genuinely full-rank
+    magnetometer covariance from the ``sample`` recording comes back as 63 of
+    102. That is a variance-truncation point, not a rank, and it is the right
+    number for a different question. Where the two disagree, plot
+    :func:`rank_spectrum` and decide by eye.
 
     A caution that matters more than the choice of method: a rank estimate from
     a covariance mixing sensor types with different units is close to
@@ -152,8 +166,17 @@ def estimate_rank(cov, *, method="cliff", threshold=None, pct_var=0.999, verbose
     """
     _check_option("method", method, _METHODS)
     _validate_type(pct_var, "numeric", "pct_var")
-    if not 0 < float(pct_var) <= 1:
-        raise ValueError(f"pct_var must be in (0, 1], got {pct_var}")
+    # Strictly below one. "All of the variance" is not a question the spectrum
+    # can answer: the cumulative sum reaches one only at the last eigenvalue, so
+    # where the search lands is decided by floating-point accumulation rather
+    # than by the data, and the same request returned the true rank on one
+    # covariance and the full channel count on the next. Someone who wants every
+    # usable dimension wants method='cliff'.
+    if not 0 < float(pct_var) < 1:
+        raise ValueError(
+            f"pct_var must be in (0, 1), got {pct_var}. For every usable "
+            f"dimension rather than a variance fraction, use method='cliff'."
+        )
 
     values = _eigenvalues(cov)
     n = values.size
@@ -164,11 +187,20 @@ def estimate_rank(cov, *, method="cliff", threshold=None, pct_var=0.999, verbose
         return int(max(1, positive.sum()))
 
     if method == "variance":
-        total = values.sum()
+        # Only the strictly positive part, as the cliff branch already does.
+        # The cumulative sum reaches 1 only at the last eigenvalue, and on a
+        # rank-deficient covariance that last eigenvalue is a zero: searching
+        # for pct_var=1.0 over the whole spectrum then lands past the end and
+        # returns n_channels, restoring exactly the rank the estimate exists to
+        # deny. Whether it did so depended on where the floating-point sum
+        # happened to land, so the same request answered truthfully on one
+        # matrix and not on the next.
+        live = values[positive]
+        total = live.sum()
         if total <= 0:
             return 1
-        keep = int(np.searchsorted(np.cumsum(values) / total, float(pct_var)) + 1)
-        rank = int(np.clip(keep, 1, n))
+        keep = int(np.searchsorted(np.cumsum(live) / total, float(pct_var)) + 1)
+        rank = int(np.clip(keep, 1, live.size))
     else:
         z = _CLIFF_Z if threshold is None else float(threshold)
         # Work on the strictly positive part: a zeroed tail has no log.
@@ -190,7 +222,27 @@ def estimate_rank(cov, *, method="cliff", threshold=None, pct_var=0.999, verbose
             rank = int(live.size)
         else:
             standardised = (drops - centre) / spread
-            hit = np.nonzero((standardised > z) & (drops > _CLIFF_DECADES))[0]
+            # What settles it is not how far the spectrum falls but what is left
+            # underneath. A projection leaves its discarded directions at
+            # round-off: everything below the cliff sits at 1e-15 or so of the
+            # largest eigenvalue. A full-rank covariance that merely starts with
+            # a steep step -- which real M/EEG does, its first eigenvalue being a
+            # common-mode or reference component -- still has real signal below
+            # that step, whole percent of the largest, not round-off.
+            #
+            # Judged on the drop alone the two are indistinguishable, and the
+            # decade floor was set from white synthetic covariances where the
+            # largest full-rank drop is 0.04 decades. Real EEG falls 1.17
+            # decades at the very first step, clearing that floor, so the
+            # estimator called the first step the cliff and returned a rank of
+            # ONE on an ordinary full-rank recording -- which, handed to a
+            # beamformer as ``rank``, destroys the inverse in silence.
+            residual = live[1:] / live[0]
+            hit = np.nonzero(
+                (standardised > z)
+                & (drops > _CLIFF_DECADES)
+                & (residual < _CLIFF_RESIDUAL)
+            )[0]
             # The first qualifying drop. In practice there is only ever one --
             # a single cliff inflates the spread enough that a second, smaller
             # collapse no longer clears the standardised test, which was checked
