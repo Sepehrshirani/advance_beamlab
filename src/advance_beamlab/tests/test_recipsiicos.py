@@ -1313,11 +1313,24 @@ def test_a_label_restricts_the_filters_and_not_the_covariance_modification():
     restricted = make_recipsiicos_lcmv(info, fwd, data_cov, label=label, **kwargs)
 
     assert restricted["weights"].shape[0] < whole["weights"].shape[0]
+    assert restricted["weights"].shape[1] == whole["weights"].shape[1]
+
+    # Map each returned source back to its row in the unrestricted solve, and
+    # check the mapping rather than trusting it: a lookup that silently returned
+    # the wrong row would make this test compare unrelated filters and pass or
+    # fail for reasons that have nothing to do with the projector.
     offset, rows = 0, []
     for full, kept in zip(whole["vertices"], restricted["vertices"], strict=True):
         full, kept = np.asarray(full), np.asarray(kept)
-        rows.append(offset + np.searchsorted(full, kept))
+        assert np.all(np.isin(kept, full))
+        # An order-independent lookup. searchsorted would need ``full`` to be
+        # sorted, and a vertex list that happens not to be would send this test
+        # off comparing unrelated filters instead of failing.
+        position = {int(v): k for k, v in enumerate(full)}
+        index = np.array([position[int(v)] for v in kept], dtype=int)
+        assert_array_equal(full[index], kept)
+        rows.append(offset + index)
         offset += len(full)
     rows = np.concatenate(rows)
     assert len(rows) == restricted["weights"].shape[0]
-    assert_array_equal(restricted["weights"], whole["weights"][rows])
+    assert_allclose(restricted["weights"], whole["weights"][rows], rtol=1e-7, atol=0.0)
