@@ -89,9 +89,20 @@ def _as_pairs(n_sources):
 
 
 def _validate_conn_params(
-    method, sfreq, fmin, fmax, envelope_lowpass=None, envelope_resample=None
+    method,
+    sfreq,
+    fmin,
+    fmax,
+    envelope_lowpass=None,
+    envelope_resample=None,
+    orthogonalize=False,
 ):
-    """Validate the connectivity metric and its band / envelope arguments."""
+    """Validate the connectivity metric and its band / envelope arguments.
+
+    Every public entry point calls this before it builds anything, so that an
+    argument the estimator cannot honour costs a moment rather than the whole
+    pairwise sweep of beamformers that would otherwise be solved first.
+    """
     _validate_type(method, str, "method")
     if method in _COMPLEX_METHODS:
         raise ValueError(
@@ -102,6 +113,13 @@ def _validate_conn_params(
         )
     if method not in _CONN_METHODS:
         raise ValueError(f"method must be one of {_CONN_METHODS}, got {method!r}.")
+    if orthogonalize not in (False, "pairwise"):
+        # ``'pairwise'`` is the only orthogonalisation implemented, so a bare
+        # ``True`` cannot be honoured; guessing at it would silently change
+        # which estimator the caller believes produced their matrix.
+        raise ValueError(
+            f"orthogonalize must be False or 'pairwise', got {orthogonalize!r}."
+        )
     if method in _SPECTRAL_METHODS:
         if sfreq is None:
             raise ValueError(f"method={method!r} requires ``sfreq`` to be given.")
@@ -109,6 +127,17 @@ def _validate_conn_params(
             raise ValueError(
                 f"method={method!r} requires a frequency band ``fmin`` and ``fmax``."
             )
+        for name, edge in (("fmin", fmin), ("fmax", fmax)):
+            if np.ndim(edge) != 0:
+                raise ValueError(
+                    f"method={method!r} estimates one band per call, so ``{name}`` "
+                    f"must be a scalar, got {edge!r}. "
+                    "``spectral_connectivity_epochs`` would accept the sequence "
+                    "and return one matrix per band, but a connectivity matrix "
+                    "holds a single value per edge, so every band after the first "
+                    "would be dropped without a word. Call once per band and keep "
+                    "the matrices apart."
+                )
     elif sfreq is None and (
         envelope_lowpass is not None or envelope_resample is not None
     ):
@@ -181,11 +210,12 @@ def _envelope_corr_matrix(
     single epoch), including its pairwise-orthogonalisation variant; the
     envelope smoothing of Nunes et al. (2020) is inserted between taking the
     Hilbert magnitude and correlating.
+
+    ``orthogonalize`` is ``False`` or ``'pairwise'``. The check for that lives
+    in :func:`_validate_conn_params` rather than here, so that it fires at the
+    public entry point instead of after a whole sweep of pairwise beamformers
+    has been solved for a run that was never going to finish.
     """
-    if orthogonalize not in (False, "pairwise"):
-        raise ValueError(
-            f"orthogonalize must be False or 'pairwise', got {orthogonalize!r}."
-        )
     analytic = _analytic_signal(np.asarray(epoch, float))
     mag = _prepare_envelope(
         np.abs(analytic), sfreq, envelope_lowpass, envelope_resample
@@ -298,6 +328,29 @@ def _pair_connectivity(
     return float(matrix[1, 0])
 
 
+def _check_orientations(orientations, n_sources):
+    """Validate ``orientations`` against ``sources``, returning a float array.
+
+    The rows are picked out *by position* in ``sources`` (see
+    :func:`_orientations_for`), so an array with the wrong number of rows is
+    not merely rejected late: a short one raises an opaque ``IndexError`` from
+    inside the pair loop, and one that is merely too long, or that was built
+    for a different source list, quietly orients a region along another
+    region's dipole and returns a connectivity matrix that looks entirely
+    ordinary. Only a check against ``sources``, before anything is built, makes
+    that visible.
+    """
+    if orientations is None:
+        return None
+    orientations = np.asarray(orientations, float)
+    if orientations.shape != (n_sources, 3):
+        raise ValueError(
+            f"orientations must be ({n_sources}, 3) for {n_sources} sources, got "
+            f"{orientations.shape}."
+        )
+    return orientations
+
+
 def _orientations_for(orientations, indices):
     """Select the orientation rows for ``indices`` (or ``None`` for fixed forward)."""
     if orientations is None:
@@ -381,6 +434,7 @@ def reconstruct_pairwise_mcmv(
     pair. This is intrinsic to pairwise MCMV.
     """
     sources = list(sources)
+    orientations = _check_orientations(orientations, len(sources))
     pairs = _as_pairs(len(sources))
     time_courses = []
     for i, j in pairs:
@@ -456,7 +510,12 @@ def pairwise_mcmv_connectivity(
     fmin, fmax : float | None
         Frequency band for the spectral methods; the metric is averaged over the
         band. Both are required for the spectral methods (the value is otherwise
-        per-frequency and ill-defined for a single edge).
+        per-frequency and ill-defined for a single edge), and both must be
+        scalars: one band per call. Unlike
+        :func:`mne_connectivity.spectral_connectivity_epochs` these do not take
+        a sequence of band edges, because a connectivity matrix has room for a
+        single value per edge; a sequence is rejected rather than quietly
+        reduced to its first band.
     orientations : ndarray, shape (n_sources, 3) | None
         Head-coordinate source orientations for a free-orientation forward, in
         the same order as ``sources``; ``None`` for a fixed-orientation forward.
@@ -470,12 +529,14 @@ def pairwise_mcmv_connectivity(
         ``'unit-gain'`` reconstructs physical source amplitude.
     rank : None | 'full' | 'info' | dict
         Rank handling passed through to :func:`~advance_beamlab.make_mcmv`.
-    orthogonalize : bool | 'pairwise'
+    orthogonalize : False | 'pairwise'
         Envelope leakage-orthogonalisation (Hipp et al., 2012). The default
         ``False`` gives *plain* envelope correlation, as MCMV already removes
         leakage; leakage-orthogonalisation (the symmetric-orthogonalisation
         baseline of Nunes et al., 2020) would double-correct and discard genuine
-        zero-lag coupling.
+        zero-lag coupling. ``'pairwise'`` is the only orthogonalisation
+        implemented, so a bare ``True`` is rejected rather than read as a
+        request for it.
     absolute : bool
         Whether to take the magnitude of the envelope correlation. The default
         ``False`` returns the *signed* Pearson correlation of the amplitude
@@ -510,10 +571,11 @@ def pairwise_mcmv_connectivity(
     if sfreq is None and method == "envelope":
         sfreq = float(info["sfreq"])
     _validate_conn_params(
-        method, sfreq, fmin, fmax, envelope_lowpass, envelope_resample
+        method, sfreq, fmin, fmax, envelope_lowpass, envelope_resample, orthogonalize
     )
     sources = list(sources)
     n = len(sources)
+    orientations = _check_orientations(orientations, n)
     pairs, time_courses = reconstruct_pairwise_mcmv(
         data,
         info,
@@ -665,7 +727,7 @@ def augmented_pairwise_mcmv_connectivity(
         Weight normalisation passed through to :func:`~advance_beamlab.make_mcmv`.
     rank : None | 'full' | 'info' | dict
         Rank handling passed through to :func:`~advance_beamlab.make_mcmv`.
-    orthogonalize : bool | 'pairwise'
+    orthogonalize : False | 'pairwise'
         Envelope leakage-orthogonalisation, as in
         :func:`pairwise_mcmv_connectivity`.
     absolute : bool
@@ -691,7 +753,7 @@ def augmented_pairwise_mcmv_connectivity(
     if sfreq is None and method == "envelope":
         sfreq = float(info["sfreq"])
     _validate_conn_params(
-        method, sfreq, fmin, fmax, envelope_lowpass, envelope_resample
+        method, sfreq, fmin, fmax, envelope_lowpass, envelope_resample, orthogonalize
     )
     sources = list(sources)
     n = len(sources)
@@ -704,6 +766,14 @@ def augmented_pairwise_mcmv_connectivity(
         raise ValueError(f"max_neighbours must be >= 0, got {max_neighbours}.")
     if float(radius) < 0:
         raise ValueError(f"radius must be >= 0 metres, got {radius}.")
+    # Keep what was coerced, rather than validating a coerced copy and passing
+    # the raw value on: ``max_neighbours`` becomes a slice bound inside
+    # :func:`_select_neighbours` and enters the order cap below, and ``radius``
+    # is compared against distances, so a count written as a float or a bound
+    # read from a text configuration would pass the check here and then fail
+    # deep in the neighbour search, long after the caller could tell why.
+    max_neighbours = int(max_neighbours)
+    radius = float(radius)
     significance = np.asarray(significance, dtype=bool)
     if significance.shape != (n, n):
         raise ValueError(
@@ -716,6 +786,7 @@ def augmented_pairwise_mcmv_connectivity(
         raise ValueError(
             f"positions must be ({n}, 3) for {n} sources, got {positions.shape}."
         )
+    orientations = _check_orientations(orientations, n)
 
     degree = significance.sum(axis=1)  # significant connections per region
     max_order = 2 + 2 * max_neighbours
@@ -929,7 +1000,7 @@ def ar1_surrogate_significance(
         Frequency band of the spectral metric, averaged over as in
         :func:`pairwise_mcmv_connectivity`; both are required for the spectral
         metrics and unused for ``method='envelope'``.
-    orthogonalize : bool | 'pairwise'
+    orthogonalize : False | 'pairwise'
         Envelope leakage-orthogonalisation; must match the value used for
         ``connectivity``, or the null will not be the null of the tested
         statistic. Only used for ``method='envelope'``.
@@ -1034,7 +1105,7 @@ def ar1_surrogate_significance(
     about 2.4 s for coherence and 1.8 s for the envelope.
     """
     _validate_conn_params(
-        method, sfreq, fmin, fmax, envelope_lowpass, envelope_resample
+        method, sfreq, fmin, fmax, envelope_lowpass, envelope_resample, orthogonalize
     )
     n_surrogates = int(n_surrogates)
     if n_surrogates < 2:

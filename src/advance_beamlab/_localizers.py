@@ -34,6 +34,7 @@ from mne.utils import _validate_type, logger, verbose
 from scipy.linalg import eigh, solve
 
 from ._mcmv import (
+    _MIN_WHITENED_GAIN,
     _align_channels,
     _check_noise_cov_required,
     _compute_mcmv_weights,
@@ -389,8 +390,10 @@ def scan_mcmv(
     Already-found grid locations are excluded from subsequent scans. Locations
     that cannot be evaluated are skipped rather than raising; they appear as NaN
     in ``maps``. Such a location is one where a (numerically) collinear
-    constraint makes the localizer singular, or where the leadfield is
-    non-finite.
+    constraint makes the localizer singular, where the leadfield is non-finite,
+    or where the leadfield is numerically silent in the whitened space, so that
+    the array cannot see the location at all and any value computed for it would
+    be a ratio of round-off.
 
     The sources are returned in the order the greedy search found them, which is
     not necessarily the order of decreasing strength (see
@@ -481,6 +484,23 @@ def scan_mcmv(
     if Rbar_w is not None:
         metrics["E"] = Rinv_w @ Rbar_w @ Rinv_w
 
+    # -- locations the array cannot see are not candidates ------------------ #
+    # A grid location whose whitened leadfield has collapsed to numerical
+    # silence -- the centre of a spherical model, a radial source seen by MEG
+    # only, a location whose sensors were all dropped as bad -- carries no
+    # signal for any localizer to rank. Its Table-1 value is then a ratio of
+    # round-off, which is as likely to come out large as small, and if such a
+    # location wins, the source that is reported is noise with a name.
+    # ``_MIN_WHITENED_GAIN`` is the same absolute threshold ``make_mcmv``
+    # refuses a constraint at, so a location the scan would return is always one
+    # a filter can be built for. A non-finite leadfield is deliberately left
+    # out of this test: it is handled where it always has been, by the
+    # per-location skip inside the loop.
+    gains = np.linalg.norm(G_w, axis=0)
+    if not fixed:  # three columns per location, silent only if all three are
+        gains = np.linalg.norm(gains.reshape(-1, 3), axis=1)
+    silent = gains <= _MIN_WHITENED_GAIN
+
     # -- sequential search -------------------------------------------------- #
     sources, orientations, pseudo_z, maps = [], [], [], []
     H_ref = np.empty((n_white, 0))  # whitened leadfields of found sources
@@ -491,6 +511,9 @@ def scan_mcmv(
         for i in range(n_loc):
             if i in sources:
                 continue  # never re-select a found location
+            if silent[i]:
+                n_skipped += 1
+                continue  # the array cannot see this location
             if fixed:
                 h, u = G_w[:, i], None
             else:
@@ -530,7 +553,8 @@ def scan_mcmv(
             )
         logger.debug(
             f"    Iteration {k + 1}/{n_sources}: {int(finite.sum())} of {n_loc} "
-            f"locations evaluated ({n_skipped} skipped as singular)."
+            f"locations evaluated ({n_skipped} skipped as singular or "
+            "invisible to the array)."
         )
         best = int(np.nanargmax(np.where(finite, vals, np.nan)))
         sources.append(best)

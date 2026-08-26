@@ -51,6 +51,20 @@ from mne.utils import _check_option, _validate_type, logger, verbose
 
 _ALLOWED_WEIGHT_NORM = ("unit-gain", "array-gain", "unit-noise-gain", None)
 
+# Smallest whitened leadfield norm a constrained source may have. Whitening is
+# what makes an absolute threshold possible at all: every whitened channel
+# carries unit noise variance, so the norm of a whitened leadfield column is the
+# field a unit-strength source produces measured in noise standard deviations, a
+# dimensionless number that does not move with the units the array happens to be
+# recorded in. A leadfield in SI units against a measured noise covariance lands
+# at 1e8 and above, so the threshold sits fourteen orders of magnitude below
+# anything real and is reached only by a column that has collapsed: a source at
+# the centre of a spherical model, a radial source seen by MEG alone, a location
+# whose sensors were all dropped. Such a source is not weak but invisible, and
+# the only filters satisfying its unit-gain constraint are enormous ones whose
+# output is amplified noise carrying a source's name.
+_MIN_WHITENED_GAIN = 1e-6
+
 
 def _cov_as_matrix(cov, ch_names):
     """Return the dense covariance over ``ch_names`` as a square ndarray.
@@ -121,7 +135,9 @@ class MCMVBeamformer(dict):
 # --------------------------------------------------------------------------- #
 # Numerical core (pure NumPy, no MNE objects). Unit-testable in isolation.
 # --------------------------------------------------------------------------- #
-def _compute_mcmv_weights(leadfield, cov_inv, *, cond_warn=1e8):
+def _compute_mcmv_weights(
+    leadfield, cov_inv, *, cond_warn=1e8, gain_tol=_MIN_WHITENED_GAIN
+):
     r"""Compute the unit-gain MCMV weight matrix from the linear algebra inputs.
 
     Implements Moiseev et al. (2011), Eq. (5):
@@ -138,12 +154,19 @@ def _compute_mcmv_weights(leadfield, cov_inv, *, cond_warn=1e8):
     leadfield : ndarray, shape (n_channels, n_sources)
         The joint forward matrix :math:`\mathbf{H}` whose ``i``-th column is the
         forward field :math:`\mathbf{h}_i` of the ``i``-th constrained source.
+        Both callers hand it over in the noise-whitened space, which is what
+        gives ``gain_tol`` an absolute scale to be measured against.
     cov_inv : ndarray, shape (n_channels, n_channels)
         The (regularised) inverse data covariance :math:`\mathbf{R}^{-1}`.
     cond_warn : float
         Condition-number threshold of :math:`\mathbf{H}^{\mathsf T}
         \mathbf{R}^{-1}\mathbf{H}` above which a numerical-stability warning is
         emitted.
+    gain_tol : float
+        Smallest whitened leadfield norm a constrained source may have. At or
+        below it the source is taken to be invisible to the array rather than
+        merely weak, and the constraint is refused (see the comment in the body
+        for why the condition number cannot see this).
 
     Returns
     -------
@@ -152,6 +175,9 @@ def _compute_mcmv_weights(leadfield, cov_inv, *, cond_warn=1e8):
 
     Raises
     ------
+    ValueError
+        If a constrained source's whitened leadfield is numerically silent, so
+        that no filter can estimate it.
     RuntimeError
         If :math:`\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\mathbf{H}` is singular.
         This happens when the constrained sources are (numerically) collinear,
@@ -160,6 +186,28 @@ def _compute_mcmv_weights(leadfield, cov_inv, *, cond_warn=1e8):
     """
     H = np.asarray(leadfield, dtype=np.float64)
     Rinv = np.asarray(cov_inv, dtype=np.float64)
+
+    # An absolute-scale guard on the constraints, which the condition number
+    # below cannot supply: cond(B) is invariant to the scale of H, so scaling a
+    # column into numerical silence leaves it at 1 when n == 1, and scaling every
+    # column leaves it unchanged for any n. A silent column is not an exotic
+    # input: in a spherical model the MEG leadfield vanishes exactly at the
+    # centre and, to round-off, for a radial source, and a channel selection can
+    # drop the only sensors that see a source. Left alone the solve returns
+    # weights of order 1/||h|| and says nothing (see ``_MIN_WHITENED_GAIN``).
+    gains = np.linalg.norm(H, axis=0)
+    silent = np.nonzero(gains <= gain_tol)[0]
+    if silent.size:
+        raise ValueError(
+            f"Constrained source(s) {silent.tolist()} (positions in the "
+            f"requested set) have a numerically silent leadfield: whitened norm "
+            f"{gains[silent].min():.3g} <= {gain_tol:g}. The array cannot see "
+            "them, so the requested filter would be pure noise amplification. "
+            "Check the source location and orientation -- a radial source, or "
+            "one at the centre of a spherical model, is invisible to MEG -- and "
+            "that the channels which do see it were not dropped as bad or "
+            "excluded by the noise covariance."
+        )
 
     # A = R^-1 H  (n_channels x n_sources)
     A = Rinv @ H
@@ -368,8 +416,12 @@ def _make_whitener(info, noise_cov, common_ch, rank):
         a global scaling that cancels from the unit-gain filter.
     common_ch : list of str
         Channels (in order) the whitener columns must align to.
-    rank : int | 'full'
-        Rank handling passed through to :func:`mne.cov.compute_whitener`.
+    rank : None | 'full' | 'info' | dict
+        Rank handling passed through to :func:`mne.cov.compute_whitener`, in
+        MNE's own convention (the whitener half of what ``_split_rank``
+        returns). A bare integer is deliberately absent: ``compute_whitener``
+        does not accept one, because the rank has to be resolved per sensor
+        type.
     """
     from mne import make_ad_hoc_cov
     from mne.cov import compute_whitener
@@ -489,13 +541,29 @@ def make_mcmv(
         Eq. (5) filter (the unit-gain / zero-gain constraint
         :math:`\mathbf{W}^{\mathsf T}\mathbf{H}=\mathbf{I}` holds on the raw
         leadfield). ``'array-gain'`` imposes
-        :math:`\mathbf{w}_i^{\mathsf T}\mathbf{l}_i = \lVert\mathbf{l}_i
-        \rVert` instead, by normalising each leadfield before the constraint:
-        the output is in measurement units rather than a dipole moment, and it
-        does not inherit unit-gain's bias towards deep sources, which arises
+        :math:`\mathbf{w}_i^{\mathsf T}\mathbf{h}_i =
+        \lVert\tilde{\mathbf{h}}_i\rVert` instead, with
+        :math:`\tilde{\mathbf{h}}_i` the *whitened* leadfield, by normalising
+        each leadfield before the constraint: the output is the source's field
+        across the array in units of the noise rather than a dipole moment, and
+        it does not inherit unit-gain's bias towards deep sources, which arises
         because a deep leadfield is small and the filter must amplify to reach
-        unit gain :footcite:`SekiharaNagarajan2008`. It is the depth-neutral
-        choice when no noise covariance is available to normalise against.
+        unit gain :footcite:`SekiharaNagarajan2008`. The norm has to be the
+        whitened one. Summed in the recorded units, squared leadfield entries
+        add volts to teslas to teslas per metre whenever the array mixes sensor
+        types, so the normalisation is not a physical quantity at all: it is
+        fixed by whichever type carries the larger numbers -- gradiometers over
+        magnetometers, EEG over MEG by orders of magnitude -- and it moves if
+        the same recording is expressed in T/cm instead of T/m. Whitening puts
+        every channel on one dimensionless unit-noise scale, the only scale on
+        which the types are commensurable, which is why MNE's own depth
+        weighting offers ``limit_depth_chs='whiten'`` and advises against the
+        raw-unit norm (:func:`mne.forward.compute_depth_prior`). The price is
+        that the amplitudes carry the noise level with them, so they are
+        comparable across analyses only while the noise covariance is. It
+        remains the depth-neutral choice when no noise covariance was measured:
+        the ad-hoc model then merely sets that scale, and for a single sensor
+        type it is one number common to every source.
         ``'unit-noise-gain'`` rescales each filter to unit Euclidean
         norm *in the whitened space* :footcite:`SekiharaNagarajan2008`, which is
         MNE's definition and is used by :func:`mne.beamformer.make_lcmv`. That
@@ -531,7 +599,8 @@ def make_mcmv(
         If inputs are inconsistent or mathematically invalid: non-unique or
         out-of-range ``sources``; missing/forbidden ``orientations`` for the
         forward type; no common channels; non-finite covariance; a beamformer
-        order exceeding the data rank.
+        order exceeding the data rank; a constrained source whose whitened
+        leadfield is numerically silent, so that the array cannot see it.
     RuntimeError
         If :math:`\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\mathbf{H}` is singular:
         the constrained sources are numerically collinear (coincident location
@@ -689,16 +758,31 @@ def make_mcmv(
         # w'l = ||l||, i.e. the leadfield is normalised before the constraint is
         # imposed. Unit-gain returns a dipole moment, which is biased towards
         # deep sources because a deep leadfield is small and the filter has to
-        # amplify to reach unit gain; array-gain returns a value in measurement
-        # units instead, which is the depth-neutral choice when a noise
-        # covariance is not available to normalise against
-        # :footcite:`SekiharaNagarajan2008`.
-        # The norm of the *raw* leadfield, not the whitened one. The returned
-        # weights act on raw sensor data, so that is the leadfield the
-        # constraint has to be stated against; using the whitened norm would
-        # fold the whitener's own scale into the output and the units would no
-        # longer be the array's.
-        scale = np.linalg.norm(H, axis=0)  # one norm per constrained source
+        # amplify to reach unit gain; array-gain divides that amplification back
+        # out :footcite:`SekiharaNagarajan2008`.
+        #
+        # The norm is taken on the *whitened* leadfield. A norm of the raw one
+        # sums squared entries across the whole array, and as soon as the array
+        # mixes sensor types those entries carry different units: the sum is
+        # V^2 + T^2 + (T/m)^2, which is not a physical quantity, and it is
+        # dominated by whichever type happens to have the larger numbers. On
+        # MNE's ``sample`` MEG+EEG array the 59 electrodes account for very
+        # nearly all of the raw norm and the 305 MEG channels for almost none of
+        # it, so what the caller asked to be a depth normalisation for the array
+        # is one for a single sensor type -- and it would change if the same
+        # recording were expressed in T/cm rather than T/m. Nor is the
+        # difference a common rescaling that would cancel from comparisons: the
+        # raw and whitened norms disagree by up to a factor of twenty across
+        # that source space, which moves sources relative to one another.
+        # Whitening re-expresses every channel in unit-noise units, the one
+        # scale on which the types are commensurable, and the normalisation it
+        # gives is invariant to those unit conventions. It is the same reasoning
+        # behind MNE's ``limit_depth_chs='whiten'`` depth weighting, whose
+        # documentation warns that the raw units bias the weighting towards
+        # whichever channel type has the largest values in SI. The cost, stated
+        # plainly in the parameter documentation, is that the amplitudes are in
+        # units of the noise rather than of the array.
+        scale = np.linalg.norm(H_w, axis=0)  # one norm per constrained source
         weights_w = weights_w * scale[:, None]
 
     if weight_norm == "unit-noise-gain":

@@ -200,3 +200,58 @@ def test_ties_with_the_observed_statistic_are_counted():
     ties = int(np.isclose(null, np.abs(same.mean(axis=0)).max()).sum())
     assert ties == 2, f"expected an arrangement and its mirror to tie, got {ties}"
     assert p.min() == pytest.approx(2.0 / 2**7, rel=1e-9)
+
+
+def test_the_floor_is_one_over_the_number_of_draws():
+    """The docstring names a floor, so the floor is worth pinning.
+
+    Two conventions are in circulation: counting the observed arrangement among
+    the ``n`` draws, which floors the p-value at ``1 / n``, and adding it to
+    ``n`` further ones, which floors it at ``1 / (n + 1)``. This function does
+    the first, and a reader comparing its numbers with a published threshold
+    needs the documentation to say which.
+    """
+    # Sampled: the observed arrangement is the first draw, and an effect this
+    # large means nothing else reaches it.
+    rng = np.random.default_rng(13)
+    images = rng.standard_normal((11, 40)) + 9.0
+    _, sampled, null = permutation_image_test(
+        images, n_permutations=100, tail=1, seed=0, verbose=False
+    )
+    assert null.size == 100
+    assert sampled.min() == pytest.approx(1.0 / 100, rel=1e-12)
+
+    # Exhaustive: the same floor, over the flips that were actually enumerated
+    # rather than over n_permutations.
+    _, exact, null = permutation_image_test(
+        np.ones((9, 3)), n_permutations=1024, tail=1, seed=0, verbose=False
+    )
+    assert null.size == 2**9
+    assert exact.min() == pytest.approx(1.0 / 2**9, rel=1e-12)
+
+
+def test_the_blocked_maximum_is_the_maximum_of_the_whole_surface():
+    """Reducing the surface a block of draws at a time must change nothing.
+
+    Under ``'maximum'`` the permutation surface is never held whole -- one
+    number per draw survives it, and holding the rest is what makes a
+    whole-brain test run out of memory. The blocking is only defensible if it
+    is arithmetically invisible, so compare it against the surface itself,
+    which ``'none'`` returns for the same draws.
+    """
+    rng = np.random.default_rng(14)
+    images = rng.standard_normal((10, 4000))  # wide enough to need many blocks
+    images[:, 500:505] += 1.4
+    obs, p, blocked = permutation_image_test(
+        images, n_permutations=512, correction="maximum", seed=8, verbose=False
+    )
+    _, _, surface = permutation_image_test(
+        images, n_permutations=512, correction="none", seed=8, verbose=False
+    )
+    np.testing.assert_array_equal(blocked, surface.max(axis=1))
+
+    # And the counting: a sorted null is searched rather than compared against
+    # every source, which would rebuild an array of the size just avoided. The
+    # count has to match the comparison exactly, ties included.
+    counted = (blocked[None, :] >= np.abs(obs)[:, None]).sum(axis=1) / blocked.size
+    np.testing.assert_array_equal(p, np.clip(counted, 1.0 / blocked.size, 1.0))

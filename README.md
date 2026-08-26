@@ -330,10 +330,24 @@ Two consequences follow:
 
 ## 6. Weight normalisation
 
+Three normalisations are accepted, and the choice decides what the reconstructed
+numbers *mean*:
+
 - **`unit-gain`** (`weight_norm="unit-gain"` or `None`): the literal Eq. 5
   filter. The gain constraint $\mathbf{W}^{\mathsf T}\mathbf{H}=\mathbf{I}$ holds
   on the raw leadfield, so reconstructed amplitudes are in physical source
   units. Use it when amplitudes/units matter.
+- **`array-gain`**: normalise each leadfield column before imposing the
+  constraint, so that $\mathbf{w_i}^{\mathsf T}\mathbf{h_i}=\lVert\mathbf{h_i}\rVert$
+  instead. The output is then in measurement units rather than a dipole moment,
+  and in exchange it sheds unit-gain's bias towards deep sources: a deep leadfield
+  column is small, so a unit-gain filter has to amplify to reach unit gain, and
+  the reconstruction is inflated wherever the forward is weak. It is the
+  depth-neutral choice when there is no noise covariance to normalise against.
+  The norm taken is the *raw* leadfield's, not the whitened one, since the
+  returned filters act on raw sensor data; whitened norms would fold the
+  whitener's own scale into the output and the units would stop being the
+  array's.
 - **`unit-noise-gain`**: rescale each filter so that
   $\mathbf{w_i}^{\mathsf T}\mathbf{C_n}\mathbf{w_i}=1$, i.e. unit output noise.
   Because the solve is in whitened space this is exactly unit Euclidean norm of
@@ -468,11 +482,17 @@ second follows the paper:
 - *Virtual sensors.* The whitened leadfield is reduced by a truncated SVD to the
   $q$ directions carrying a chosen fraction of its variance (`pct_var`; the
   paper keeps 90%, or 95% for its real data, while the default here is a more
-  conservative 0.99). On the 306-channel `sample` array that default gives
-  $q=29$ magnetometer, $q=43$ gradiometer and $q=76$ combined-MEG virtual
-  sensors. The $M^2\times M^2$ correlation Gram would be
-  $93\text{k}\times 93\text{k}$ for a 306-channel array; in the $q$-dimensional
-  working space it is a few thousand square.
+  conservative 0.99). Because the SVD is taken on the *whitened* leadfield, $q$
+  is a property of the noise model as much as of the array, so it is worth
+  quoting a configuration rather than a number: on the `sample` MEG array (305
+  good channels, the oct-6 free-orientation forward) with the dataset's own
+  `sample_audvis-cov.fif` as `noise_cov`, `pct_var=0.99` gives $q=68$ over the
+  102 magnetometers, $q=74$ over the 203 gradiometers and $q=85$ over all 305.
+  Substituting the ad-hoc noise model (`noise_cov=None`) drops the single-type
+  counts to $q=31$ and $q=48$; combined MEG has no ad-hoc case, since it
+  refuses to run without a `noise_cov` at all. The $M^2\times M^2$ correlation
+  Gram would be $93\text{k}\times 93\text{k}$ for a 306-channel array; in the
+  $q$-dimensional working space it is a few thousand square.
 
 Write $\mathbf{B}=\mathbf{U_q}^{\mathsf T}\mathbf{W}$ for the composite operator
 (whiten by $\mathbf{W}$, then keep the $q$ principal directions $\mathbf{U_q}$ of
@@ -559,11 +579,25 @@ simulations to recordings:
   projector on a decimated source space (a few thousand vertices as in the
   paper, or a cortical label), then reuse it across datasets sharing that
   forward. The `recipsiicos` projector uses only the auto-products and stays
-  linear in $N$. Runtime scales with $N^2$; *memory* does not. The cross-product
-  columns are accumulated into the Gram in blocks whose size is chosen from a
-  64 MiB budget, so peak memory is set by the $q^2\times q^2$ Gram itself
-  (99 MiB at $q=60$, 1.5 GiB at $q=120$). Keep $q$ modest: it, not $N$, is what
-  can make the projector unaffordable.
+  linear in $N$.
+- *Budget memory on $q$, and budget for nine Grams rather than one.* The
+  cross-product columns are accumulated into the Gram in blocks whose size is
+  chosen from a 64 MiB budget, so $G_c$ itself, with its $O(N^2)$ columns of
+  length $q^2$, is never held. What is held is a working set of
+  $q^2\times q^2$ operators, and at the peak of the `whitened` build nine of
+  them are live at once: the correlation Gram, the power Gram, the power
+  whitener and its inverse, the whitened correlation Gram and its eigenvectors,
+  the identity of Eq. 17, the rank-$K$ outer product subtracted from it, and
+  the projector being assembled. The number to size $q$ against is therefore
+  $9\times 8q^4$ bytes, not $8q^4$. A single Gram is 99 MiB at $q=60$ and
+  1.5 GiB at $q=120$; the measured peak in arrays alone, on a 200-source grid,
+  is 0.9 GiB at $q=60$ and 2.8 GiB at $q=80$, with LAPACK's own workspace on
+  top of that. Nor is memory quite independent of $N$: the auto-product matrix
+  is $q^2\times 3N$ for a free-orientation forward and is materialised twice as
+  it is stacked, which is why the `recipsiicos` projector (whose only large
+  array it is) peaks at 135 MiB on 200 sources at $q=60$ but 1.5 GiB on 3000.
+  Even so, $q$ enters as the fourth power, so it, not $N$, is what makes the
+  projector unaffordable.
 - *The rank curve needs a forward with rich leadfield structure.* On a
   single-shell sphere model the tangential leadfields are so low-rank that the
   power subspace collapses to a handful of directions and the curve degenerates.
@@ -709,7 +743,8 @@ $$ W(n{+}1) = W(n) - \mu\big(R W(n) - \beta_1 G - \beta_2 X u^\mathsf{T}\big), $
 
 with $\beta_1$ eliminated via the gain constraint (which the update provably
 maintains at every step) and $\beta_2 = P\beta_1$; the template lag $j^\ast$ is
-fixed once per segment, seeded from an initial LCMV output.
+seeded from an initial LCMV output and then held fixed, rather than
+re-estimated as the descent runs.
 
 **This implementation solves that descent at its fixed point instead of stepping
 towards it.** Setting the update to zero gives $RW=(G+P\,Xu^\mathsf{T})\beta_1$, and
@@ -734,6 +769,19 @@ contrast, localises on output power). The same correlation also picks the
 orientation at each grid point. The output variance $\tfrac12 W^\mathsf{T}RW$ is the
 beamformer's minimisation objective, not the localizer; it is returned per grid point
 as a diagnostic only and nothing in the scan reads it.
+
+**What $j^\ast$ is fixed *per*.** The paper's rule, on the confirmed reading, is
+one lag per grid point. Here a separate lag is fixed for each **leadfield
+column**, that is, for each grid point *and* each orientation: identical to the
+paper for a fixed-orientation forward, which has one column per grid point, and
+an extension of it for a free-orientation one. The extension is what the scan's
+structure asks for: the three columns of a grid point are seeded and evaluated
+independently, and the orientation is only chosen afterwards, from the template
+match itself, so there is no single "the output" at a grid point to align the
+template against beforehand. The difference is not academic. On a 93-point
+free-orientation sphere fixture, not one grid point had its three orientations
+settle on the same lag, and `ABMCResult.lag` reports the winning orientation's
+lag at each grid point rather than a lag the three of them shared.
 
 The ratio $P$ trades the two constraints: too small and the template term vanishes
 (→ plain LCMV); too large and the weights blow up (the paper's
@@ -766,8 +814,8 @@ only on the data) and reusing it for every template.
 | `localizer` (scan_mcmv) | Which scanning statistic | `mai` = robust, broad; `mpz` = sharper but noisier; `mer`/`rmer` = phase-locked/evoked (need `evoked_cov`). |
 | `noise_cov` | Whitening model | A measured `noise_cov` is essential for **mixed sensor types** and for a meaningful `unit-noise-gain`; `None` uses an ad-hoc per-type model (fine for a single sensor type). |
 | `reg` | Diagonal loading of the (whitened) covariance, as a fraction of its mean eigenvalue | Larger `reg` → more stable inverse, smoother maps, lower resolution and slightly biased amplitudes; `reg=0` is the exact but fragile inverse. Default `0.05`, matching `make_lcmv`. |
-| `weight_norm` | Output scaling | `unit-gain` preserves physical amplitude; `unit-noise-gain` equalises the noise floor (better maps, no amplitude). |
-| `rank` | Numerical rank of the whitener **and** the covariance inverse | Use an integer after SSP/ICA/SSS (data are rank-deficient); `'full'` assumes full rank and will over-fit noise if the data are not. |
+| `weight_norm` | Output scaling | `unit-gain` preserves physical amplitude; `array-gain` gives up the dipole moment for measurement units but drops unit-gain's depth bias; `unit-noise-gain` equalises the noise floor (better maps, no amplitude). |
+| `rank` | Numerical rank of the whitener **and** the covariance inverse | Leave at `None` after SSP/ICA/SSS (data are rank-deficient): it auto-detects per sensor type. To pin it, pass a per-type dict such as `{'meg': 60}`; a bare integer raises `TypeError`, because a rank has to be resolved per sensor type. `'full'` assumes full rank and will over-fit noise if the data are not. |
 
 ## `make_recipsiicos_cov` / `make_recipsiicos_lcmv`
 
@@ -775,9 +823,9 @@ only on the data) and reusing it for every template.
 |---|---|---|
 | `rank` (the projection rank $K$) | Size of the retained power subspace (`recipsiicos`) or removed correlation subspace (`whitened`), in the $q^2$-dimensional virtual-sensor space | The single most important knob. Too small → the projector removes real power (over-smoothing, lost sources); too large → correlation leaks back and cancellation returns. Use `recipsiicos_rank_curve` (optionally `return_optimal=True` for the 45° $K^*$) and pick $K$ near that point. |
 | `method` | Which projector | `recipsiicos` (project onto power) is simpler; `whitened` (project away from correlation in power-whitened space) spares source power better and is usually preferred for real data. |
-| `pct_var` / `n_virtual` | Virtual-sensor count $q$ | Fraction of whitened-leadfield variance kept (default 0.99), or an explicit count. Fewer virtual sensors → smaller and faster $M^2$-space but coarser subspace separation; too few and the power subspace fills the space, leaving the projector nothing to remove. |
+| `pct_var` / `n_virtual` | Virtual-sensor count $q$ | Fraction of whitened-leadfield variance kept (default 0.99), or an explicit count. Fewer virtual sensors → smaller and faster $M^2$-space but coarser subspace separation; too few and the power subspace fills the space, leaving the projector nothing to remove. This is also the memory knob: the projector build holds about nine $q^2\times q^2$ operators at once, so budget $9\times 8q^4$ bytes (Section 10). |
 | `noise_cov` | Whitening model | Whitens per sensor type; **essential for mixed sensor types**. `None` uses an ad-hoc per-type model (a global scaling for a single type, which leaves the projector subspaces unchanged). |
-| `whitener_rank` | Numerical rank of the whitener | Use an integer after SSP/ICA/SSS (data are rank-deficient); `'full'` assumes full rank. |
+| `whitener_rank` | Numerical rank of the whitener | Leave at `None` after SSP/ICA/SSS (data are rank-deficient): it auto-detects per sensor type. To pin it, pass a per-type dict such as `{'meg': 60}`; as for `make_mcmv`, a bare integer raises `TypeError`. `'full'` assumes full rank. |
 | `reg` | Tikhonov loading of the working-space LCMV inverse (and the whitening ridge for `whitened`) | Same trade-off as MCMV's `reg`: stability vs resolution. Default `0.05`. |
 | `pick_ori`, `weight_norm`, `reduce_rank`, `inversion` | Orientation and normalisation of the working-space LCMV | Reuse MNE's own filter computation, so they behave exactly as in `make_lcmv`, including that **free-orientation MEG needs `reduce_rank=True`** (the radial-silent leadfield is rank-deficient). |
 

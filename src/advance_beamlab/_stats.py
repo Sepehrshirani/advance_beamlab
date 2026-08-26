@@ -40,6 +40,26 @@ from mne.utils import _check_option, _validate_type, logger, verbose
 
 _CORRECTIONS = ("maximum", "none")
 
+# How much of the permutation surface to hold at once, in doubles, when only
+# the maximum over it survives. Four mebibytes is small enough to be invisible
+# on any machine that can hold the images themselves, and large enough that
+# blocking the matrix product costs no measurable time.
+_MAX_BLOCK_ELEMENTS = 1 << 19
+
+
+def _fold_to_tail(values, tail):
+    """Orient a statistic onto the side the tail is testing, in place.
+
+    This rewrites its argument, so it must only ever be handed a temporary: the
+    two-sided fold is exactly the step that would otherwise double the memory a
+    permutation surface costs, and copying it back would defeat the point.
+    """
+    if tail == 0:
+        return np.abs(values, out=values)
+    if tail == -1:
+        return np.negative(values, out=values)
+    return values
+
 
 @verbose
 def permutation_image_test(
@@ -83,14 +103,19 @@ def permutation_image_test(
     observed : ndarray, shape (n_sources,)
         The observed statistic, the mean over observations.
     p_values : ndarray, shape (n_sources,)
-        One p-value per source. Never zero: with ``n`` draws the smallest
-        attainable value is ``1 / (n + 1)``, because the observed arrangement is
-        one of the arrangements the null admits and counting it is what keeps
-        the test valid :footcite:`NicholsHolmes2002`.
+        One p-value per source. Never zero: the observed arrangement is one of
+        the arrangements the null admits, and counting it is what keeps the test
+        valid :footcite:`NicholsHolmes2002`. It is counted *among* the draws
+        rather than alongside them -- a sampled null uses the observed
+        arrangement as its first draw, an exhaustive one contains it by
+        construction -- so with ``n`` draws the smallest attainable value is
+        ``1 / n``.
     null : ndarray, shape (n_permutations,) or (n_permutations, n_sources)
         The null distribution actually used -- one maximum per permutation under
         ``'maximum'``, or the full surface under ``'none'``. Returned because a
-        p-value from a distribution nobody looked at is worth very little.
+        p-value from a distribution nobody looked at is worth very little. Mind
+        the second shape: ``'none'`` holds a whole image per permutation, which
+        on a whole-brain source space is far larger than the data it came from.
 
     Notes
     -----
@@ -99,11 +124,36 @@ def permutation_image_test(
     is the relabelling that expresses it. This assumes the contrast is symmetric
     under the null, which is what a within-subject difference image is.
 
-    The smallest attainable p-value is set by ``n_permutations``: no number of
+    The smallest attainable p-value is set by the number of draws: no number of
     sources can make a result more significant than the resolution of the null
-    supports. If the smallest p-value in the image equals ``1 / (n + 1)``, the
-    test has run out of resolution and more permutations, not more
-    interpretation, is the answer.
+    supports. With ``n`` draws that floor is ``1 / n``, the observed arrangement
+    being one of the ``n``. Accounts that quote ``1 / (n + 1)`` instead are
+    adding the observed arrangement to ``n`` further ones; the difference is a
+    single draw's worth of resolution rather than one of principle, but it is
+    worth knowing which convention a number was produced under before comparing
+    two of them. If the smallest p-value in the image sits on the floor, the
+    test has run out of resolution, and more permutations -- not more
+    interpretation -- is the answer.
+
+    The statistic is the raw mean over observations, which is a deliberate
+    choice with a cost worth stating. The single-threshold maximum-statistic
+    test controls the family-wise rate *exactly* when the statistic is pivotal,
+    that is, when its null distribution is the same at every location
+    :footcite:`NicholsHolmes2002`. A mean is not: a source whose variance across
+    observations is large has a wider null than a quiet one, so the single
+    threshold read off the maximum is set by the noisiest locations and the test
+    is conservative at all the others. Where that variance is roughly uniform
+    across the image this costs little; where it is not -- deep sources against
+    superficial ones, or an image spanning regions the filter resolves very
+    differently -- a real effect at a quiet location can be missed entirely.
+    The remedy is available without leaving this function: divide each source's
+    column by its root-mean-square over observations before passing the images
+    in. Sign flipping leaves that denominator untouched, so the test stays
+    exact, and the resulting statistic is a monotone function of the one-sample
+    t at that location, which is pivotal. The mean is what is computed by
+    default because it is the quantity the image is already in, and because a
+    per-source variance estimated from a handful of subjects is itself unstable
+    enough to make the studentised version the worse choice in a small study.
 
     Examples
     --------
@@ -154,21 +204,44 @@ def permutation_image_test(
         # p-value is zero, which no finite permutation test can justify.
         signs[0] = 1.0
 
-    means = (signs @ data) / n_obs  # (n_draws, n_sources)
-
+    # Out of place, deliberately: `observed` is returned to the caller as the
+    # image's own statistic, so it must survive the fold unchanged.
     if tail == 0:
-        stat, null_stat = np.abs(observed), np.abs(means)
+        stat = np.abs(observed)
     elif tail == 1:
-        stat, null_stat = observed, means
+        stat = observed
     else:
-        stat, null_stat = -observed, -means
+        stat = -observed
 
     if correction == "maximum":
-        null = null_stat.max(axis=1)  # (n_draws,)
-        p_values = (null[None, :] >= stat[:, None]).sum(axis=1) / n_draws
+        # Only one number per draw survives the maximum, so the surface is
+        # built a block of draws at a time and reduced as it goes. Held whole
+        # it is an (n_draws, n_sources) array of doubles, and the two-sided
+        # fold would cost that again; on a whole-brain image at a thousand
+        # permutations that is the difference between a test that runs and one
+        # that cannot be started. Blocking is over rows of a product whose
+        # contraction runs over observations alone, so every entry is formed
+        # from the same terms as before and the p-values are identical, not
+        # merely close.
+        block = max(1, min(n_draws, _MAX_BLOCK_ELEMENTS // max(n_src, 1)))
+        null = np.empty(n_draws)
+        for start in range(0, n_draws, block):
+            stop = min(start + block, n_draws)
+            part = (signs[start:stop] @ data) / n_obs
+            null[start:stop] = _fold_to_tail(part, tail).max(axis=1)
+        # Counting by comparison would build an (n_sources, n_draws) boolean
+        # array and give the saving straight back. A sorted null gives the same
+        # count exactly: the number of draws at or above a value is n_draws
+        # less the leftmost position it could be inserted at, which counts the
+        # ties that `>=` counts and that the test's validity rests on.
+        ordered = np.sort(null)
+        p_values = (n_draws - np.searchsorted(ordered, stat, side="left")) / n_draws
     else:
-        null = null_stat
-        p_values = (null_stat >= stat[None, :]).sum(axis=0) / n_draws
+        # Uncorrected, each source is judged against its own column, so the
+        # whole surface is needed here -- and is what gets returned. The fold
+        # is in place because the surface is a temporary nobody else holds.
+        null = _fold_to_tail((signs @ data) / n_obs, tail)
+        p_values = (null >= stat[None, :]).sum(axis=0) / n_draws
 
     p_values = np.clip(p_values, 1.0 / n_draws, 1.0)
     logger.info(

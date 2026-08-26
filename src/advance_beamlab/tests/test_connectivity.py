@@ -1133,6 +1133,147 @@ def test_augmented_validates_shapes(scenario):
         )
 
 
+def test_orientations_must_match_the_sources(scenario):
+    """A wrong-sized ``orientations`` is refused before anything is built.
+
+    The rows are taken by position in ``sources``, so a mismatched array is not
+    a harmless one: too few rows raise an ``IndexError`` from inside the pair
+    loop, with an index nobody can trace back to the argument, and too many --
+    or an array assembled for a different source list -- quietly orient a
+    region along another region's dipole and return a connectivity matrix that
+    looks perfectly ordinary. ``data``, ``forward`` and ``data_cov`` are
+    ``None`` here to pin the check ahead of the beamformers: nothing may be
+    solved before the caller is told.
+    """
+    d = scenario
+    n = len(d["sources"])
+    for n_rows in (n - 1, n + 1):
+        bad = np.tile([0.0, 0.0, 1.0], (n_rows, 1))
+        with pytest.raises(ValueError, match="orientations must be"):
+            reconstruct_pairwise_mcmv(
+                None, d["info"], None, None, d["sources"], orientations=bad
+            )
+        with pytest.raises(ValueError, match="orientations must be"):
+            pairwise_mcmv_connectivity(
+                None, d["info"], None, None, d["sources"], orientations=bad
+            )
+        with pytest.raises(ValueError, match="orientations must be"):
+            augmented_pairwise_mcmv_connectivity(
+                None,
+                d["info"],
+                None,
+                None,
+                d["sources"],
+                np.zeros((n, n)),
+                np.zeros((n, n), bool),
+                positions=d["positions"],
+                orientations=bad,
+            )
+
+
+def test_spectral_band_must_be_a_single_scalar_band(scenario):
+    """A sequence of band edges would be reduced to its first band in silence.
+
+    :func:`mne_connectivity.spectral_connectivity_epochs` accepts tuples and
+    returns one matrix per band, but a connectivity matrix here has room for a
+    single value per edge, so a caller asking for alpha and beta in one call
+    would get alpha back and never learn that beta had been dropped.
+    """
+    d = scenario
+    with pytest.raises(ValueError, match="estimates one band per call"):
+        pairwise_mcmv_connectivity(
+            None,
+            d["info"],
+            None,
+            None,
+            d["sources"],
+            method="coh",
+            sfreq=SFREQ,
+            fmin=(8.0, 20.0),
+            fmax=(12.0, 30.0),
+        )
+    with pytest.raises(ValueError, match="estimates one band per call"):
+        ar1_surrogate_significance(
+            np.zeros((2, 2)),
+            np.zeros((2, 2, 400)),
+            method="coh",
+            sfreq=SFREQ,
+            fmin=(8.0, 20.0),
+            fmax=(12.0, 30.0),
+        )
+
+
+def test_orthogonalize_true_is_rejected(scenario):
+    """``True`` is not a value any of these estimators can honour.
+
+    Pairwise orthogonalisation is the only one implemented, so ``True`` could
+    only be read as a guess at ``'pairwise'`` -- a different estimator, and one
+    that double-corrects data the MCMV has already unmixed. It is refused at
+    the entry point, with ``data``, ``forward`` and ``data_cov`` ``None`` here
+    to pin that no beamformer is solved before the caller hears about it.
+    """
+    d = scenario
+    n = len(d["sources"])
+    with pytest.raises(ValueError, match="orthogonalize must be False"):
+        pairwise_mcmv_connectivity(
+            None, d["info"], None, None, d["sources"], orthogonalize=True
+        )
+    with pytest.raises(ValueError, match="orthogonalize must be False"):
+        augmented_pairwise_mcmv_connectivity(
+            None,
+            d["info"],
+            None,
+            None,
+            d["sources"],
+            np.zeros((n, n)),
+            np.zeros((n, n), bool),
+            positions=d["positions"],
+            orthogonalize=True,
+        )
+    with pytest.raises(ValueError, match="orthogonalize must be False"):
+        ar1_surrogate_significance(
+            np.zeros((2, 2)), np.zeros((2, 400)), sfreq=SFREQ, orthogonalize=True
+        )
+
+
+def test_max_neighbours_and_radius_are_used_as_they_were_validated(scenario):
+    """The run must use the values the validation coerced, not the raw ones.
+
+    ``max_neighbours`` is checked through ``int()`` and ``radius`` through
+    ``float()``, so a count written as ``1.0`` and a bound read out of a text
+    configuration both pass. If the raw value travels on from there,
+    ``max_neighbours`` arrives at the neighbour search as a slice bound and
+    ``radius`` as the right-hand side of a distance comparison, and the run
+    dies with a ``TypeError`` about slice indices or numpy loops -- nowhere
+    near the argument that caused it, and only for the callers whose data
+    happen to have a significant edge to augment.
+    """
+    d = scenario
+    sig = np.zeros((4, 4), bool)
+    sig[0, 1] = sig[1, 0] = True
+    sig[2, 3] = sig[3, 2] = True  # every region ends up with degree 1
+    args = (
+        d["evoked"],
+        d["info"],
+        d["fwd"],
+        d["dcov"],
+        d["sources"],
+        np.zeros((4, 4)),
+        sig,
+    )
+    kwargs = dict(positions=d["positions"], method="envelope", noise_cov=d["ncov"])
+    coerced = augmented_pairwise_mcmv_connectivity(
+        *args, radius="0.2", max_neighbours=1.0, **kwargs
+    )
+    plain = augmented_pairwise_mcmv_connectivity(
+        *args, radius=0.2, max_neighbours=1, **kwargs
+    )
+    # The augmented edges were re-estimated off a zero matrix, so a value that
+    # moved away from zero is proof the neighbour search really ran.
+    assert plain[0, 1] != 0.0
+    assert_allclose(coerced, plain, rtol=0.0, atol=0.0)
+
+
 # --------------------------------------------------------------------------- #
 # Previously untested paths: free-orientation forwards, the default
 # ``positions``, and epoched input to the augmented estimator.

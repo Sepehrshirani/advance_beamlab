@@ -695,6 +695,32 @@ def test_scan_raises_when_no_location_can_be_evaluated(sphere_fwd):
         scan_mcmv(info, fwd, cov, localizer="mai", n_sources=1)
 
 
+def test_scan_never_ranks_a_location_the_array_cannot_see(sphere_fwd):
+    """A location with no leadfield left is dropped from the competition.
+
+    Here the source is in the data but every channel that saw it has gone, so
+    its leadfield is zero: the array cannot see the location at all. Nothing is
+    then left for a localizer to measure and its Table-1 value is a ratio of
+    round-off, which can come out as large as a real source's -- and the scan
+    would report, with a pseudo-Z beside it, a source made of noise, for which
+    :func:`make_mcmv` could not even build a filter. Such a location has to
+    leave the competition, which the map records as NaN.
+    """
+    fwd, info = sphere_fwd
+    fwd = deepcopy(fwd)
+    true_loc = 26
+    # The covariance is built while the location is still visible, so the source
+    # really is in the data; only the forward loses it.
+    cov = _implanted_cov(fwd, info, [true_loc], [[1.0, -1.0, 0.5]], snr=16.0)
+    fwd["sol"]["data"][:, 3 * true_loc : 3 * true_loc + 3] = 0.0
+
+    res = scan_mcmv(info, fwd, cov, localizer="mai", n_sources=1)
+    assert res["sources"] != [true_loc]
+    assert np.isnan(res["maps"][0][true_loc])
+    # Only that location left: every other one was still ranked.
+    assert np.isfinite(res["maps"][0]).sum() == fwd["nsource"] - 1
+
+
 @pytest.mark.parametrize("name", ["mai", "mpz", "mer", "rmer"])
 def test_orientation_dominant_component_is_never_negative(name):
     """The orientation's sign follows a fixed convention, not the eigensolver.

@@ -92,10 +92,11 @@ _RESOLUTIONS = ("1K", "2K", "5K", "10K", "75K")
 
 # The lead field is stored in microvolts per nanoampere-metre; MNE-Python's
 # forward operators are in volts per ampere-metre. The two differ by
-# 1e-6 V / 1e-9 A m = 1e3. See ``tests/test_fem.py::test_ny_head_units``, which
-# pins the resulting gains against an MNE BEM forward computed on fsaverage for
-# the same electrodes: both land at tens of V/(A m), as they must for a
-# 10 nA m cortical dipole to produce the textbook fraction of a microvolt.
+# 1e-6 V / 1e-9 A m = 1e3. See
+# ``tests/test_fem.py::test_units_are_volts_per_ampere_metre``, which pins the
+# resulting gains against an MNE BEM forward computed on fsaverage for the same
+# electrodes: both land at tens of V/(A m), as they must for a 10 nA m cortical
+# dipole to produce the textbook fraction of a microvolt.
 _UV_PER_NAM_TO_V_PER_AM = 1e3
 
 # Vertices 1..37191 of the 74382-node mesh are the left hemisphere and the
@@ -274,15 +275,18 @@ def ny_head_montage(path=None, *, verbose=None):
     by name.
 
     Not all 231 are on the scalp vault. The set includes four neck electrodes
-    (``Nk1``-``Nk4``, reaching 155 mm below the head-coordinate origin) and a
-    band of face and cheek positions (``Exx27``-``Exx34``), because the model
-    was built for transcranial stimulation targeting as well as for EEG, and
-    those inferior positions matter there. They are genuine scalp positions:
-    every electrode lies on the surface returned by :func:`ny_head_scalp` to
-    within its mesh resolution. A plot of the montage against the cortex alone
-    nevertheless makes them look like stray points floating below the brain.
-    Pass ``picks`` to :func:`read_ny_head_forward` to restrict the forward to
-    the electrodes you actually recorded.
+    (``Nk1``-``Nk4``, the lowest of them 111 mm below the head-coordinate
+    origin, and 155 mm below the origin of the MNI frame the model is supplied
+    in) and 64 face and cheek positions (``Ex1``-``Ex34``, ``Exx1``-``Exx34``,
+    ``Exz`` and ``Exxz``, with gaps in the numbering), because the model was
+    built for transcranial stimulation targeting as well as for EEG, and those
+    inferior positions matter there. Sixty-four is more than a quarter of the
+    array, not the handful an ``Ex`` prefix suggests. They are genuine scalp
+    positions: every electrode lies on the surface returned by
+    :func:`ny_head_scalp` to within its mesh resolution. A plot of the montage
+    against the cortex alone nevertheless makes them look like stray points
+    floating below the brain. Pass ``picks`` to :func:`read_ny_head_forward` to
+    restrict the forward to the electrodes you actually recorded.
 
     References
     ----------
@@ -546,9 +550,19 @@ def make_ny_head_info(sfreq=1000.0, path=None, *, verbose=None):
     their head-coordinate positions. Importantly, it also carries an average
     reference *projector*. The lead field is supplied in common average
     reference, so modelling data that is referenced differently would use the
-    wrong topographies; every inverse in MNE-Python (and every beamformer in
-    this package) refuses to run on EEG without that projector for exactly this
-    reason.
+    wrong topographies.
+
+    Use this rather than building an info by hand, because the safety net is
+    patchier than it looks. The beamformers in this package refuse EEG without
+    the projector, and MNE refuses it wherever an inverse meets a data object:
+    :func:`mne.minimum_norm.apply_inverse`, :func:`mne.beamformer.apply_lcmv`
+    and its Epochs and Raw forms all raise. The covariance route checks
+    nothing, and that is the route a beamformer power map is built on:
+    :func:`mne.beamformer.make_lcmv` followed by
+    :func:`mne.beamformer.apply_lcmv_cov` takes a projector-free info and
+    returns a map without complaint, and that map is the thing the missing
+    projector ruins -- see :func:`read_ny_head_forward` for how far the peak
+    moves.
 
     Parameters
     ----------
@@ -600,11 +614,21 @@ def _make_src(rr, nn, tris, vertno, hemi_id, subject):
         nuse=len(vertno),
         inuse=inuse,
         vertno=vertno,
-        # The remaining fields are the optional patch/distance information that
-        # ``mne.add_source_space_distances`` would fill in. MNE treats ``None``
-        # as "not computed", which is the honest value here.
+        # ``use_tris`` is the triangulation of the vertices actually in use,
+        # which MNE builds when it decimates a surface itself. The model's
+        # coarse meshes are vertex subsets chosen by its authors and the file
+        # carries no triangulation over them, so there is none to record. What
+        # that costs is ``mne.spatial_src_adjacency``, which raises without it,
+        # and with it the cluster-based statistics that need adjacency; the
+        # dense triangulation in ``tris`` is untouched, so plotting is not
+        # affected.
         nuse_tri=0,
         use_tris=None,
+        # These are the patch and distance information that
+        # ``mne.add_source_space_distances`` would fill in. MNE treats ``None``
+        # as "not computed", which is the honest value here; the visible
+        # consequence is that ``convert_forward_solution(use_cps=True)`` falls
+        # back to the raw vertex normals rather than patch-averaged ones.
         patch_inds=None,
         pinfo=None,
         nearest=None,
@@ -637,7 +661,9 @@ def read_ny_head_forward(
         the next, so a coarse mesh is a genuine subsampling of the same
         geometry rather than a different model. ``'10K'`` is a good default for
         beamforming, where the scan grid rarely needs to be finer than the
-        spatial resolution of EEG; ``'75K'`` reads a 412 MB lead field.
+        spatial resolution of EEG. ``'75K'`` reads a 137 MB lead field at the
+        default ``orientation='normal'`` and a 412 MB one at ``'free'``, the
+        three Cartesian components being stored separately.
     orientation : str
         ``'normal'`` (default) fixes each source perpendicular to the cortical
         surface, which is the physiologically motivated constraint and the one
@@ -807,7 +833,8 @@ def read_ny_head_forward(
     # A forward's info additionally records where the geometry came from. MNE
     # writes these fields verbatim in ``write_forward_solution``, so without
     # them the forward is usable in memory but cannot be saved to FIF. Saving
-    # it is how a user avoids re-reading a 412 MB lead field.
+    # it is how a user avoids re-reading a lead field that reaches 137 MB at
+    # ``'75K'``, and 412 MB with ``orientation='free'``.
     with info._unlock():
         info["mri_file"] = "ICBM-NY (New York Head)"
         info["mri_id"] = None

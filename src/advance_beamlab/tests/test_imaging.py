@@ -7,6 +7,8 @@ import pytest
 
 mne = pytest.importorskip("mne")
 
+from mne.utils import catch_logging  # noqa: E402
+
 from advance_beamlab import make_mcmv, power_image  # noqa: E402
 
 
@@ -221,3 +223,60 @@ def test_pseudo_t_carries_the_factor_of_two_it_is_defined_with(sphere):
     z_active = power_image(filters, active_cov, noise_cov=noise_cov, kind="pseudo-z")
     z_base = power_image(filters, base_cov, noise_cov=noise_cov, kind="pseudo-z")
     np.testing.assert_allclose(t, (z_active - z_base) / 2.0, rtol=1e-8)
+
+
+def test_a_silent_active_window_is_nan_rather_than_minus_inf(sphere):
+    """The log of a ratio of zero is not a very large decrease.
+
+    A filter that passes no power from the active window is as degenerate as
+    one that passes none from the control window, and the Notes promise ``nan``
+    for both. Left to itself the log returns ``-inf``, which survives every
+    ``isnan`` check a caller writes and takes the colour scale of the whole
+    image with it.
+    """
+    info, fwd = sphere
+    noise_cov, base_cov, active_cov = _covs(info, fwd)
+    filters = mne.beamformer.make_lcmv(
+        info, fwd, active_cov, reg=0.05, noise_cov=noise_cov, verbose=False
+    )
+    silent = active_cov.copy()
+    silent["data"] = np.zeros_like(silent["data"])
+    logged = power_image(
+        filters, silent, baseline_cov=base_cov, kind="pseudo-f", log_ratio=True
+    )
+    assert np.all(np.isnan(logged))
+    # The ratio itself is a genuine zero, though, so only the log is guarded.
+    raw = power_image(
+        filters, silent, baseline_cov=base_cov, kind="pseudo-f", log_ratio=False
+    )
+    np.testing.assert_array_equal(raw, np.zeros_like(raw))
+
+
+def test_verbose_says_what_the_image_came_to(sphere):
+    """A documented parameter that does nothing is worse than no parameter.
+
+    The count of undefined locations is the part that cannot be seen in a
+    thresholded image: an image that is largely ``nan`` is reporting a source
+    space the covariances could not support, not a weak effect.
+    """
+    info, fwd = sphere
+    noise_cov, _, active_cov = _covs(info, fwd)
+    filters = mne.beamformer.make_lcmv(
+        info, fwd, active_cov, reg=0.05, noise_cov=noise_cov, verbose=False
+    )
+    with catch_logging() as log:
+        power_image(filters, active_cov, noise_cov=noise_cov, verbose="info")
+    said = log.getvalue()
+    assert "pseudo-z image" in said
+    assert "0 undefined" in said
+
+    with catch_logging() as log:
+        power_image(filters, active_cov, noise_cov=noise_cov, verbose="error")
+    assert "pseudo-z image" not in log.getvalue()
+
+    # A degenerate filter is counted rather than passed over in silence.
+    zeroed = noise_cov.copy()
+    zeroed["data"] = np.zeros_like(zeroed["data"])
+    with catch_logging() as log:
+        img = power_image(filters, active_cov, noise_cov=zeroed, verbose="info")
+    assert f"{img.size} undefined" in log.getvalue()

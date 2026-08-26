@@ -59,6 +59,14 @@ modified sensor-space :class:`mne.Covariance` (for inspection and interop); and
 :func:`recipsiicos_rank_curve`, which characterises the single free parameter,
 the projection rank, and can also select it automatically.
 
+All three read the same three objects -- an :class:`mne.Info`, an
+:class:`mne.Forward` and an :class:`mne.Covariance` -- but in three different
+positional orders, of which only :func:`make_recipsiicos_lcmv` matches
+:func:`mne.beamformer.make_lcmv`'s ``(info, forward, data_cov)``. Reordering
+them now would break every existing positional call, so the orders stand and
+each function states its own; pass the three by keyword in any script that uses
+more than one of them.
+
 Notes
 -----
 Equation numbers in the comments refer to Kuznetsova et al. (2021).
@@ -740,6 +748,16 @@ def make_recipsiicos_cov(
     here to :func:`mne.beamformer.make_lcmv` with the same ``noise_cov`` would
     whiten a second time.
 
+    .. warning::
+        This function takes ``(data_cov, forward, info)`` positionally, the
+        reverse of :func:`make_recipsiicos_lcmv`, which follows
+        :func:`mne.beamformer.make_lcmv` in taking ``(info, forward, data_cov)``.
+        :func:`recipsiicos_rank_curve` differs again: ``(forward, info)``, with
+        ``data_cov`` keyword-only. Pass the three by keyword in any script that
+        uses more than one of these functions. A swapped call raises rather than
+        returning a wrong answer, because each of the three is checked against
+        its own class, but the message names the parameter and not the swap.
+
     Parameters
     ----------
     data_cov : instance of mne.Covariance
@@ -763,12 +781,19 @@ def make_recipsiicos_cov(
         Noise covariance used to whiten. If ``None``, an ad-hoc per-type model
         (:func:`mne.make_ad_hoc_cov`) is used; for a single sensor type this is
         a global scaling that leaves the projector subspaces unchanged.
-    whitener_rank : int | None | 'full'
-        Rank handling passed to :func:`mne.cov.compute_whitener`. The
-        default ``None`` auto-detects the covariance rank per sensor type
-        and drops the null space. This is required when SSP/SSS projectors make
-        the covariance rank-deficient, since ``'full'`` would instead invert the
-        near-null directions and yield an unstable whitener.
+    whitener_rank : None | 'info' | 'full' | dict
+        Rank handling passed to :func:`mne.cov.compute_whitener`, which takes
+        exactly these four forms. A bare integer is rejected: MNE resolves the
+        rank per sensor type, and a single number does not say which type it
+        belongs to. Use a dict, e.g. ``{'grad': 60, 'mag': 55}``, to fix one or
+        more types by hand and leave the rest to be estimated. The default
+        ``None`` estimates the rank of the noise covariance itself, per sensor
+        type, and drops its null space; ``'info'`` instead takes the rank
+        ``info`` implies (the channel count less the projectors, or the
+        Maxwell-filtering header when there is one). Leave it at ``None`` unless
+        the rank is already known: ``'full'`` inverts the near-null directions
+        that SSP/SSS or ICA leave behind, and that unstable whitener propagates
+        into every virtual sensor, hence into the projector and the filters.
     pct_var : float
         Fraction of whitened-leadfield variance kept by the virtual-sensor
         reduction (Section 2.6). Ignored if ``n_virtual`` is given.
@@ -869,6 +894,16 @@ def make_recipsiicos_lcmv(
     whitener, so :func:`mne.beamformer.apply_lcmv` applies the whole pipeline to
     sensor data without modification.
 
+    .. warning::
+        This function takes ``(info, forward, data_cov)`` positionally, matching
+        :func:`mne.beamformer.make_lcmv`. Its two companions do not:
+        :func:`make_recipsiicos_cov` takes ``(data_cov, forward, info)``, and
+        :func:`recipsiicos_rank_curve` takes ``(forward, info)`` with
+        ``data_cov`` keyword-only. Pass the three by keyword in any script that
+        uses more than one of these functions. A swapped call raises rather than
+        returning a wrong answer, because each of the three is checked against
+        its own class, but the message names the parameter and not the swap.
+
     Parameters
     ----------
     info : instance of mne.Info
@@ -916,12 +951,19 @@ def make_recipsiicos_lcmv(
         silent in a spherical conductor), so the solve is singular otherwise.
     inversion : 'matrix' | 'single'
         Covariance inversion scheme, passed to MNE's filter computation.
-    whitener_rank : int | None | 'full'
-        Rank handling passed to :func:`mne.cov.compute_whitener`. The
-        default ``None`` auto-detects the covariance rank per sensor type
-        and drops the null space. This is required when SSP/SSS projectors make
-        the covariance rank-deficient, since ``'full'`` would instead invert the
-        near-null directions and yield an unstable whitener.
+    whitener_rank : None | 'info' | 'full' | dict
+        Rank handling passed to :func:`mne.cov.compute_whitener`, which takes
+        exactly these four forms. A bare integer is rejected: MNE resolves the
+        rank per sensor type, and a single number does not say which type it
+        belongs to. Use a dict, e.g. ``{'grad': 60, 'mag': 55}``, to fix one or
+        more types by hand and leave the rest to be estimated. The default
+        ``None`` estimates the rank of the noise covariance itself, per sensor
+        type, and drops its null space; ``'info'`` instead takes the rank
+        ``info`` implies (the channel count less the projectors, or the
+        Maxwell-filtering header when there is one). Leave it at ``None`` unless
+        the rank is already known: ``'full'`` inverts the near-null directions
+        that SSP/SSS or ICA leave behind, and that unstable whitener propagates
+        into every virtual sensor, hence into the projector and the filters.
     pct_var : float
         Fraction of whitened-leadfield variance kept by the virtual-sensor
         reduction. Ignored if ``n_virtual`` is given.
@@ -1135,12 +1177,12 @@ def _optimal_rank(p_pwr, p_cor, method, floor=0.1):
     shared axis whose lower (ReciPSIICOS) scale "is arranged in the descending
     order". So:
 
-    * ``whitened`` projects *away from* the correlation subspace. Its identity
-      end is ``k = 0``, both curves fall with ``k``, and the axis is scanned
-      *upward* from ``k = 1``: ``K*`` is the last rank before the difference
-      turns positive.
-    * ``recipsiicos`` projects *onto* the power subspace. Its identity end is
-      ``k = q^2``, both curves rise with ``k``, and the axis is scanned
+    * ``whitened`` projects *away from* the correlation subspace. Its least
+      restrictive end is ``k = 0``, both curves fall with ``k``, and the axis is
+      scanned *upward* from ``k = 1``: ``K*`` is the last rank before the
+      difference turns positive.
+    * ``recipsiicos`` projects *onto* the power subspace. Its least restrictive
+      end is ``k = q^2``, both curves rise with ``k``, and the axis is scanned
       *downward* from there: ``K*`` is the last rank before the difference turns
       negative *as ``k`` decreases*, i.e. one past the final negative difference
       when read in ascending order. Scanning it upward instead would stop at the
@@ -1150,11 +1192,22 @@ def _optimal_rank(p_pwr, p_cor, method, floor=0.1):
       The result would be ``K* = 1`` or ``2``, discarding nearly all of the
       source-power subspace.
 
+    "Least restrictive" is meant literally, and is not a synonym for "identity":
+    neither end leaves the covariance untouched. The ``recipsiicos`` projector
+    is ``U_k U_k^T`` over the singular directions of ``G_pwr``, of which there
+    are only ``min(q^2, n_cols)``, with ``n_cols`` one column per source (three
+    per free-orientation source). On a grid with fewer columns than ``q^2`` --
+    the decimated grids this module recommends -- ``k`` is silently capped
+    there, so the projector never reaches the whole space and both curves are
+    flat above the cap. The ``whitened`` projector is confined at every rank to
+    the retained range of ``C_pwr`` (see :func:`_whitening_pair`). Only the
+    direction of travel matters to the criterion below, and that is unaffected.
+
     In each case a ``floor`` on the retained power guards against a degenerate
     curve (a rank-deficient forward, e.g. a single-shell sphere model, whose
     subspaces do not separate) returning a rank that (near-)empties the
-    covariance; the back-off runs toward that method's identity end. That
-    back-off is the only thing that ever moves the returned rank off the
+    covariance; the back-off runs toward that method's least restrictive end.
+    That back-off is the only thing that ever moves the returned rank off the
     45-degree point, and it is logged when it happens so the caller is never
     silently handed a rank the stated criterion did not choose.
 
@@ -1174,15 +1227,15 @@ def _optimal_rank(p_pwr, p_cor, method, floor=0.1):
         hit = np.nonzero(delta < 0)[0]
         k = int(hit[-1] + 2) if hit.size else 1
         crossing = k
-        # Increasing curve: back off toward larger (near-identity) rank.
+        # Increasing curve: back off toward larger (less restrictive) rank.
         while k < n and p_pwr[k - 1] < floor:
             k += 1
     else:
         hit = np.nonzero(delta > 0)[0]
         k = int(hit[0] + 1) if hit.size else 1
         crossing = k
-        # Decreasing curve: back off toward smaller (near-identity) rank so the
-        # projector does not remove essentially all of the covariance.
+        # Decreasing curve: back off toward smaller (less restrictive) rank so
+        # the projector does not remove essentially all of the covariance.
         while k > 1 and p_pwr[k - 1] < floor:
             k -= 1
     k = max(1, min(k, n))
@@ -1191,8 +1244,8 @@ def _optimal_rank(p_pwr, p_cor, method, floor=0.1):
             f"    Degenerate rank curve: the 45-degree crossing at rank "
             f"{crossing} retains only {p_pwr[crossing - 1]:.3f} of the power "
             f"subspace (floor {floor:.2f}), so K* was backed off to rank {k} "
-            f"(p_pwr {p_pwr[k - 1]:.3f}) toward the identity end of the curve. "
-            f"The returned rank is not the 45-degree point."
+            f"(p_pwr {p_pwr[k - 1]:.3f}) toward the least restrictive end of "
+            f"the curve. The returned rank is not the 45-degree point."
         )
     return k
 
@@ -1221,6 +1274,17 @@ def recipsiicos_rank_curve(
     ``p_cor`` against ``p_pwr`` makes this trade-off visible and its 45-degree
     point (Section 2.4) is the recommended rank.
 
+    .. warning::
+        This function takes ``(forward, info)`` positionally, with ``data_cov``
+        keyword-only. Its two companions differ:
+        :func:`make_recipsiicos_lcmv` takes ``(info, forward, data_cov)``,
+        following :func:`mne.beamformer.make_lcmv`, and
+        :func:`make_recipsiicos_cov` takes ``(data_cov, forward, info)``. Pass
+        the three by keyword in any script that uses more than one of these
+        functions. A swapped call raises rather than returning a wrong answer,
+        because each of the three is checked against its own class, but the
+        message names the parameter and not the swap.
+
     The returned ``K*`` is that 45-degree point, unmodified. Pass ``data_cov``
     to also have the negative-eigenvalue energy of the modified covariance
     (Eq. 24) reported at ``K*``, so that the diagnostic
@@ -1229,11 +1293,13 @@ def recipsiicos_rank_curve(
     it changes neither the curves nor ``K*``.
 
     Note that the two methods traverse the rank axis in opposite directions:
-    ``k = q^2`` is the identity for ``'recipsiicos'`` and ``k = 0`` is the
-    identity for ``'whitened'``. ``p_pwr`` and ``p_cor`` therefore rise with
-    ``k`` for the former and fall with it for the latter, and the returned
-    ``K*`` is located accordingly (Fig. 19 of the paper puts the ReciPSIICOS
-    scale in descending order for exactly this reason).
+    ``k = q^2`` is the least restrictive end for ``'recipsiicos'`` and ``k = 0``
+    the least restrictive end for ``'whitened'``. ``p_pwr`` and ``p_cor``
+    therefore rise with ``k`` for the former and fall with it for the latter,
+    and the returned ``K*`` is located accordingly (Fig. 19 of the paper puts
+    the ReciPSIICOS scale in descending order for exactly this reason). Neither
+    end is the identity, so the top of a ``'recipsiicos'`` curve must not be
+    read as "no modification"; see the Notes.
 
     Parameters
     ----------
@@ -1252,12 +1318,19 @@ def recipsiicos_rank_curve(
         forward alone.
     noise_cov : instance of mne.Covariance | None
         Noise covariance used to whiten (see :func:`make_recipsiicos_lcmv`).
-    whitener_rank : int | None | 'full'
-        Rank handling passed to :func:`mne.cov.compute_whitener`. The
-        default ``None`` auto-detects the covariance rank per sensor type
-        and drops the null space. This is required when SSP/SSS projectors make
-        the covariance rank-deficient, since ``'full'`` would instead invert the
-        near-null directions and yield an unstable whitener.
+    whitener_rank : None | 'info' | 'full' | dict
+        Rank handling passed to :func:`mne.cov.compute_whitener`, which takes
+        exactly these four forms. A bare integer is rejected: MNE resolves the
+        rank per sensor type, and a single number does not say which type it
+        belongs to. Use a dict, e.g. ``{'grad': 60, 'mag': 55}``, to fix one or
+        more types by hand and leave the rest to be estimated. The default
+        ``None`` estimates the rank of the noise covariance itself, per sensor
+        type, and drops its null space; ``'info'`` instead takes the rank
+        ``info`` implies (the channel count less the projectors, or the
+        Maxwell-filtering header when there is one). Leave it at ``None`` unless
+        the rank is already known: ``'full'`` inverts the near-null directions
+        that SSP/SSS or ICA leave behind, and that unstable whitener propagates
+        into every virtual sensor, hence into the projector and the filters.
     pct_var : float
         Fraction of whitened-leadfield variance kept by the virtual-sensor
         reduction. Ignored if ``n_virtual`` is given.
@@ -1282,8 +1355,8 @@ def recipsiicos_rank_curve(
         45-degree point of Section 2.4 exactly as that criterion defines it. It
         is never capped or nudged to satisfy the negative-eigenvalue limit; the
         single exception is a degenerate curve, where a floor on the retained
-        power backs ``K*`` off toward the identity end, and that back-off is
-        logged whenever it happens.
+        power backs ``K*`` off toward the least restrictive end, and that
+        back-off is logged whenever it happens.
 
     Notes
     -----
@@ -1301,14 +1374,39 @@ def recipsiicos_rank_curve(
     only two ranks that put both peaks on the true sources, and every rank that
     clears the limit misses by 13 to 64 mm on an 8.7 mm grid.
 
+    The least restrictive end of the rank axis is not the identity. The
+    ``'recipsiicos'`` projector at rank ``k`` spans the ``k`` leading singular
+    directions of the auto-product matrix, which carries one column per source
+    (three per free-orientation source); once ``k`` reaches that column count
+    the projector stops growing. On any grid with fewer columns than ``q^2`` --
+    the decimated grids this module recommends, where ``q`` is a few tens -- the
+    axis therefore saturates below the full space, and the curves are flat from
+    the cap upward. Measured on a 186-source grid at ``q = 20``, the top of the
+    axis is a rank-186 projector out of a possible 400, and ``p_cor`` there is
+    0.998 rather than 1. The
+    ``'whitened'`` end is no more the identity: that projector is confined at
+    every rank, ``k = 0`` included, to the retained range of the power Gram.
+    Read the ends as directions of travel, not as no-ops.
+
+    There is deliberately no ``label`` parameter here, although
+    :func:`make_recipsiicos_lcmv` has one. ``label`` does not reach the
+    projector or the working space in that function either: the projector is
+    built from the whole forward and the restriction is applied afterwards, to
+    the source rows the filters are solved for. The curve and the ``K*``
+    computed here are therefore already the ones a labelled call uses, and a
+    rank chosen in one call is spent in the same space in the other. Building
+    the curve on a label-restricted forward would be the actual mistake -- the
+    power subspace would stop spanning the sources outside the label, so ``K*``
+    would be chosen for a projector that is never built.
+
     The curve needs a forward with rich leadfield structure. On a single-shell
     sphere model the tangential leadfields are so low-rank that the power
     subspace collapses to a few directions and the curve degenerates (there is
     nothing to separate); a realistic BEM forward gives the smooth, separable
     curve the 45-degree criterion expects, and on a degenerate curve ``K*``
-    falls back to a near-identity rank. Both curves build a correlation Gram
-    over every source pair (:math:`O(N^2)` in runtime), so decimate the source
-    space for real forwards; peak memory is instead the
+    falls back toward the least restrictive end. Both curves build a correlation
+    Gram over every source pair (:math:`O(N^2)` in runtime), so decimate the
+    source space for real forwards; peak memory is instead the
     :math:`q^2 \times q^2` Gram, so keep ``q`` modest as well.
 
     References

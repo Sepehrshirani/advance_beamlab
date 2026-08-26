@@ -615,6 +615,72 @@ def test_abmc_template_length_check(sphere_fwd):
         make_abmc(info, fwd, x, _spike(300, 150))
 
 
+def test_a_non_finite_input_is_refused_rather_than_localised_to_nothing(sphere_fwd):
+    """One NaN must stop the scan, because nothing downstream of it complains.
+
+    Stage 2 has no whitening step to fail loudly on a bad sample. A single NaN
+    in the data or the template makes every column's output correlation NaN, the
+    finiteness mask in the read-out then rejects every column, and the caller is
+    handed a localiser map that is uniformly zero -- a perfectly well-formed
+    result that says nothing happened. Stage 1 catches this on the covariance it
+    builds, so the failure only surfaces when a caller supplies ``cov``, which is
+    exactly the path that skips the Stage-1 check. A non-finite ``cov`` is no
+    better served by silence: before the guard it emerged as a LinAlgError out of
+    the conditioning check, naming neither the input nor the problem.
+    """
+    fwd, info = sphere_fwd
+    (i,) = _shell_sources(fwd, 1)
+    x = _si_data(fwd, i, n=200, t0=100, seed=3)
+    template = _spike(200, 100)
+    cov = _cov(x, info["ch_names"])
+
+    # The premise: with clean inputs this same call localises the source, so the
+    # all-zero map below would be a change of answer, not a hard failure.
+    good = make_abmc(info, fwd, x, template, cov=cov, reg=0.05)
+    assert good.template_match.max() > 0
+
+    bad_x = x.copy()
+    bad_x[2, 10] = np.nan
+    with pytest.raises(ValueError, match="data contains non-finite"):
+        make_abmc(info, fwd, bad_x, template, cov=cov, reg=0.05)
+
+    bad_template = template.copy()
+    bad_template[0] = np.inf
+    with pytest.raises(ValueError, match="template contains non-finite"):
+        make_abmc(info, fwd, x, bad_template, cov=cov, reg=0.05)
+
+    bad_cov = cov.copy()
+    bad_cov["data"][3, 3] = np.nan
+    with pytest.raises(ValueError, match="cov contains non-finite"):
+        make_abmc(info, fwd, x, template, cov=bad_cov, reg=0.05)
+
+    # Every entry point shares the check, not just the one that had it.
+    with pytest.raises(ValueError, match="data contains non-finite"):
+        abmc_stability_curve(info, fwd, bad_x, template, cov=cov, reg=0.05)
+
+
+def test_every_entry_point_rejects_a_negative_max_lag(sphere_fwd):
+    """``max_lag`` is validated where it is used, so both entry points refuse it.
+
+    ``abmc_stability_curve`` documents ``max_lag`` as behaving "as for
+    make_abmc", but the check lived in ``make_abmc`` alone. A negative window
+    then left the sweep to discover the mistake as an argmax over an empty array
+    inside the lag loop -- a message that names neither the argument nor the
+    value -- for an input the other entry point rejects by name.
+    """
+    fwd, info = sphere_fwd
+    (i,) = _shell_sources(fwd, 1)
+    x = _si_data(fwd, i, n=200, t0=100, seed=3)
+    template = _spike(200, 100)
+
+    for call in (make_abmc, abmc_stability_curve):
+        with pytest.raises(ValueError, match="max_lag must be >= 0"):
+            call(info, fwd, x, template, max_lag=-1)
+
+    # Zero is a window, not a mistake: it pins the template where it was drawn.
+    assert (np.abs(make_abmc(info, fwd, x, template, max_lag=0).lag) == 0).all()
+
+
 def test_abmc_free_orientation():
     """make_abmc handles a free-orientation forward and recovers the orientation."""
     montage = mne.channels.make_standard_montage("standard_1020")
@@ -634,6 +700,68 @@ def test_abmc_free_orientation():
     res = make_abmc(info, fwd, x, _spike(400, 250))
     assert len(res.power) == fwd["nsource"]
     assert res.orientation[int(np.argmax(res.template_match))] == 2
+
+
+def test_a_free_orientation_scan_is_tied_to_the_forwards_own_axes():
+    """The documented non-invariance, pinned so ``make_abmc``'s Notes stay true.
+
+    A free-orientation grid point gets three axis-aligned scalar beamformers and
+    keeps the best of the three; there is no continuous orientation search. The
+    three directions belong to the frame the forward was written in, so the same
+    physical dipole expressed in a rotated frame is scanned by three different
+    filters and need not score the same. Rotating the frame changes nothing
+    physical -- the columns still span the same dipole space, and the covariance
+    is held fixed here so that only the Stage-2 orientation search can move --
+    yet the map moves, which is what a caller has to be told before reading a
+    peak or an ``orientation`` index off a free-orientation scan. Fixing it means
+    a continuous orientation search, which is a different estimator, so the
+    behaviour is documented instead and this is what keeps that documentation
+    honest.
+    """
+    montage = mne.channels.make_standard_montage("standard_1020")
+    ch = list(dict.fromkeys(montage.ch_names))
+    info = _avg_ref(mne.create_info(ch, 250.0, "eeg"))
+    info.set_montage(montage)
+    sphere = mne.make_sphere_model("auto", "auto", info)
+    src = mne.setup_volume_source_space(sphere=sphere, pos=20.0)
+    fwd = mne.make_forward_solution(info, None, src, sphere, eeg=True, meg=False)
+    n_src = fwd["nsource"]
+
+    rng = np.random.default_rng(11)
+    rr = fwd["source_rr"]
+    depth = np.linalg.norm(rr - rr.mean(0), axis=1)
+    i = int(np.where(depth > np.percentile(depth, 75))[0][0])
+    # A dipole at equal angles to all three axes: nothing unusual physically,
+    # and the case an axis-aligned search serves worst.
+    ori = np.ones(3) / np.sqrt(3)
+    x = np.outer(fwd["sol"]["data"][:, 3 * i : 3 * i + 3] @ ori, _spike(400, 250))
+    x = x + 1.0 * np.abs(x).max() * rng.standard_normal(x.shape)
+    template = _spike(400, 200)
+    cov = _cov(x, info["ch_names"])
+
+    # A rotation of the source frame: the same model, differently written down.
+    q, r = np.linalg.qr(rng.normal(size=(3, 3)))
+    q = q * np.sign(np.diag(r))
+    if np.linalg.det(q) < 0:
+        q[:, 0] *= -1
+    rotated = fwd.copy()
+    rotated["sol"]["data"] = np.ascontiguousarray(
+        (fwd["sol"]["data"].reshape(-1, n_src, 3) @ q).reshape(-1, 3 * n_src)
+    )
+    # The premise: the rotation is a change of frame only, so every grid point
+    # still spans exactly the same three-dimensional dipole space.
+    for k in (0, i, n_src - 1):
+        cols = slice(3 * k, 3 * k + 3)
+        assert_allclose(
+            fwd["sol"]["data"][:, cols] @ fwd["sol"]["data"][:, cols].T,
+            rotated["sol"]["data"][:, cols] @ rotated["sol"]["data"][:, cols].T,
+            atol=1e-12 * np.abs(fwd["sol"]["data"][:, cols]).max() ** 2,
+        )
+
+    kwargs = dict(cov=cov, reg=0.05, max_lag=60)
+    base = make_abmc(info, fwd, x, template, **kwargs)
+    turned = make_abmc(info, rotated, x, template, **kwargs)
+    assert np.abs(turned.template_match - base.template_match).max() > 0.01
 
 
 def test_abmc_dictionary(sphere_fwd):
@@ -1368,6 +1496,51 @@ def test_a_p_beyond_the_pole_cannot_win_the_sweep(sphere_fwd):
     res = make_abmc(info, fwd, x, template, P=P_opt)
     peak_rr = fwd["source_rr"][int(np.argmax(res.template_match))]
     assert np.linalg.norm(peak_rr - fwd["source_rr"][i]) < 0.01
+
+
+def test_the_selected_p_is_pinned_to_the_bottom_of_the_sweep(sphere_fwd):
+    """The documented limitation of ``P='auto'``, pinned so the prose stays true.
+
+    The only guard against a too-small ``P`` is that the coupling be numerically
+    non-zero, which is the threshold of the "inert" warning and asks nothing
+    about the constraint doing any work. Because the ``P -> 0`` limit is a plain
+    LCMV beamformer, wherever LCMV already peaks where ABMC does the peak is
+    stable from the first sample of the sweep upwards, the plateau is anchored
+    there, and the returned ``P`` moves with ``P_range[0]`` rather than with the
+    data. That is documented on ``abmc_stability_curve`` rather than fixed,
+    because a stricter floor localises no better on any fixture here; this test
+    is what makes a later change to the rule visible, so that the prose is
+    rewritten with it rather than left behind.
+    """
+    fwd, info = sphere_fwd
+    (i,) = _shell_sources(fwd, 1)
+    x = _si_data(fwd, i, n=200, t0=100, seed=7)
+    template = _spike(200, 100)
+    kwargs = dict(n_coarse=13, n_refine=0, return_optimal=True)
+
+    low, _, _, _, coupling, low_opt = abmc_stability_curve(
+        info, fwd, x, template, P_range=(1e-4, 1e4), **kwargs
+    )
+    *_, high_opt = abmc_stability_curve(
+        info, fwd, x, template, P_range=(1e-2, 1e4), **kwargs
+    )
+    # The floor never binds anywhere on the default range: the coupling at its
+    # very bottom already clears the threshold by roughly two orders of
+    # magnitude, so nothing at the low end is ever ruled out on this ground.
+    assert coupling[0] > 10 * 1e-6
+
+    # Same data, same rule: the answer follows the bound it was swept from, and
+    # by more than the sweep's own resolution, so this is not a rounding step.
+    assert low[0] < low_opt < high_opt
+    assert high_opt / low_opt > low[1] / low[0]
+
+    # And the localisation is the same at both, which is why this is a
+    # limitation of the *reported* P rather than of the map it stands for.
+    peaks = {
+        int(np.argmax(make_abmc(info, fwd, x, template, P=p).template_match))
+        for p in (low_opt, high_opt)
+    }
+    assert len(peaks) == 1
 
 
 def test_the_reported_coupling_is_a_magnitude(sphere_fwd):

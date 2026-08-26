@@ -102,6 +102,33 @@ def test_singular_system_raises():
         _compute_mcmv_weights(H, Rinv)
 
 
+def test_numerically_silent_constraint_raises():
+    """A source the array cannot see is refused rather than silently amplified.
+
+    The condition number of ``H^T R^-1 H`` is scale-invariant, so it says
+    nothing about a constraint whose leadfield has shrunk to numerical silence:
+    with one source that matrix is 1x1 and its condition number is exactly 1
+    whatever the column holds. The solve then returns weights of order
+    ``1/||h||`` -- here 1e12 times too large -- and their output is amplified
+    noise wearing the name of a source, with nothing in the result to betray it.
+    Whitening is what supplies the missing absolute scale, since every whitened
+    channel carries unit noise variance.
+    """
+    rng = np.random.default_rng(4)
+    n_ch = 20
+    h = rng.standard_normal((n_ch, 1))
+    h = 1e-12 * h / np.linalg.norm(h)  # a leadfield the array cannot see
+    Rinv = np.eye(n_ch)
+    assert np.linalg.cond(h.T @ Rinv @ h) == pytest.approx(1.0)  # blind to it
+    with pytest.raises(ValueError, match="numerically silent"):
+        _compute_mcmv_weights(h, Rinv)
+
+    # The same direction at a normal strength is accepted, so it is the scale
+    # that is being rejected and not the geometry.
+    weights = _compute_mcmv_weights(h / np.linalg.norm(h), Rinv)
+    assert np.isfinite(weights).all()
+
+
 # --------------------------------------------------------------------------- #
 # 2. Numerical equivalence with MNE's own beamformer.
 # --------------------------------------------------------------------------- #
@@ -653,18 +680,19 @@ def test_orientations_are_head_coordinates(fwd_info):
     assert_allclose(w_surf, w_head, rtol=1e-8, atol=0)
 
 
-def test_array_gain_states_its_constraint_on_the_raw_leadfield(fwd_info):
-    """``w'l = ||l||``, and the zero-gain constraint survives the rescaling.
+def test_array_gain_states_its_constraint_on_the_whitened_leadfield(fwd_info):
+    """``w'h = ||h_w||``, and the zero-gain constraint survives the rescaling.
 
     Array gain exists because unit gain is biased towards deep sources: a deep
     leadfield is small, so the filter has to amplify to reach unit gain, and the
-    amplified noise comes with it. Normalising the leadfield first removes that
-    without needing a noise covariance to normalise against.
+    amplified noise comes with it. Normalising the leadfield first divides that
+    amplification back out.
 
-    The norm has to be of the *raw* leadfield. Taking it in the whitened space
-    folds the whitener's own scale into the output -- on a fixture with 1e-8
-    noise that was a factor of 1e8 -- and the result is no longer in the units
-    of the array.
+    The norm is taken in the whitened space, where it equals
+    ``sqrt(h^T C_n^-1 h)``. That is the only scale on which channels of
+    different sensor types are commensurable (see the mixed-array test below);
+    the price, visible here, is that the amplitudes carry the noise level with
+    them and so are not in the units of the array.
     """
     fwd, info = fwd_info
     fwd = mne.convert_forward_solution(fwd, force_fixed=True, use_cps=False)
@@ -690,13 +718,20 @@ def test_array_gain_states_its_constraint_on_the_raw_leadfield(fwd_info):
         verbose=False,
     )
     weights = bf["weights"]
+    # The scale is the leadfield measured against the noise it has to be seen
+    # through: ``sqrt(h^T C_n^+ h)``, taken through the same rank-aware whitener
+    # the filter itself was built with. The pseudo-inverse is not a detail here
+    # -- the average-reference projector leaves this EEG noise covariance one
+    # dimension short, and a naive ``C_n^-1`` would divide by that null space.
+    whitener = _make_whitener(info, cov, bf["ch_names"], None)
+    scale = np.linalg.norm(whitener @ gain[:, sources], axis=0)
     for i, s in enumerate(sources):
-        assert weights[i] @ gain[:, s] == pytest.approx(
-            np.linalg.norm(gain[:, s]), rel=1e-6
-        )
-    # Rescaling each row cannot break the null on the other source.
-    assert weights[0] @ gain[:, sources[1]] == pytest.approx(0.0, abs=1e-9)
-    assert weights[1] @ gain[:, sources[0]] == pytest.approx(0.0, abs=1e-9)
+        assert weights[i] @ gain[:, s] == pytest.approx(scale[i], rel=1e-6)
+    # Rescaling each row cannot break the null on the other source. The
+    # residual is judged against the row's own gain, which the normalisation
+    # has just made large.
+    assert abs(weights[0] @ gain[:, sources[1]]) < 1e-9 * scale[0]
+    assert abs(weights[1] @ gain[:, sources[0]]) < 1e-9 * scale[1]
 
     # And it is a pure rescaling of the unit-gain filter, one factor per row.
     plain = make_mcmv(
@@ -709,7 +744,152 @@ def test_array_gain_states_its_constraint_on_the_raw_leadfield(fwd_info):
         weight_norm="unit-gain",
         verbose=False,
     )["weights"]
-    for i, s in enumerate(sources):
-        np.testing.assert_allclose(
-            weights[i], plain[i] * np.linalg.norm(gain[:, s]), rtol=1e-6
+    for i in range(len(sources)):
+        np.testing.assert_allclose(weights[i], plain[i] * scale[i], rtol=1e-6)
+
+
+# --------------------------------------------------------------------------- #
+# 10. Mixed sensor types: the one scale on which they can be compared at all.
+# --------------------------------------------------------------------------- #
+@pytest.fixture(scope="module")
+def fwd_info_mixed():
+    """A magnetometer + gradiometer sphere array: forward, Info and noise.
+
+    Every other fixture in this file is a single-sensor-type EEG array, where a
+    leadfield norm may be taken in the recorded units without coming to harm.
+    This one records in two units at once -- T and T/m -- which is where a
+    quantity summed over the whole array stops being a physical quantity.
+    """
+    n = 16
+    k = np.arange(n) + 0.5
+    phi = np.arccos(1 - k / n)  # a spiral over the upper half of a shell
+    theta = np.pi * (1 + 5**0.5) * k
+    pos = (
+        0.11
+        * np.c_[np.sin(phi) * np.cos(theta), np.sin(phi) * np.sin(theta), np.cos(phi)]
+    )
+    names = [f"MEG{i:03d}1" for i in range(n)] + [f"MEG{i:03d}2" for i in range(n)]
+    info = mne.create_info(names, 200.0, ["mag"] * n + ["grad"] * n)
+    for i, ch in enumerate(info["chs"]):
+        p = pos[i % n]
+        ez = p / np.linalg.norm(p)  # the coil normal points away from the head
+        ex = np.cross([0.0, 0.0, 1.0], ez)
+        ex /= np.linalg.norm(ex)
+        ch["loc"] = np.concatenate([p, ex, np.cross(ez, ex), ez])
+    info["dev_head_t"] = mne.transforms.Transform("meg", "head", np.eye(4))
+    sphere = mne.make_sphere_model(r0=(0.0, 0.0, 0.0), head_radius=0.09)
+    src = mne.setup_volume_source_space(sphere=sphere, pos=30.0)
+    fwd = mne.make_forward_solution(info, None, src, sphere, eeg=False, meg=True)
+    # Per-type noise levels standing in for an empty-room covariance: MNE's own
+    # ad-hoc figures of 20 fT for a magnetometer and 5e-13 T/m for a
+    # gradiometer, numbers that are not in the same units to begin with.
+    std = np.r_[np.full(n, 20e-15), np.full(n, 5e-13)]
+    noise_cov = mne.Covariance(np.diag(std**2), names, [], [], nfree=1)
+    return fwd, info, noise_cov
+
+
+def _joint_leadfield(fwd, sources, orientations):
+    """The joint leadfield H of the given sources on a free-orientation forward."""
+    G = fwd["sol"]["data"]
+    return np.column_stack(
+        [
+            G[:, 3 * s : 3 * s + 3] @ u
+            for s, u in zip(sources, orientations, strict=True)
+        ]
+    )
+
+
+def test_array_gain_is_not_set_by_whichever_type_has_the_larger_numbers(
+    fwd_info_mixed,
+):
+    """Array gain must not turn on a unit convention.
+
+    Squared leadfield entries summed over a mixed array add T^2 to (T/m)^2. On
+    this array over 99% of that sum comes from the gradiometers, so a norm taken
+    in the recorded units normalises for the gradiometers alone -- the
+    magnetometers might as well not be there -- and it moves if the same
+    recording is written in T/cm instead of T/m. A user reading amplitudes off
+    such a beamformer is reading a depth correction that belongs to one sensor
+    type and a unit choice. Whitened, each type is measured against its own
+    noise: the constraint becomes ``sqrt(h^T C_n^-1 h)`` and does not move.
+    """
+    fwd, info, noise_cov = fwd_info_mixed
+    n = len(info["ch_names"]) // 2
+    sources = [10, 60]
+    oris = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    H = _joint_leadfield(fwd, sources, oris)
+    N = np.asarray(noise_cov.data)
+    # Two 10 nA m sources on top of the sensor noise.
+    R = N + 1e-16 * (H @ H.T)
+    data_cov = mne.Covariance(R, info["ch_names"], [], [], nfree=1)
+    kwargs = dict(noise_cov=noise_cov, reg=0.05, weight_norm="array-gain")
+    weights = make_mcmv(info, fwd, data_cov, sources, orientations=oris, **kwargs)[
+        "weights"
+    ]
+    for i in range(len(sources)):
+        expected = np.sqrt(H[:, i] @ np.linalg.solve(N, H[:, i]))
+        assert weights[i] @ H[:, i] == pytest.approx(expected, rel=1e-6)
+
+    # The gradiometers own the norm taken in the recorded units; whitened, both
+    # types are heard.
+    def _grad_share(M):
+        return np.linalg.norm(M[n:], axis=0) ** 2 / np.linalg.norm(M, axis=0) ** 2
+
+    assert _grad_share(H).min() > 0.98
+    whitened = _grad_share(_make_whitener(info, noise_cov, info["ch_names"], None) @ H)
+    assert whitened.min() > 0.05 and whitened.max() < 0.95
+
+    # Re-express the gradiometers in T/cm -- the same recording, written
+    # differently -- and the filter must land in the same place.
+    alpha = np.r_[np.ones(n), np.full(n, 1e-2)]
+    fwd_cm = fwd.copy()
+    fwd_cm["sol"]["data"] = alpha[:, None] * fwd["sol"]["data"]
+    noise_cm, data_cm = (
+        mne.Covariance(alpha[:, None] * M * alpha, info["ch_names"], [], [], nfree=1)
+        for M in (N, R)
+    )
+    weights_cm = make_mcmv(
+        info,
+        fwd_cm,
+        data_cm,
+        sources,
+        orientations=oris,
+        noise_cov=noise_cm,
+        reg=0.05,
+        weight_norm="array-gain",
+    )["weights"]
+    H_cm = alpha[:, None] * H
+    for i in range(len(sources)):
+        assert weights_cm[i] @ H_cm[:, i] == pytest.approx(
+            weights[i] @ H[:, i], rel=1e-6
         )
+    # And the test has teeth: the norm in the recorded units did move.
+    assert (np.linalg.norm(H, axis=0) / np.linalg.norm(H_cm, axis=0)).min() > 10
+
+
+def test_source_the_array_cannot_see_is_refused(fwd_info_mixed):
+    """A dipole at the centre of a spherical model produces no MEG field at all.
+
+    Its leadfield column is exactly zero whatever orientation is asked for, so
+    every filter satisfying the unit-gain constraint is infinite. Before the
+    absolute-scale guard the only thing between the caller and a filter built on
+    nothing was the condition number of ``H^T R^-1 H``, which reported
+    "collinear sources" -- true of neither -- for two sources and, for one, saw
+    nothing wrong at all.
+    """
+    fwd, info, noise_cov = fwd_info_mixed
+    centre = int(np.argmin(np.linalg.norm(fwd["source_rr"], axis=1)))
+    assert np.linalg.norm(fwd["source_rr"][centre]) == 0.0
+    assert not fwd["sol"]["data"][:, 3 * centre : 3 * centre + 3].any()
+    ori = np.array([[1.0, 0.0, 0.0]])
+    data_cov = mne.Covariance(
+        np.asarray(noise_cov.data).copy(), info["ch_names"], [], [], nfree=1
+    )
+    with pytest.raises(ValueError, match="numerically silent"):
+        make_mcmv(info, fwd, data_cov, [centre], orientations=ori, noise_cov=noise_cov)
+
+    # A source the array does see, in the same call shape, still builds.
+    filters = make_mcmv(
+        info, fwd, data_cov, [10], orientations=ori, noise_cov=noise_cov
+    )
+    assert np.isfinite(filters["weights"]).all()

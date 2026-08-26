@@ -437,7 +437,11 @@ class ABMCResult:
         orientation.
     orientation : ndarray, shape (n_sources,)
         Index (0, 1, 2) of the orientation with the strongest template match at
-        each grid point; all zeros for a fixed-orientation forward.
+        each grid point; all zeros for a fixed-orientation forward. It is the
+        winner of three axis-aligned scalar beamformers, not a continuous
+        orientation estimate, so it names an axis of the forward's own source
+        frame and neither it nor ``template_match`` is invariant to a rotation
+        of that frame; see the Notes of :func:`make_abmc`.
     weights : ndarray | None
         Beamformer weights ``(n_channels, n_columns)`` if ``return_weights``,
         else ``None``.
@@ -613,13 +617,34 @@ def _abmc_prepare(info, forward, data, template, cov, noise_cov, reg, max_lag):
     constraint trade-off ``P``. Separating them means a sweep over ``P`` costs
     one linear solve per value instead of rebuilding the whole problem, which is
     what makes :func:`~advance_beamlab.abmc_stability_curve` affordable.
+
+    It is also the one place every Stage-2 entry point passes through, which is
+    why the checks on the inputs it consumes -- the data, the template, the
+    covariance and ``max_lag`` -- live here rather than in :func:`make_abmc`.
+    ``max_lag`` was validated there alone, so
+    :func:`~advance_beamlab.abmc_stability_curve` documented the argument "as
+    for make_abmc" and then met a negative one as an argmax over an empty array
+    deep inside the lag loop below.
     """
+    if max_lag is not None and int(max_lag) < 0:
+        raise ValueError(f"max_lag must be >= 0 samples, got {max_lag}.")
     leadfield, x, ch_names = _aligned_leadfield_and_data(info, forward, data)
     u = np.asarray(template, float).ravel()
     if u.shape[0] != x.shape[1]:
         raise ValueError(
             f"template length {u.shape[0]} must match data length {x.shape[1]}."
         )
+    # Stage 2 has nothing that fails loudly on a non-finite sample. One NaN
+    # anywhere in ``data`` or ``template`` makes every column's output
+    # correlation NaN, the finiteness mask in :func:`_abmc_map` then rejects
+    # every column, and the caller is handed a localiser map that is uniformly
+    # zero with no indication of why. Stage 1 catches this on the covariance it
+    # builds, but that check is skipped the moment a caller supplies ``cov``,
+    # which is exactly when a bad sample can still reach the solve.
+    if not np.all(np.isfinite(x)):
+        raise ValueError("data contains non-finite values.")
+    if not np.all(np.isfinite(u)):
+        raise ValueError("template contains non-finite values.")
 
     if cov is None:
         data_cov = Covariance(
@@ -629,6 +654,11 @@ def _abmc_prepare(info, forward, data, template, cov, noise_cov, reg, max_lag):
     else:
         _validate_type(cov, Covariance, "cov")
     leadfield, x, ch_names, cov_mat = _restrict_to_cov(cov, leadfield, x, ch_names)
+    # Same reasoning one channel set later. A non-finite entry in a supplied
+    # ``cov`` currently surfaces as a LinAlgError out of the conditioning check
+    # below, which names neither the input nor the problem.
+    if not np.all(np.isfinite(cov_mat)):
+        raise ValueError("cov contains non-finite values.")
     n_channels, n_columns = leadfield.shape
     _check_noise_cov_required(info, ch_names, noise_cov)
     _check_eeg_reference(info, ch_names)
@@ -945,15 +975,43 @@ def abmc_stability_curve(
     **Coarse exploration.** :math:`P` is swept logarithmically across
     ``P_range``. Each value is scored on three things that together say whether
     the method is operating at all: the *coupling*
-    :math:`P\,g^\mathsf{T}c / g^\mathsf{T}g`, which must be non-negligible or the
-    template constraint is inert and ABMC degenerates to a plain LCMV; the
-    fraction of grid weights that have blown up, which marks the paper's
-    non-convergence regime at large :math:`P`; and the location of the localiser
-    peak.
+    :math:`P\,g^\mathsf{T}c / g^\mathsf{T}g`, which must not have underflowed to
+    nothing or the template constraint is inert and ABMC degenerates to a plain
+    LCMV; the fraction of grid weights that have blown up, which marks the
+    paper's non-convergence regime at large :math:`P`; and the location of the
+    localiser peak.
 
     **Refinement.** The widest run of consecutive viable values over which the
     peak *does not move* is the plateau. Its edges are then re-sampled more
     finely and the geometric centre of the refined plateau is returned.
+
+    **What the lower end of the sweep is, and is not.** The coupling test is a
+    numerical one: it rejects a :math:`P` at which the constraint has vanished
+    into round-off, at the same threshold as the "numerically inert" warning of
+    :func:`make_abmc`. It is not a test that the constraint is *doing* anything,
+    and on the default ``P_range`` it never fires at all -- at :math:`P=10^{-4}`
+    the coupling is already of order :math:`10^{-4}`, some ninety times the
+    threshold. That matters because the :math:`P\to 0` limit is exactly an LCMV
+    beamformer, so wherever LCMV already peaks where ABMC does, the peak is
+    stable from the bottom of the sweep upwards and the plateau is anchored
+    there. The returned :math:`P` is then set as much by ``P_range[0]`` as by
+    the data: on the eight-source spherical-EEG fixture of
+    ``examples/plot_abmc_localization.py`` the selection had a median of 0.0075
+    on the default range, 0.0013 with the range extended down to
+    :math:`10^{-6}`, and 0.081 with it started at :math:`10^{-2}`, on identical
+    data. At the default-range selection the constraint moved the weights by
+    only 0.4 to 1.1 per cent away from the :math:`P\to 0` limit.
+
+    That is a limitation rather than a failure: the localisation was the same to
+    the grid resolution at every one of those settings (mean peak error 0.85 cm
+    throughout), which is what a plateau is supposed to mean, and it is why the
+    threshold is left where it is. But read the returned :math:`P` as *the
+    lowest setting at which the answer is already stable*, not as the setting at
+    which the template constraint earns its keep. If you want the latter, start
+    the sweep at the bottom of the range :func:`make_abmc` recommends, i.e.
+    ``P_range=(0.01, 1e4)``; on the same fixture that selects 0.037 to 0.096,
+    where the weights differ from LCMV's by 4 to 11 per cent, with no loss of
+    accuracy.
 
     The upper edge is not arbitrary. Eliminating :math:`\beta_1` from Eq. 17
     using Eq. 19 leaves an affine recursion whose linear part is
@@ -992,7 +1050,10 @@ def abmc_stability_curve(
     noise_cov : instance of mne.Covariance | None
         Noise covariance, as for :func:`make_abmc`.
     P_range : tuple of float
-        Inclusive ``(low, high)`` bounds of the logarithmic sweep.
+        Inclusive ``(low, high)`` bounds of the logarithmic sweep. ``low`` is
+        not a formality: when the peak is stable all the way down to it, the
+        plateau begins there and the selected :math:`P` moves with it. See the
+        note above on the lower end of the sweep.
     n_coarse : int
         Number of points in the coarse sweep.
     n_refine : int
@@ -1079,6 +1140,23 @@ def _abmc_select_p(prep, forward, f, P_range, n_coarse, n_refine):
     # smallest pole removes it: every real plateau there ends by P = 5.01 and
     # every false one starts at P >= 10. It changes nothing on the default
     # range, where the selections are bit-identical.
+    #
+    # The first condition is deliberately weak, and it is worth being plain
+    # about what that costs. 1e-6 is the same threshold as the "numerically
+    # inert" warning of make_abmc: it asks only that the constraint has not
+    # vanished into round-off, not that it is doing any work. On the default
+    # P_range it never fires -- the coupling at P = 1e-4 is already ~9e-5 -- so
+    # whenever the peak holds down to the bottom of the sweep the plateau is
+    # anchored there and the answer tracks P_range[0]. Raising the floor was
+    # measured on the ``plot_abmc_localization`` fixture: floors of 1e-4, 1e-3
+    # and 1e-2 move the median selection from 0.0075 to 0.014, 0.033 and 0.11,
+    # and every one of them localises identically, a mean peak error of 0.85 cm
+    # on all eight segments. At 0.05 the selection reaches P = 0.14 to 0.70 and
+    # the mean error rises to 1.10 cm. So a stricter floor is not demonstrably
+    # better here, only differently arbitrary, and it would silently change
+    # every existing 'auto' result; the threshold stays, and the behaviour is
+    # documented on abmc_stability_curve instead, where a caller who wants a P
+    # at which the constraint is materially active is told to raise P_range[0].
     viable = (coups >= 1e-6) & (blows <= 0.05) & (p_coarse < prep["critical_p"])
     span = _plateau(peaks, viable)
 
@@ -1204,7 +1282,7 @@ def make_abmc(
         from ``data`` by :func:`sbl_covariance` (the intended ABMC pipeline).
     noise_cov : mne.Covariance | None
         Passed to :func:`sbl_covariance` when ``cov`` is ``None``.
-    P : float
+    P : float | 'auto'
         Ratio :math:`\beta_2/\beta_1` weighting the template constraint against
         the distortionless one (default 0.03). The constraint column is rescaled
         to the norm of its leadfield column before Eq. 19 is applied, so ``P`` is
@@ -1222,7 +1300,11 @@ def make_abmc(
         the immediate neighbourhood of that value. Where exactly the stable
         range ends is a property of the recording rather than of the method, so
         use ``P='auto'`` (:func:`abmc_stability_curve`) to place it on your own
-        data.
+        data. ``'auto'`` returns the lowest ``P`` at which the localised peak is
+        already stable, which is usually below the range quoted above and can be
+        close to the plain-LCMV limit; that is a deliberate limitation of the
+        selection rule and is set out in full under
+        :func:`abmc_stability_curve`.
     reg : float
         Diagonal loading of :math:`R`, as a fraction of
         :math:`\mathrm{tr}(R)/M`. The default is **0**, which is what the paper
@@ -1236,8 +1318,8 @@ def make_abmc(
     f : float
         Distortionless gain (default 1.0).
     max_lag : int | None
-        Restrict the template lag search to :math:`|j|\le` ``max_lag`` samples.
-        ``None`` searches all lags.
+        Restrict the template lag search to :math:`|j|\le` ``max_lag`` samples,
+        which must be non-negative. ``None`` searches all lags.
     method : 'closed-form' | 'iterative'
         How Stage 2 is solved. ``'closed-form'`` (default) evaluates the fixed
         point of Eqs. 17-19 directly. ``'iterative'`` runs the paper's gradient
@@ -1264,13 +1346,38 @@ def make_abmc(
     result : ABMCResult
         The localization map and diagnostics; see :class:`ABMCResult`.
 
+    Notes
+    -----
+    For a free-orientation forward the scan is **not invariant to the source
+    coordinate frame**. Each grid point contributes three leadfield columns, and
+    ABMC runs an independent scalar beamformer on each and keeps whichever of
+    the three has the strongest template match; it does not search orientation
+    continuously. Those three directions are the axes the forward was written
+    in, so the same physical dipole expressed in a rotated frame is scanned by
+    three different filters and need not score the same. Measured on a 301-point
+    free-orientation sphere model, six dipoles at equal angles to all three axes,
+    three random rotations of the source frame each: holding the covariance fixed
+    so that only the Stage-2 orientation search could differ, a rotation changed
+    the template-match map by up to 0.15 (on a scale of 0 to 1) and moved the
+    localised peak on 13 of 18 rotations. Letting Stage 1 re-fit in the rotated
+    frame as well, the peak moved on 11 of 18 and the mean peak error was
+    essentially unchanged, 2.9 cm against 3.1 cm. So this is a non-determinism
+    rather than a bias: the answer is not systematically worse, it just depends
+    on a convention nobody chose.
+
+    Stage 1 carries the same caveat for its own reason (see
+    :func:`sbl_covariance`), so it is inherited by the default ``cov=None``
+    pipeline as well as introduced here. Use a fixed-orientation forward
+    wherever the orientation is known, and read ``ABMCResult.orientation`` as
+    the best of three axes rather than as an estimated dipole direction.
+
     References
     ----------
     .. footbibliography::
     """
-    if max_lag is not None and int(max_lag) < 0:
-        raise ValueError(f"max_lag must be >= 0 samples, got {max_lag}.")
     _check_option("method", method, ("closed-form", "iterative"))
+    # ``max_lag``, the data, the template and the covariance are checked inside
+    # _abmc_prepare, so that every entry point rejects the same inputs alike.
     prep = _abmc_prepare(info, forward, data, template, cov, noise_cov, reg, max_lag)
 
     if P == "auto":
@@ -1396,9 +1503,11 @@ def make_abmc_dictionary(
         :func:`sbl_covariance`.
     noise_cov : mne.Covariance | None
         Passed to :func:`sbl_covariance` when ``cov`` is ``None``.
-    P : float
+    P : float | 'auto'
         Ratio :math:`\beta_2/\beta_1` for the template constraint; see
-        :func:`make_abmc`. Applied to every template.
+        :func:`make_abmc`. Applied to every template, and ``'auto'`` is selected
+        per template rather than once for the dictionary, since the stability
+        curve depends on the template through the constraint columns.
     reg : float
         Diagonal loading of :math:`R`, as in :func:`make_abmc` (default 0).
     f : float

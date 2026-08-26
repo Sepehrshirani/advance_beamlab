@@ -157,13 +157,19 @@ def test_geometry_is_anatomical(fwd, info):
 def test_electrodes_lie_on_the_scalp(info):
     """Every electrode must sit on the model's own scalp surface.
 
-    This is the sharpest available check on the coordinate transform, because it
-    compares two things that came out of the file independently: the electrode
-    positions and the outer boundary of the volume mesh. Any error in the
-    MNI-to-head transform, in the millimetre-to-metre scaling, or in the
-    row/column order of the position array would separate them immediately,
-    whereas a comparison against an external montage only ever agrees to within
-    the difference between two template heads.
+    This compares two things that came out of the file independently: the
+    electrode positions and the outer boundary of the volume mesh. It catches a
+    millimetre-to-metre slip or a wrong row/column order in either array, where
+    a comparison against an external montage only ever agrees to within the
+    difference between two template heads.
+
+    It says nothing about the MNI-to-head transform, which is worth stating
+    plainly because the opposite is the natural assumption. Both arrays are put
+    through the same rigid transform, and distances are invariant under one:
+    replacing it with the identity, or rebuilding it from deliberately wrong
+    fiducials, leaves the numbers below unchanged to the last digit. The
+    transform is covered by ``test_montage_matches_standard_1005`` and
+    ``test_geometry_is_anatomical``, which look at absolute positions.
     """
     rr, tris = ny_head_scalp()
     assert tris.min() >= 0 and tris.max() < len(rr)
@@ -184,8 +190,16 @@ def test_montage_includes_neck_and_face_electrodes(info):
     """
     names = info["ch_names"]
     assert {"Nk1", "Nk2", "Nk3", "Nk4"} <= set(names)
+    # The face and cheek positions are 64 of the 231, not a handful, and
+    # ``ny_head_montage`` says so; a user picking electrodes by name needs the
+    # count to be right. With the four neck electrodes and LPA/RPA they are the
+    # 70 that ``ny_head_picks('10-05')`` leaves out of the 231.
+    assert sum(n.startswith("Ex") for n in names) == 64
     elec = np.array([c["loc"][:3] for c in info["chs"]])
-    assert elec[names.index("Nk1"), 2] < -0.10  # well below the head origin
+    # 111 mm below the head origin, which is the figure the docstring quotes;
+    # the model's own 155 mm is measured in MNI space and would be wrong here.
+    assert -0.115 < elec[names.index("Nk1"), 2] < -0.105
+    assert elec[:, 2].min() == elec[names.index("Nk1"), 2]  # the lowest of all
     rr, _ = ny_head_scalp()
     for nk in ("Nk1", "Nk2", "Nk3", "Nk4"):
         d = np.linalg.norm(rr - elec[names.index(nk)], axis=1).min()

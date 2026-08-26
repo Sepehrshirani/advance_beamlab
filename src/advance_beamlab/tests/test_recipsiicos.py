@@ -25,6 +25,7 @@ from advance_beamlab._recipsiicos import (
     _apply_projector,
     _correlation_blocks,
     _correlation_gram,
+    _forward_gain,
     _optimal_rank,
     _power_columns,
     _power_projector,
@@ -460,6 +461,43 @@ def test_rank_curve_shapes_and_bounds(fwd_fixed):
     assert p_pwr[-1] > 0.99
 
 
+def test_the_top_of_the_rank_axis_is_not_the_identity(fwd_rich):
+    """The ``recipsiicos`` axis saturates at the span of the auto-products.
+
+    ``k = q^2`` is the least restrictive end of the axis, not a no-op. G_pwr
+    carries one column per source (three per free-orientation source), so a grid
+    with fewer columns than ``q^2`` -- the decimated grids this module
+    recommends -- caps the projector below the full space and leaves the
+    covariance modified even at the very top of the curve. Documenting that end
+    as "the identity" would invite reading the top of a curve as an untouched
+    covariance, which on such a grid it is not.
+    """
+    fwd, info = fwd_rich
+    common_ch = list(fwd["sol"]["row_names"])
+    b_op, q, _ = _reduction_operator(
+        info,
+        fwd,
+        common_ch,
+        noise_cov=None,
+        whitener_rank=None,
+        pct_var=_DEFAULT_PCT_VAR,
+        n_virtual=20,
+    )
+    gain, fixed = _forward_gain(fwd, common_ch)
+    g_pwr = _power_columns(_tangential_topographies(b_op @ gain, fixed))
+    n_cols = g_pwr.shape[1]
+    assert n_cols < q**2  # the regime the module recommends
+
+    projector, _ = _power_projector(g_pwr, q**2)
+    assert np.linalg.matrix_rank(projector) == n_cols
+
+    rng = np.random.default_rng(0)
+    root = rng.standard_normal((q, q))
+    cov = root @ root.T
+    modified = _unvec(projector @ _vec(cov), q)
+    assert np.linalg.norm(modified - cov) / np.linalg.norm(cov) > 0.1
+
+
 def test_rank_curve_returns_optimal(fwd_fixed):
     """With return_optimal the curve also yields a valid rank K*."""
     info = _avg_ref(mne.create_info(fwd_fixed["sol"]["row_names"], 200.0, "eeg"))
@@ -529,11 +567,11 @@ def test_rank_curve_matches_bruteforce(fwd_fixed):
 
 def test_optimal_rank_direction_aware(fwd_rich):
     """K* is the 45-degree crossing, found per curve direction, with a floor."""
-    # recipsiicos: rising curves whose *identity* end is k = q^2, so the rank
-    # axis is traversed downward (Fig. 19 of the paper puts the ReciPSIICOS
-    # scale in descending order) and K* is one past the LAST negative
-    # difference. A measured curve is used because a hand-written one cannot be
-    # trusted to have the sign structure a real forward produces.
+    # recipsiicos: rising curves whose *least restrictive* end is k = q^2, so
+    # the rank axis is traversed downward (Fig. 19 of the paper puts the
+    # ReciPSIICOS scale in descending order) and K* is one past the LAST
+    # negative difference. A measured curve is used because a hand-written one
+    # cannot be trusted to have the sign structure a real forward produces.
     fwd, info = fwd_rich
     _, p_pwr, p_cor = recipsiicos_rank_curve(fwd, info, method="recipsiicos")
     kstar = _optimal_rank(p_pwr, p_cor, "recipsiicos")
@@ -772,6 +810,41 @@ def test_noise_cov_sharing_no_channels_raises(fwd_fixed):
         make_recipsiicos_cov(
             data_cov, fwd_fixed, info, rank=5, noise_cov=noise, pct_var=1.0
         )
+
+
+@pytest.mark.parametrize("rank_value", [None, "info", {"eeg": 7}])
+def test_whitener_rank_takes_the_forms_compute_whitener_takes(fwd_fixed, rank_value):
+    """``whitener_rank`` is MNE's ``rank``: None, 'info', 'full' or a per-type dict.
+
+    The three entry points hand this straight to :func:`mne.cov.compute_whitener`
+    and document its four forms, so the docstrings are only true as long as the
+    forms they name still reach it intact.
+    """
+    all_ch = list(fwd_fixed["sol"]["row_names"])
+    data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.5)
+    info = _avg_ref(mne.create_info(all_ch, 200.0, "eeg"))
+    info.set_montage("standard_1020")
+    cov = make_recipsiicos_cov(
+        data_cov, fwd_fixed, info, rank=2, whitener_rank=rank_value
+    )
+    assert cov["data"].shape == (len(all_ch), len(all_ch))
+    make_recipsiicos_lcmv(info, fwd_fixed, data_cov, rank=2, whitener_rank=rank_value)
+    recipsiicos_rank_curve(fwd_fixed, info, whitener_rank=rank_value)
+
+
+def test_whitener_rank_rejects_a_bare_integer(fwd_fixed):
+    """An int is the one plausible-looking value MNE does not accept.
+
+    It reads like a rank and used to be advertised as one, but MNE resolves the
+    rank per sensor type and refuses a number that does not say which type it
+    belongs to. The dict form is the one that does.
+    """
+    all_ch = list(fwd_fixed["sol"]["row_names"])
+    data_cov = _cov_from_sources(fwd_fixed, idx=[2, 20], rho=0.5)
+    info = _avg_ref(mne.create_info(all_ch, 200.0, "eeg"))
+    info.set_montage("standard_1020")
+    with pytest.raises(TypeError, match="None, dict, or str"):
+        make_recipsiicos_cov(data_cov, fwd_fixed, info, rank=2, whitener_rank=7)
 
 
 # --------------------------------------------------------------------------- #
@@ -1092,7 +1165,8 @@ def test_optimal_rank_logs_the_floor_backoff():
     rank that is returned.
     """
     # Whitened (decreasing) curve whose crossing at rank 2 has already emptied
-    # the power subspace, so the floor pulls K* back to the identity end.
+    # the power subspace, so the floor pulls K* back to the least restrictive
+    # end of the axis.
     p_pwr = np.array([1.0, 0.05, 0.03, 0.02, 0.01])
     p_cor = np.array([1.0, 0.02, 0.01, 0.005, 0.0])
     with catch_logging(verbose="info") as log:

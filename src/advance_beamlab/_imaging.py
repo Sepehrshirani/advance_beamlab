@@ -39,7 +39,7 @@ References
 # License: BSD-3-Clause
 
 import numpy as np
-from mne.utils import _check_option, _validate_type, verbose
+from mne.utils import _check_option, _validate_type, logger, verbose
 
 # Below this, a projected-noise power is treated as numerically zero rather than
 # divided by. A filter whose noise gain underflows is degenerate, and the image
@@ -62,6 +62,10 @@ def _power(filters, cov):
     if isinstance(filters, MCMVBeamformer):
         out = np.asarray(apply_mcmv_cov(cov, filters), float)
         return np.diag(out) if out.ndim == 2 else np.asarray(out, float).ravel()
+    # Silenced deliberately: the apply path reports the rank and whitening of
+    # each covariance it is handed, which here is an intermediate step the
+    # caller did not ask for and would see two or three times over for a single
+    # image. What the image itself came to is logged by the caller instead.
     stc = apply_lcmv_cov(cov, filters, verbose=False)
     return np.asarray(stc.data, float).ravel()
 
@@ -117,9 +121,23 @@ def power_image(
     windows and :math:`N` the power passed from the noise covariance,
 
     .. math::
-        Z = \frac{S_a}{N}, \qquad
+        Z^2 = \frac{S_a}{N}, \qquad
         T = \frac{S_a - S_c}{2N}, \qquad
         F = \log\frac{S_a}{S_c}
+
+    The square on the left is not a slip, and it is the one place the naming
+    here can mislead. ``kind='pseudo-z'`` returns a ratio of *powers*, while the
+    pseudo-Z of :footcite:`VrbaRobinson2001` is a ratio of amplitudes -- source
+    strength over the standard deviation of the projected noise -- so what comes
+    back is the square of the published quantity. Squaring is monotone, so no
+    peak moves and no ranking changes, but the numbers are not the same ones: a
+    location at three times the noise amplitude reads as 9 here rather than 3,
+    and a threshold quoted from a paper has to be squared before it is applied
+    to this image. Take the square root if you need the published scale. The
+    power ratio is what is returned because it is the quantity the other two
+    images are built from -- pseudo-T differences these powers, not their roots
+    -- and because it stays linear in the active covariance, so scaling a window
+    scales the image by the same factor.
 
     The factor of two in :math:`T` is the noise entering through both windows
     :footcite:`VrbaRobinson2001`. It is a constant, so it changes the scale of
@@ -130,7 +148,12 @@ def power_image(
     than as a very large number. That case is a degenerate filter, and the image
     value there is undefined rather than significant -- reporting it as a huge
     pseudo-Z would put the brightest voxel in the image where the beamformer
-    failed most completely.
+    failed most completely. ``'pseudo-f'`` can fail at either end of its ratio:
+    a control window the filter passes no power from is the underflow just
+    described, and an *active* window it passes no power from sends the ratio to
+    zero, whose log is :math:`-\infty`. Both come back as ``nan``, because an
+    infinitely negative voxel is no more meaningful than an infinitely positive
+    one, and either would take the colour scale of the whole image with it.
 
     The same normalisation applies to any of the methods in this package. It is
     worth remembering what it does *not* fix: a differential image removes the
@@ -169,14 +192,31 @@ def power_image(
             ratio = np.where(
                 base > _NOISE_FLOOR, active / np.maximum(base, _NOISE_FLOOR), np.nan
             )
-        return np.log(ratio) if log_ratio else ratio
+            # The log stays inside the errstate, and behind a guard of its own:
+            # a location the filter passes no power from at all has a ratio of
+            # zero, and log(0) is -inf rather than a very large decrease. That
+            # is the same degenerate filter the noise floor catches on the
+            # other side of the division, so it is reported the same way.
+            out = np.where(ratio > 0.0, np.log(ratio), np.nan) if log_ratio else ratio
+    else:
+        noise = _power(filters, noise_cov)
+        usable = noise > _NOISE_FLOOR
+        out = np.full(active.shape, np.nan, float)
+        if kind == "pseudo-z":
+            out[usable] = active[usable] / noise[usable]
+        else:
+            base = _power(filters, baseline_cov)
+            out[usable] = (active[usable] - base[usable]) / (2.0 * noise[usable])
 
-    noise = _power(filters, noise_cov)
-    usable = noise > _NOISE_FLOOR
-    out = np.full(active.shape, np.nan, float)
-    if kind == "pseudo-z":
-        out[usable] = active[usable] / noise[usable]
-        return out
-    base = _power(filters, baseline_cov)
-    out[usable] = (active[usable] - base[usable]) / (2.0 * noise[usable])
+    # The count of undefined locations is the part worth saying out loud: it is
+    # invisible in a thresholded image, and an image that is largely nan is
+    # reporting a source space the covariances could not support rather than a
+    # weak effect.
+    n_undefined = int(np.count_nonzero(~np.isfinite(out)))
+    peak = np.nanmax(out) if n_undefined < out.size else np.nan
+    logger.info(
+        f"    {kind} image over {out.size} source(s)"
+        f"{' as a log ratio' if kind == 'pseudo-f' and log_ratio else ''}: "
+        f"peak {peak:.4g}, {n_undefined} undefined"
+    )
     return out
