@@ -1188,11 +1188,12 @@ def constraint_demo(
     # Two alternatives were measured and rejected, on one two-source alpha scene
     # 6 cm apart at r = 0.9 and a single averaged trial. The ratio of root mean
     # squares is not a recovery measure at all -- the output is the source plus
-    # whatever interference survives the filter, so it read 5.65 for LCMV and
-    # 5.75 for MCMV, separating them by two per cent where the filters deliver
-    # 0.13 and 1.00. Regressing the output on the true waveform agrees with this
-    # form in expectation but is estimated from one short noisy recording, and
-    # on that scene it returned 0.21 against a delivered 0.13. This form has no
+    # whatever interference survives the filter, so it read 5.63 for LCMV and
+    # 5.79 for MCMV, separating them by three per cent where the filters deliver
+    # -0.13 and 1.00. Regressing the output on the true waveform agrees with this
+    # form in expectation but is estimated from one short noisy recording, and on
+    # that scene it returned 0.23 against a delivered -0.13, the right size with
+    # the wrong sign. This form has no
     # noise in it, so it says what the filter does rather than how well one
     # recording happens to measure it.
     overlap = true_tcs @ true_tcs.T

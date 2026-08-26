@@ -234,11 +234,11 @@ comparison below is again one scene rather than the grid, because the panel does
 not store a background-free variant to read off: a realistic head model, a
 correlated pair 6 cm apart at :math:`r = 0.9`, alpha. Rerun with the background
 removed, LCMV's delivered amplitude at a hundred trials barely moves, 0.19
-against 0.18, because with that much averaging the filter is shaped by the
+against 0.16, because with that much averaging the filter is shaped by the
 sources rather than by the interference. At a single trial it moves a great
-deal: 0.16 without the background against 0.06 with it. Structured brain
-interference is the harder problem, and it is hardest exactly where real
-single-trial work lives.
+deal, and changes sign: 0.16 without the background against -0.06 with it.
+Structured brain interference is the harder problem, and it is hardest exactly
+where real single-trial work lives.
 
 **The head model control decides whether the sources are where the beamformer
 looks**, and the two settings exist because no single choice can show everything.
@@ -284,13 +284,13 @@ limitation of the panel. Under a mismatched model a beamformer pointed at a
 slightly wrong location does not pass a weakened copy of the source, it actively
 nulls it, and at a hundred trials that costs more amplitude than the entire
 cancellation effect the constraint was protecting against. At :math:`r = 0.99`
-MCMV falls from 1.00 to 0.06, which is barely distinguishable from LCMV's 0.03.
+MCMV falls from 1.00 to 0.05, which is barely distinguishable from LCMV's 0.02.
 **The joint constraint only buys you anything if your head model and
 coregistration are good enough to use it.**
 
 The methods do not all fail the same way, though, and that is the most useful
-thing here. ReciPSIICOS holds 0.85 and ABMC 0.59 under the model error that
-takes MCMV from 1.00 to 0.06. Neither is told where the sources are: one edits
+thing here. ReciPSIICOS holds 0.81 and ABMC 0.57 under the model error that
+takes MCMV from 1.00 to 0.05. Neither is told where the sources are: one edits
 the covariance and the other matches a waveform, and neither writes an equation
 at a location that turns out to be wrong. What a wrong location destroys is the
 methods that needed the location in the first place.
@@ -325,7 +325,7 @@ cancels.
 What the recording shows, averaged over every epoch, is the effect at full
 strength. LCMV's off-diagonal reaches :math:`-1.03` and it delivers 0.56 of the
 amplitude; MCMV holds the table at zero and delivers 1.00; ReciPSIICOS and ABMC
-control it too, at :math:`+0.04` and :math:`+0.03`. Nothing here was tuned to
+control it too, at :math:`+0.04` and :math:`+0.02`. Nothing here was tuned to
 produce that; it is the published example's own preprocessing, run through the
 same code path as the simulation.
 
@@ -488,10 +488,10 @@ grid, since neither rejected measure is stored in the panel: a correlated pair
 
 The output's own amplitude over the truth's is not a recovery measure at all.
 The output is the source plus whatever interference survives the filter, so it
-reads **7.28 for LCMV and 7.22 for MCMV** on that scene, separating the two by
-under one per cent where the filters deliver -0.13 and 1.00 respectively. A
-measure that cannot tell apart filters differing in sign, let alone by a factor
-of seven, is measuring the noise and not the recovery. Regressing the output on
+reads **5.63 for LCMV and 5.79 for MCMV** on that scene, separating the two by
+three per cent where the filters deliver -0.13 and 1.00 respectively. A measure
+that cannot tell apart filters differing in sign, let alone by a factor of
+seven, is measuring the noise and not the recovery. Regressing the output on
 the true waveform is far better behaved and agrees with the delivered amplitude
 in expectation, but it is still estimated from one short noisy recording: on the
 same scene it returns 0.23 where the filter delivers -0.13, which is the right
@@ -513,7 +513,7 @@ is far less to leak and the direction is no longer uniform: LCMV falls from
 1.5 per cent to none and ReciPSIICOS from 28.9 to 22.1, MCMV never leaks there
 at all, and ABMC alone rises, 18.7 to 49.0, in cases that mostly clear the line
 by very little -- their median delivered amplitude is 1.02, five in six stay
-below 1.05, and the largest of them is 1.24. In a percent or two of
+below 1.05, and the largest of them is 1.24. In a small fraction of
 configurations the delivered amplitude comes out **negative**: the filter
 returns an inverted copy of the source, which taking a magnitude would have
 hidden completely. It happens most to LCMV, at 1.3 per cent, and never to MCMV,
@@ -523,8 +523,8 @@ sign for exactly that reason.
 MCMV delivers exactly 1.000 in every *matched* configuration, at every
 correlation and every signal-to-noise ratio, because its constraint fixes the
 whole table rather than one entry. Switch the head model to realistic and that
-guarantee is gone, a median 0.20 at :math:`r = 0.99`, because the table it pins
-is the table at the wrong locations.
+guarantee is gone: at :math:`r = 0.99` the median is 0.85 at one trial and 0.05
+at a hundred, because the table it pins is the table at the wrong locations.
 
 The last panel sweeps the whole correlation axis at the current settings, for all
 four methods at once, plotting both recovered amplitude and localisation error
