@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from advance_beamlab import permutation_image_test
+from advance_beamlab._stats import _MAX_BLOCK_ELEMENTS
 
 
 def test_the_family_wise_correction_controls_the_error_rate():
@@ -236,11 +237,13 @@ def test_the_blocked_maximum_is_the_maximum_of_the_whole_surface():
     Under ``'maximum'`` the permutation surface is never held whole -- one
     number per draw survives it, and holding the rest is what makes a
     whole-brain test run out of memory. The blocking is only defensible if it
-    is arithmetically invisible, so compare it against the surface itself,
+    reduces to the same numbers, so compare it against the surface itself,
     which ``'none'`` returns for the same draws.
     """
+    n_src = 4000
+    assert _MAX_BLOCK_ELEMENTS // n_src < 512, "the draws must span several blocks"
     rng = np.random.default_rng(14)
-    images = rng.standard_normal((10, 4000))  # wide enough to need many blocks
+    images = rng.standard_normal((10, n_src))
     images[:, 500:505] += 1.4
     obs, p, blocked = permutation_image_test(
         images, n_permutations=512, correction="maximum", seed=8, verbose=False
@@ -248,7 +251,12 @@ def test_the_blocked_maximum_is_the_maximum_of_the_whole_surface():
     _, _, surface = permutation_image_test(
         images, n_permutations=512, correction="none", seed=8, verbose=False
     )
-    np.testing.assert_array_equal(blocked, surface.max(axis=1))
+    # Draw for draw, to floating point rather than bit for bit: the two runs
+    # contract the same terms, but one forms a (block, n_obs) product and the
+    # other an (n_draws, n_obs) one, and BLAS may sum those in a different
+    # order. A block boundary in the wrong place would move a draw's maximum
+    # by far more than this tolerance allows.
+    np.testing.assert_allclose(blocked, surface.max(axis=1), rtol=1e-12, atol=0)
 
     # And the counting: a sorted null is searched rather than compared against
     # every source, which would rebuild an array of the size just avoided. The

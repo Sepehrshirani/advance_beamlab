@@ -219,10 +219,10 @@ def permutation_image_test(
         # it is an (n_draws, n_sources) array of doubles, and the two-sided
         # fold would cost that again; on a whole-brain image at a thousand
         # permutations that is the difference between a test that runs and one
-        # that cannot be started. Blocking is over rows of a product whose
-        # contraction runs over observations alone, so every entry is formed
-        # from the same terms as before and the p-values are identical, not
-        # merely close.
+        # that cannot be started. Blocking splits the product by row, and each
+        # entry's sum runs over observations alone, so no sum is ever divided
+        # between blocks: every entry is formed from exactly the terms it would
+        # have been, up to the order BLAS chooses to add them in.
         block = max(1, min(n_draws, _MAX_BLOCK_ELEMENTS // max(n_src, 1)))
         null = np.empty(n_draws)
         for start in range(0, n_draws, block):
