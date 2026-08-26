@@ -1456,12 +1456,17 @@ def pack(
     # a uniform ramp whatever the underlying shape, so all four methods rendered
     # identically -- measured, the fraction of the grid above half the display
     # maximum was 0.500 for every one of them. Normalising alone is too peaky to
-    # show any structure (0.2 per cent of the grid above half). The cube root
-    # sits between, and separates the methods: over the whole grid the fraction
-    # above half the display maximum is 10.6 per cent for LCMV, 7.0 for MCMV and
-    # 15.8 for ReciPSIICOS. ABMC depends on which template it was given -- 33.9
-    # with the target's own waveform, 86.4 with a same-band one and 95.6 with a
-    # wrong-band one -- because its map scores template match rather than power.
+    # show any structure: 1.3 per cent of the grid for LCMV and MCMV, which is
+    # two bright dots on an empty brain. The cube root sits between, and
+    # separates the methods: over the whole grid the fraction above half the
+    # display maximum is 10.9 per cent for LCMV, 7.2 for MCMV and 16.1 for
+    # ReciPSIICOS. ABMC depends on which template it was given -- 34.8 with the
+    # target's own waveform, 87.1 with a same-band one and 96.3 with a wrong-band
+    # one -- because its map scores template match rather than power.
+    #
+    # These are properties of the payload, so they go stale when it is rebuilt.
+    # tools/panel_statistics.py reads them back off the built file, along with
+    # every other number doc/panel.rst quotes about the panel.
     maps = []
     for r in results:
         m = np.asarray(r["power_map"], float)

@@ -101,7 +101,7 @@ says anything on its own.
 
    <div id="advance-beamlab-panel" class="cp-root"></div>
    <link rel="stylesheet" href="_static/constraint_panel.css?v=7">
-   <script src="_static/constraint_panel_data.js?v=4"></script>
+   <script src="_static/constraint_panel_data.js?v=5"></script>
    <script src="_static/constraint_panel.js?v=7"></script>
 
 The controls
@@ -170,10 +170,10 @@ panel's :math:`P` of 0.03 the template barely changes the weights, which is the
 method behaving as designed -- it is a mild steer, not a second distortionless
 constraint -- so the delivered amplitude hardly moves. The map is a different
 story, because the map *is* the template match: on hippocampal theta a
-same-band template gives a map correlating 0.86 with the one the target's own
-waveform produces, and a wrong-band template only 0.14. The peak often survives
-that, which is worth knowing too; what a bad template mostly costs you is the
-rest of the picture.
+same-band template gives a map correlating 0.66 with the one the target's own
+waveform produces, and a wrong-band template nothing at all, -0.05. The peak
+often survives that, which is worth knowing too; what a bad template mostly
+costs you is the rest of the picture.
 
 One caveat that the burst morphology makes obvious. For a rhythm, naming the
 band is most of what a template needs to say. For spike-like activity it is not:
@@ -200,10 +200,11 @@ two settings are 0.20 and 2.0.
 
 This control moves two things in opposite directions, and that is worth sitting
 with rather than explaining away. Averaging always improves **localisation**:
-the median error over the correlated scenes falls from 9.5 mm to 0 mm with a
-matched model, and from 15.9 mm to 9.0 mm with a realistic one. But averaging
-makes LCMV's **cancellation worse**, not better: at :math:`r = 0.99` its
-delivered amplitude falls from 0.51 at one trial to 0.03 at a hundred. Nothing
+the median error over the correlated scenes, pooled over every method and
+template the panel holds, falls from 15.6 mm to 0 mm with a matched model, and
+from 20.4 mm to 9.0 mm with a realistic one. But averaging makes LCMV's
+**cancellation worse**, not better: at :math:`r = 0.99` its delivered amplitude
+falls from 0.48 at one trial to 0.03 at a hundred. Nothing
 has broken. Cancellation is a property of the clean covariance, and at one trial
 the noise is large enough that the filter cannot adapt sharply enough to perform
 it. Averaging removes the noise that was accidentally protecting the source.
@@ -267,7 +268,7 @@ gives up.
 What the matched setting buys is the only clean view of what the *constraint*
 does, with everything else held exact. At :math:`r = 0.99` and a hundred trials
 LCMV delivers 0.03 of the source amplitude while MCMV delivers 1.00, ReciPSIICOS
-0.82 and ABMC 1.02. That gap is the whole point of the page, and it is a gap
+0.95 and ABMC 1.02. That gap is the whole point of the page, and it is a gap
 rather than a ratio: LCMV's delivered amplitude passes through zero and changes
 sign under strong cancellation, so dividing by it means nothing.
 
@@ -275,7 +276,7 @@ With **realistic** selected, the sources are taken from the full 9248-point
 forward while the beamformer still scans the decimated 797-point grid, so they
 sit a few millimetres from anything any method can report. The localisation
 error becomes what a localiser actually produces: not one configuration in the
-whole grid reports zero, the median is 11.4 mm, and the tail runs past 60 mm
+whole grid reports zero, the median is 11.9 mm, and the tail runs past 120 mm
 where the methods genuinely fail.
 
 The price is worth understanding, because it is a real result rather than a
@@ -394,8 +395,8 @@ clean covariance, and noise was the only thing preventing the filter from
 performing it.
 
 The **visual** conditions are there as a control, and they behave differently
-rather than identically. The two visual sources sit 3.8 cm apart against the
-auditory pair's 11.2 cm, and LCMV's off-diagonal comes out *positive*, around
+rather than identically. The two visual sources sit 3.2 cm apart against the
+auditory pair's 10.9 cm, and LCMV's off-diagonal comes out *positive*, around
 :math:`+0.47`: the neighbour is added rather than subtracted. It is the same
 failure to control the off-diagonal, in the other direction.
 
@@ -430,12 +431,12 @@ underlying shape, so all four rendered identically. Measured, the fraction of th
 grid above half the display maximum was 0.500 for every method. Normalising
 without compression goes too far the other way and leaves two bright dots on an
 empty brain. The cube root sits between and separates them: averaged over the
-whole grid, that same fraction now reads 10.6 per cent for LCMV, 7.0 for MCMV
-and 15.8 for ReciPSIICOS.
+whole grid, that same fraction now reads 10.9 per cent for LCMV, 7.2 for MCMV
+and 16.1 for ReciPSIICOS.
 
 ABMC has to be quoted per template, and the numbers say something worth
-knowing. Its map covers 33.9 per cent of the grid when it is handed the target's
-own waveform, 86.4 with an independent signal from the same band, and 95.6 with
+knowing. Its map covers 34.8 per cent of the grid when it is handed the target's
+own waveform, 87.1 with an independent signal from the same band, and 96.3 with
 a wrong-band one. The oracle template is what makes ABMC's localiser look sharp;
 give it the template an experiment can actually supply and the map is much more
 diffuse. That is the honest cost of a method whose localiser scores template
@@ -487,41 +488,43 @@ grid, since neither rejected measure is stored in the panel: a correlated pair
 
 The output's own amplitude over the truth's is not a recovery measure at all.
 The output is the source plus whatever interference survives the filter, so it
-reads **5.65 for LCMV and 5.75 for MCMV** on that scene, separating the two by
-two per cent where the filters deliver 0.13 and 1.00 respectively. A measure
-that cannot tell apart filters differing by a factor of seven is measuring the
-noise, not the recovery. Regressing the output on the true waveform is far
-better behaved and agrees with the delivered amplitude in expectation, but it is
-still estimated from one short noisy recording: on the same scene it returns
-0.21 where the filter delivers 0.13.
+reads **7.28 for LCMV and 7.22 for MCMV** on that scene, separating the two by
+under one per cent where the filters deliver -0.13 and 1.00 respectively. A
+measure that cannot tell apart filters differing in sign, let alone by a factor
+of seven, is measuring the noise and not the recovery. Regressing the output on
+the true waveform is far better behaved and agrees with the delivered amplitude
+in expectation, but it is still estimated from one short noisy recording: on the
+same scene it returns 0.23 where the filter delivers -0.13, which is the right
+size and the wrong sign.
 
 Read a value below 100 per cent as cancellation and one above it as leakage,
 where a positive off-diagonal adds a correlated neighbour instead of subtracting
-it. Leakage is the minority case, from 5.4 per cent of configurations for LCMV
-and 5.9 for MCMV to 25.6 for ABMC and 31.6 for ReciPSIICOS. Whether averaging
+it. Leakage is the minority case, from 7.0 per cent of configurations for LCMV
+and 8.9 for MCMV to 31.7 for ABMC and 32.7 for ReciPSIICOS. Whether averaging
 makes it more or less common depends on the head model, so the two are worth
 quoting apart. With a realistic one every method leaks less as the data improve
--- LCMV in 20.1 per cent of its single-trial configurations against none at all
-of its hundred-trial ones, MCMV 23.5 against none, ReciPSIICOS 41.7 against
-31.9 -- because a filter with too little data to adapt degenerates towards a
+-- LCMV in 26.5 per cent of its single-trial configurations against none at all
+of its hundred-trial ones, MCMV 35.5 against none, ReciPSIICOS 43.4 against
+36.5 -- because a filter with too little data to adapt degenerates towards a
 non-adaptive one with poor spatial selectivity, while one given enough adapts
 sharply enough to null a source it is pointed slightly to one side of, which
 takes the amplitude below one rather than above it. With a matched model there
 is far less to leak and the direction is no longer uniform: LCMV falls from
-1.5 per cent to none and ReciPSIICOS from 30.9 to 22.1, MCMV never leaks there
-at all, and ABMC alone rises, 23.4 to 44.0, in cases that clear the line by very
-little -- their median delivered amplitude is 1.02 and not one of them reaches
-1.05. In a percent or two of configurations the delivered amplitude comes out
-**negative**: the filter returns an inverted copy of the source, which taking a
-magnitude would have hidden completely. It happens most to LCMV, at 2.7 per
-cent, and never to MCMV, whose constraint forbids it. The readout beside the
-constraint table carries the sign for exactly that reason.
+1.5 per cent to none and ReciPSIICOS from 28.9 to 22.1, MCMV never leaks there
+at all, and ABMC alone rises, 18.7 to 49.0, in cases that mostly clear the line
+by very little -- their median delivered amplitude is 1.02, five in six stay
+below 1.05, and the largest of them is 1.24. In a percent or two of
+configurations the delivered amplitude comes out **negative**: the filter
+returns an inverted copy of the source, which taking a magnitude would have
+hidden completely. It happens most to LCMV, at 1.3 per cent, and never to MCMV,
+whose constraint forbids it. The readout beside the constraint table carries the
+sign for exactly that reason.
 
 MCMV delivers exactly 1.000 in every *matched* configuration, at every
 correlation and every signal-to-noise ratio, because its constraint fixes the
 whole table rather than one entry. Switch the head model to realistic and that
-guarantee is gone, 0.06 at :math:`r = 0.99`, because the table it pins is the
-table at the wrong locations.
+guarantee is gone, a median 0.20 at :math:`r = 0.99`, because the table it pins
+is the table at the wrong locations.
 
 The last panel sweeps the whole correlation axis at the current settings, for all
 four methods at once, plotting both recovered amplitude and localisation error
