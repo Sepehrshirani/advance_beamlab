@@ -18,11 +18,16 @@ auditory recording, ``examples/plot_recipsiicos_auditory.py`` concludes that
 it on hemispheric balance here"; re-running it gives an LCMV
 left/right balance of 0.94 against 0.84 for ReciPSIICOS, so the projection is
 measurably worse on the metric the example chose. In
-``examples/plot_mcmv_auditory.py``, widening the covariance window from the
-N100 (80-130 ms, recovered inter-hemispheric r = +0.55) to 50-200 ms
-(r = -0.13) collapses the MCMV/LCMV peak-amplitude ratios to 1.02 and 0.95.
-The second is MCMV doing marginally *worse* than LCMV. The same file declines
-to claim better focality: "It is tempting to add 'and the beamformer is
+``examples/plot_mcmv_auditory.py``, the N100 window (80-130 ms) has the two
+hemispheres correlated at r = +0.82 between their jointly reconstructed traces
+and puts MCMV ahead by 2.21x and 1.48x, but re-running the same file with a
+50-200 ms covariance window collapses those peak-amplitude ratios to 1.02 and
+0.95. The second is MCMV doing marginally *worse* than LCMV. Not because the
+pair decorrelates: held at the same two vertices over the wider window it reads
+r = +0.94 and MCMV still gains 1.97x and 1.71x. What the wider window moves is
+the LCMV peaks the example constrains, the left one by 25 mm, and it is the
+constraint set that MCMV lives or dies by. The same file declines to claim
+better focality: "It is tempting to add 'and the beamformer is
 sharper', and on this recording that is simply not true" (dSPM is the most
 compact of the three at the N100), and it recommends that with no named sources
 a linear method "remains the safer default".
@@ -98,8 +103,9 @@ Decision table
        PW-MCMV -0.093, APW-MCMV -0.151.
      - One MCMV solve and one estimate per ROI **pair**: 22-29 ms/pair at 94
        channels x 24,000 samples, so ~50-65 s per band per subject for a
-       68-label atlas, plus ~15 s for the AR(1) screen. Below ~5 dB sensor SNR
-       PW-MCMV is worse than LCMV.
+       68-label atlas, plus ~15 s for the AR(1) screen. PW-MCMV stays the closer
+       estimate of the spurious edge down to 4.6 dB sensor SNR, though its sign
+       is already wrong there; below about 3 dB LCMV is the closer of the two.
    * - A low-variance transient with a reproducible morphology you can supply as
        a template (IED, evoked spike), contributing of order 1% of the segment's
        sensor variance
@@ -280,8 +286,10 @@ exceed the retained power-Gram rank of 269 and annihilate the cleaned covariance
 to exactly zero, and K*/8 and K*/3 trip the ">20% negative-eigenvalue energy"
 warning; the flat amplitude at high rank is an artefact of a unit-gain read-out
 on a degenerate covariance. Both conditions are only *warned* about: the sole
-hard error is ``rank`` above q^2, which is 1600 on that forward, three orders of
-magnitude above the rank at which the covariance is already zero. Note too that
+hard error is ``rank`` above q^2, which on that forward is 1600 (q = 40 virtual
+sensors), not quite six times the 269 at which the covariance is already zero.
+The hard error therefore sits far above the rank that actually binds, and
+clearing it is no evidence the projection left anything behind. Note too that
 the automatic K* is not guaranteed to clear the warning: ``method='recipsiicos'``
 at its own K* = 60 trips it (21.7%) on the simulation's forward at both
 ``reg=0.01`` and ``reg=0.05``, so the two criteria can conflict and you must
@@ -333,9 +341,13 @@ an error bound.
 and grows with noise, so on the same scenario the spurious edge runs LCMV
 +0.097 / +0.122 / +0.188 / +0.240 / +0.348 / +0.410 against PW-MCMV -0.100 /
 -0.030 / +0.166 / +0.336 / +0.658 / +0.847 at 22.7 / 8.7 / 4.6 / 2.7 / -0.9 /
--5.3 dB. PW-MCMV becomes the worse estimator somewhere between 9 and 5 dB,
-while APW-MCMV, whose null is not data-adaptive, held -0.14 to -0.17 throughout.
-Do not import the "regularisation pushes LCMV back toward the truth" reasoning
+-5.3 dB. Read that against the truth and the two crossings are separate: the
+sign of PW-MCMV's estimate goes wrong between 8.7 and 4.6 dB, but its absolute
+error only overtakes LCMV's between 4.6 dB (0.317 against 0.339) and 2.7 dB
+(0.487 against 0.391), so at 4.6 dB it is still the better estimator of a
+number whose sign it has already lost. APW-MCMV, whose null is not
+data-adaptive, held -0.14 to -0.17 throughout. Do not import the
+"regularisation pushes LCMV back toward the truth" reasoning
 from the amplitude examples: for connectivity, noise moved LCMV's spurious edge
 *away* from the truth and dropped its genuine edge from 0.992 to 0.667. When
 your ROI vertices are uncertain: displacing one ROI by 12 mm turned PW-MCMV's
@@ -443,9 +455,13 @@ the whole segment with zero padding, so at large lags the correlation is taken
 against a mostly empty template, and the per-column lag is seeded from an
 LCMV-type distortionless output and never re-estimated, so it inherits the
 statistic ABMC exists to improve on. ``P`` trades the distortionless constraint
-against the template constraint; the default is 0.03 and the documented live
-range is inconsistent between the tuning table (0.01-1) and the docstring
-(0.01-0.1). Choose it on your own data with ``P='auto'`` or
+against the template constraint; the default is 0.03 and the documented working
+range is 0.01-0.1: below it the constraint is inert, and above it the peak
+starts to move long before any weight blows up. On the example fixture every
+peak is still where a vanishing ``P`` puts it up to ``P`` = 0.18, but by
+``P`` = 1 half of the eight have moved and the mean error has gone from 0.85 cm
+to 2.20 cm, while the first weights blow up only at ``P`` = 2.3. Choose it on
+your own data with ``P='auto'`` or
 :func:`~advance_beamlab.abmc_stability_curve`, which picks the widest run of
 ``P`` over which the peak does not move rather than the ``P`` that maximises the
 match (the match rises with ``P`` by construction). Then read the diagnostics:
@@ -510,9 +526,11 @@ self-consistency, not robustness to head-model error. They are still
 informative about the *beamformers*: on this 231-electrode array, with two
 sources 34 mm apart (the example requests a 45 mm offset; the nearest mesh node
 is 34.5 mm away and the example prints the achieved value) and time courses
-correlated at r = 0.999 (the printed "0.95" is a mixing coefficient hardcoded
-into the print statement), LCMV's two highest-power vertices are exactly the two
-true source indices, 0.0 and 0.0 mm error, and
+correlated at r = 0.999 (the example measures that correlation from the
+simulated waveforms and prints it; the 0.95 that appears in the code above it is
+the mixing coefficient generating them, which is not the resulting r), LCMV's
+two highest-power vertices are exactly the two true source indices, 0.0 and
+0.0 mm error, and
 :func:`~advance_beamlab.make_mcmv` given those indices returns 20.2 and
 19.8 nA m against 20 and 19 simulated. :func:`~advance_beamlab.scan_mcmv` on the
 same data, by contrast, returns vertices 8.9 and 23.6 mm off, contradicting the
@@ -522,15 +540,23 @@ example's own framing of this as "the regime that defeats a single-source LCMV".
 the reference and the channel matching. Build the info with
 :func:`~advance_beamlab.make_ny_head_info`, or otherwise attach an
 average-reference projector, because the lead field is supplied in common
-average reference. This is not enforced for you on the LCMV path:
-:func:`mne.beamformer.make_lcmv` accepts an info with no average-reference
-projector and returns a filter without complaint, and only
-:func:`~advance_beamlab.make_mcmv` raises, so on that path a wrongly
-referenced dataset gives a silently wrong result. Note also that of the 231
-positions only 160 are extended 10-05 names; the rest are face, neck and
-fiducial positions carried as
-EEG channels. Every conventional scalp cap therefore uses ``picks``, always
-drops roughly a third of the array, and always drops it from below the equator,
+average reference. Every entry point here that takes an ``info`` refuses a
+wrongly referenced one, raising MNE's own message verbatim:
+:func:`~advance_beamlab.make_mcmv` and :func:`~advance_beamlab.scan_mcmv`,
+:func:`~advance_beamlab.make_abmc` and :func:`~advance_beamlab.sbl_covariance`,
+all three ReciPSIICOS entry points
+(:func:`~advance_beamlab.make_recipsiicos_cov`,
+:func:`~advance_beamlab.make_recipsiicos_lcmv`,
+:func:`~advance_beamlab.recipsiicos_rank_curve`) and the connectivity route
+through :func:`~advance_beamlab.pairwise_mcmv_connectivity`. It is the LCMV
+comparison you have to check yourself: :func:`mne.beamformer.make_lcmv` accepts
+an info with no average-reference projector and returns a filter without
+complaint, so on that path a wrongly referenced dataset gives a silently wrong
+result. Note
+also that of the 231 positions only 160 are extended 10-05 names; the rest are
+face, neck and fiducial positions carried as EEG channels. Every conventional
+scalp cap therefore uses ``picks``, always drops roughly a third of the array,
+and always drops it from below the equator,
 so the "a subset's columns no longer sum to zero" approximation applies to every
 realistic use rather than only to small caps, and its topography error is never
 quantified here. Second, ``resolution``: ``'10K'`` is the default and ``'5K'``
@@ -567,8 +593,10 @@ sources and a constrained method to read them out; do not read amplitudes off
 the localiser, since those are exactly what the cancellation attacks.
 
 **Your sources are not correlated within the covariance window.** Over the
-sample auditory 50-200 ms window (r = -0.13) the MCMV/LCMV amplitude ratios are
-1.02 and 0.95. One qualification: if what you need is waveform shape rather than
+sample auditory 50-200 ms window the MCMV/LCMV amplitude ratios are 1.02 and
+0.95, on the pair that window's own LCMV peaks pick out: jointly reconstructed
+they correlate at r = +0.33, too little for there to be much cancellation left
+to undo. One qualification: if what you need is waveform shape rather than
 peak amplitude, the joint constraint still pays at low correlation by removing
 the partner's spatial leakage (RMSE 0.201 against 0.007 at r = 0.3), so use the
 recovered source covariance to decide about *amplitude*, not about whether MCMV
@@ -591,10 +619,10 @@ and 1.3x noise.
 
 **Your connectivity question is whether a strong genuine edge exists, or your
 sensor SNR is moderate.** On the repository's genuine edge (truth 1.000) LCMV
-returned 0.992 against PW-MCMV's 0.995. Below roughly 5 dB sensor SNR PW-MCMV's
+returned 0.992 against PW-MCMV's 0.995. Below about 3 dB sensor SNR PW-MCMV's
 data-adaptive residual leakage makes it the worse estimator of the spurious edge
-as well (+0.658 against LCMV's +0.348 at -0.9 dB, truth -0.151); only
-APW-MCMV's explicit null held.
+as well (+0.658 against LCMV's +0.348 at -0.9 dB, truth -0.151), and its sign
+has gone wrong by 4.6 dB, a step earlier; only APW-MCMV's explicit null held.
 
 **You cannot meet a method's precondition.** Constrained locations known only to
 a centimetre, ROI vertices you cannot place to better than a grid step, a

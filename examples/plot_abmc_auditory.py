@@ -24,18 +24,23 @@ distance from their peak to the nearest grid point inside that label. The
 comparison is against :func:`mne.beamformer.make_lcmv` on the same data.
 
 The summary, which the numbers below reproduce. On a single trial ABMC is worse
-than LCMV and wildly variable: a median of 29 mm across eight disjoint trials,
-ranging from 1 to 46 mm, against 11 mm for LCMV. From two trials upwards it is
-consistently better, 9 mm at two, four and eight trials and 7 mm at sixteen, and
-the spread narrows as it goes. So the method works here, but not at the
-signal-to-noise of one trial of this recording.
+than LCMV and wildly variable: a median of 32 mm across eight disjoint trials,
+ranging from 5 to 46 mm, against 11 mm for LCMV. From two trials upwards its
+median is never worse than LCMV's, but it is not uniformly better either: 9 mm
+at two trials, 11 mm at four, 9 mm at eight and 7 mm at sixteen. The four-trial
+point is the one to be careful with, because it sits on the LCMV line rather
+than below it. The spread narrows sharply between one trial and two -- the
+block range goes from 40.4 mm wide to 15.7 -- and after that only slowly, and
+not monotonically: 13.2 mm at four trials, 8.5 at eight and 9.3 at sixteen. So
+the method works here, but not at the signal-to-noise of one trial of this
+recording.
 
 Read the comparison knowing it is deliberately unfair to ABMC. LCMV is given the
 whole recording, all 72 epochs, while ABMC is given between one and sixteen
-trials, and ABMC still wins from two trials up. The asymmetry is not hidden in
-the legend: it is drawn there. ABMC is not given only its own trials either, and
-that cuts the other way: its template and noise covariance both come from all 72
-epochs, and only the segment being localised is short.
+trials, and ABMC still matches or beats it from two trials up. The asymmetry is
+not hidden in the legend: it is drawn there. ABMC is not given only its own
+trials either, and that cuts the other way: its template and noise covariance
+both come from all 72 epochs, and only the segment being localised is short.
 """
 # Authors: Sepehr Shirani <sepehrshirani@gmail.com>, <s.shirani@ucl.ac.uk>
 #          Muzhi Wang
@@ -136,10 +141,10 @@ print(f"LCMV peak: {lcmv_error:.0f} mm from Heschl's gyrus")
 #
 # Every level is scored on several *disjoint* blocks of trials rather than on
 # the first block alone. That is not fussiness. Scored on the first single trial
-# this recording gives 4.5 mm, which is the fifth best of the 72 single trials
-# available; the median single trial gives 20 mm, and only 28 per cent of them
-# beat LCMV. A single block would have made the method look about four times
-# better than it is.
+# this recording gives 5.1 mm, which is the sixth best of the 72 single trials
+# available; the median single trial gives 20 mm, and only 26 per cent of them
+# beat LCMV. A single block would have reported a number six times better than
+# the eight-block median below.
 
 trials = epochs.get_data()
 n_blocks = 8
@@ -168,23 +173,27 @@ for n_avg in (1, 2, 4, 8, 16):
 
 # %%
 # The single-trial point is the one to look at hardest, because it is the regime
-# the method is aimed at and it is where the method loses. Its median is 29 mm
-# against LCMV's 11, and its range runs from 1 mm to 46 mm, so a single trial of
-# this recording decides almost nothing. Everything from two trials up is both
-# better than LCMV and stable enough to mean something.
+# the method is aimed at and it is where the method loses. Its median is 32 mm
+# against LCMV's 11, and its range runs from 5 mm to 46 mm, so a single trial of
+# this recording decides almost nothing. From two trials up the medians are 9.0,
+# 11.1, 9.0 and 6.8 mm against LCMV's 11.2, which is a clear win at two, eight
+# and sixteen trials and a tie at four. Four trials is not a dip in the method
+# so much as a reminder of how little separates these numbers: eight blocks of a
+# 72-epoch recording, on a grid spaced at 3.4 mm.
 #
 # This is also why the sweep is scored on eight disjoint blocks rather than on
-# the first one. Scored on the first single trial alone the answer is 4.5 mm,
+# the first one. Scored on the first single trial alone the answer is 5.1 mm,
 # which would have read as ABMC beating LCMV by a factor of two at the hardest
-# setting. That trial is the fifth best of the 72 available.
+# setting. That trial is the sixth best of the 72 available.
 #
 # One further result is worth singling out because it was different a day
 # earlier. Before the automatic selection of ``P`` was made to reject values
 # above ``critical_p``, this recording gave 53 mm at a single trial: the plateau
 # rule had settled on the degenerate large-``P`` limit, which is a fixed point
-# and so looks perfectly stable while localising badly. ``critical_p`` is about
-# 1.25 here, so that constraint does real work on this dataset rather than
-# guarding a case that never arises.
+# and so looks perfectly stable while localising badly. ``critical_p`` runs
+# between 1.2 and 1.5 over the blocks of this sweep, about 1.4 at a single
+# trial, so that constraint does real work on this dataset rather than guarding
+# a case that never arises.
 
 n_avg, shares, errors, lo, hi = map(np.array, zip(*rows, strict=True))
 
@@ -213,9 +222,9 @@ for x, y, s in zip(n_avg, errors, shares, strict=True):
         (x, y),
         textcoords="offset points",
         # Below the marker, not above it. The LCMV reference sits at about
-        # 11 mm and the ABMC medians from two trials on sit just under 9, so a
-        # label eight points above a marker landed on the line and was struck
-        # through by it.
+        # 11 mm and the ABMC medians from two trials on run between 7 and 11,
+        # the four-trial one landing on the reference itself, so a label eight
+        # points above a marker landed on the line and was struck through by it.
         xytext=(0, -12),
         ha="center",
         va="top",

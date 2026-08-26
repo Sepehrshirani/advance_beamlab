@@ -244,16 +244,25 @@ looks**, and the two settings exist because no single choice can show everything
 
 With **matched** selected, the sources sit exactly on points the beamformer
 scans and the data are generated with the very leadfield being inverted. That is
-an inverse crime, and its symptom is unmistakable: LCMV, MCMV and ABMC localise
-every single matched source to exactly 0 mm, at both signal-to-noise settings,
-because nothing can move a matched filter off its own node. Read those zeros as
-a property of the simulation, not a claim about any method.
+an inverse crime, and its symptom is unmistakable: LCMV and MCMV localise every
+single matched source to exactly 0 mm, at both signal-to-noise settings, because
+nothing can move a matched filter off its own node. Read those zeros as a
+property of the simulation, not a claim about any method.
 
-ReciPSIICOS is the exception, and it is an instructive one. It misses the same
-single sources by up to 15 mm, because it does not localise on the covariance it
-was given: it projects that covariance first, and the projection moves the peak
-even when the model is exact. A method that edits the covariance gives up the
-inverse crime's free lunch along with everything else it gives up.
+ABMC joins them only when it is handed the target's own waveform. Its localiser
+scores template match rather than power, so an exact head model is not enough on
+its own: hand it an independent signal from the same band, which is the
+panel's own realistic best case, and it misses the source in nine of the
+twenty-four single-source configurations, by up to 35 mm, eight of them at one
+trial. What the oracle template buys ABMC is not a better filter but a localiser
+with nothing left to be wrong about.
+
+ReciPSIICOS misses them too, and it is instructive about something else. It
+misses the same single sources by up to 15 mm, because it does not localise on
+the covariance it was given: it projects that covariance first, and the
+projection moves the peak even when the model is exact. A method that edits the
+covariance gives up the inverse crime's free lunch along with everything else it
+gives up.
 
 What the matched setting buys is the only clean view of what the *constraint*
 does, with everything else held exact. At :math:`r = 0.99` and a hundred trials
@@ -315,11 +324,23 @@ cancels.
 What the recording shows, averaged over every epoch, is the effect at full
 strength. LCMV's off-diagonal reaches :math:`-1.03` and it delivers 0.56 of the
 amplitude; MCMV holds the table at zero and delivers 1.00; ReciPSIICOS and ABMC
-control it too, at :math:`+0.04` and :math:`+0.03`. The localiser peaks tell the
-same story from the other side: MCMV, ReciPSIICOS and ABMC all peak within
-6 to 10 mm of the dipole fit, and LCMV 15 mm away. Nothing here was tuned to
+control it too, at :math:`+0.04` and :math:`+0.03`. Nothing here was tuned to
 produce that; it is the published example's own preprocessing, run through the
 same code path as the simulation.
+
+The localiser peaks are a good deal messier, and the panel prints both of them
+rather than the better one because of it. Each map is read at its two strongest
+points, and each point is quoted as its distance to whichever of the two fitted
+dipoles is nearer: LCMV 16 and 15 mm, MCMV 6 and 15, ReciPSIICOS 110 and 10,
+ABMC 20 and 6. Quote the smaller of each pair and three of the four look like
+they have found the recorded pair; quote both and the claim shrinks. Only ABMC
+puts a peak by each dipole. LCMV's two strongest points sit 5 mm apart in the
+left hemisphere and MCMV's 12 mm apart in the same neighbourhood, so neither
+reports the right auditory source at all, and ReciPSIICOS's strongest point of
+all is 11 cm from either dipole. The sweep at the foot of the panel plots the
+worse of a method's two distances for that reason: minimising over the peaks as
+well as over the dipoles would score each method on its best pairing and say
+nothing about the other one.
 
 **There is no truth, and nothing here pretends otherwise.** Three of the panel's
 readouts need one and are therefore absent: no localisation error, no known
@@ -476,15 +497,23 @@ still estimated from one short noisy recording: on the same scene it returns
 
 Read a value below 100 per cent as cancellation and one above it as leakage,
 where a positive off-diagonal adds a correlated neighbour instead of subtracting
-it. Leakage is the minority case, from 3.4 per cent of configurations for LCMV
-to 26.5 for ReciPSIICOS, and it is more common at one trial than at a hundred,
-9.6 against 5.4 per cent with a matched model, because a filter with too
-little
-data to adapt degenerates towards a non-adaptive one with poor spatial
-selectivity. In a percent or two of configurations the delivered amplitude comes
-out **negative**: the filter returns an inverted copy of the source, which
-taking a magnitude would have hidden completely. It happens most to LCMV, at
-2.7 per
+it. Leakage is the minority case, from 5.4 per cent of configurations for LCMV
+and 5.9 for MCMV to 25.6 for ABMC and 31.6 for ReciPSIICOS. Whether averaging
+makes it more or less common depends on the head model, so the two are worth
+quoting apart. With a realistic one every method leaks less as the data improve
+-- LCMV in 20.1 per cent of its single-trial configurations against none at all
+of its hundred-trial ones, MCMV 23.5 against none, ReciPSIICOS 41.7 against
+31.9 -- because a filter with too little data to adapt degenerates towards a
+non-adaptive one with poor spatial selectivity, while one given enough adapts
+sharply enough to null a source it is pointed slightly to one side of, which
+takes the amplitude below one rather than above it. With a matched model there
+is far less to leak and the direction is no longer uniform: LCMV falls from
+1.5 per cent to none and ReciPSIICOS from 30.9 to 22.1, MCMV never leaks there
+at all, and ABMC alone rises, 23.4 to 44.0, in cases that clear the line by very
+little -- their median delivered amplitude is 1.02 and not one of them reaches
+1.05. In a percent or two of configurations the delivered amplitude comes out
+**negative**: the filter returns an inverted copy of the source, which taking a
+magnitude would have hidden completely. It happens most to LCMV, at 2.7 per
 cent, and never to MCMV, whose constraint forbids it. The readout beside the
 constraint table carries the sign for exactly that reason.
 

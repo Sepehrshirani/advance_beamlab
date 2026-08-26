@@ -206,23 +206,37 @@ fig.tight_layout()
 
 # %%
 # **How many sources are real?** ``pseudo_z`` is the pseudo-Z of each source at
-# the iteration it was added. Genuine sources give large values; once the search
-# starts fitting noise it drops to a baseline and stays there. That baseline is
+# the iteration it was added. Once the search runs out of sources and starts
+# fitting noise the value drops to a baseline and stays there. That baseline is
 # generally **not** one and has to be judged from the data, as Moiseev et al.
 # stress. That is why ``scan_mcmv`` returns the whole sequence rather than
 # stopping on a threshold of its own.
 #
-# Note the sequence is not monotone. The search is greedy, so the order in which
-# sources are found is not an ordering by strength.
+# Read the sequence whole rather than one step at a time, because the run before
+# the drop is not a descending one. The search is greedy: each iteration
+# maximises the joint localiser given the sources already fixed, so it does not
+# take the strongest source next. Here the three genuine sources come out at 2.9,
+# 1.5 and 10.4, and the two spurious ones at 1.1 and 1.0. The second genuine
+# source is therefore nearer the noise floor than to either of its partners, and
+# stopping at the first fall would have kept two sources and discarded the
+# strongest of the three.
 
 pz = np.asarray(result["pseudo_z"], dtype=float)
 fig, ax = plt.subplots(figsize=(7, 3.6))
 ax.plot(np.arange(1, len(pz) + 1), pz, "o-", color="C3", ms=8)
 ax.axvspan(0.5, 3.5, color="C3", alpha=0.10, lw=0)
+# The band marks the iterations that found a true source, which is known here
+# from the simulation and is not something the curve reports. Calling it "three
+# genuine sources" would imply that the three shaded values are the large ones,
+# and the middle of them is the second smallest in the sequence.
+#
+# Left-aligned from the band's own left edge rather than centred on it: the
+# largest value in the sequence is the third, so a centred label runs into the
+# marker sitting at the top of the axes. The upper left of the band is empty.
 ax.annotate(
-    "three genuine sources",
-    (2, ax.get_ylim()[1]),
-    ha="center",
+    "iterations that found a true source",
+    (0.62, ax.get_ylim()[1]),
+    ha="left",
     va="top",
     fontsize=9.5,
 )
@@ -231,7 +245,11 @@ ax.set(
     ylabel=r"pseudo-$Z$",
     xticks=np.arange(1, len(pz) + 1),
 )
-ax.set_title("Pseudo-$Z$ falls to a baseline once the search fits noise", loc="left")
+ax.set_title(
+    "Pseudo-$Z$ falls to a baseline after the last true source, not before it",
+    loc="left",
+    fontsize=10,
+)
 fig.tight_layout()
 print(f"pseudo-Z by iteration: {np.round(pz, 1).tolist()}")
 

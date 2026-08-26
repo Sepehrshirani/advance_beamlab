@@ -292,9 +292,14 @@ print(f"MCMV found sources {scan['sources']}, pseudo-Z {np.round(scan['pseudo_z'
 
 beamformer = make_mcmv(info, fwd, data_cov, [i1, i2], noise_cov=noise_cov, reg=0.05)
 recovered = apply_mcmv(epochs.average(), beamformer)
+# The truth quoted here is each source's injected peak in the epoch average,
+# which is what a filter applied to that average can return. The second source
+# is 0.95 of the first plus a five per cent component at a different phase, so
+# it peaks at 19.6 nA m rather than at 19.
 print(
     "recovered amplitudes: "
-    f"{np.round(np.abs(recovered.data).max(1) * 1e9, 1)} nA m (simulated 20 and 19)"
+    f"{np.round(np.abs(recovered.data).max(1) * 1e9, 1)} nA m "
+    "(simulated 20.0 and 19.6)"
 )
 
 # %%

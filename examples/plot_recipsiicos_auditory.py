@@ -13,8 +13,9 @@ so that an ordinary LCMV no longer cancels them.
 
 This example runs ReciPSIICOS end to end on real, mixed-sensor MEG and contrasts
 it with a standard LCMV. The recording is the auditory response of the MNE sample
-dataset, whose left- and right-hemisphere sources are correlated across the N100
-(r = +0.55).
+dataset, whose left- and right-hemisphere sources are correlated across the N100:
+r = +0.82 between the two traces a joint MCMV filter recovers there, as measured
+in :ref:`ex-mcmv-auditory`.
 
 A caveat stated up front, because the example reports it honestly below: on this
 recording a plain LCMV already recovers both hemispheres, so ReciPSIICOS does
@@ -71,9 +72,21 @@ epochs = mne.Epochs(
 )
 
 # The active window is the N100 (80-130 ms), where the bilateral auditory
-# response is genuinely correlated across hemispheres (r = +0.55 as recovered by
-# a joint MCMV filter). Over the wider 50-200 ms window the correlation washes
-# out to about zero, and no correlated-source method has anything to work on.
+# response is genuinely correlated across hemispheres: a joint MCMV filter
+# recovers the two traces at r = +0.82 over this window, and its source
+# covariance, which reads the coupling off the single trials rather than off the
+# average, puts it at r = +0.55. Either way, estimate that correlation with the
+# joint filter and not with a per-source LCMV, which reads the same pair as
+# r = -0.09 through the very cancellation the correlation is meant to explain.
+# The MCMV auditory example prints the joint and the per-source number together.
+#
+# Widening the window to 50-200 ms does not decorrelate the pair. Held at the two
+# auditory vertices that example constrains, the correlation rises rather than
+# washes out, to r = +0.94. What the wider window moves is the locations: the
+# single-source LCMV peaks shift, the left one by 25 mm, out of superior temporal
+# cortex. So the N100 is the active window because it is where the response
+# lives, not because it is the only window with coupling for a correlated-source
+# method to work on.
 data_cov = mne.compute_covariance(epochs, tmin=0.08, tmax=0.13, method="shrunk")
 noise_cov = mne.compute_covariance(epochs, tmin=None, tmax=0.0, method="shrunk")
 
