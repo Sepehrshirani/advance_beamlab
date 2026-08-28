@@ -1938,3 +1938,42 @@ def test_a_perfect_correlation_survives_the_fisher_transform():
     # a null one of whose surrogates reached 1 still has a usable mean and spread
     null_z = _fisher_z(np.array([0.4, 0.6, 1.0]))
     assert np.isfinite(null_z.mean()) and np.isfinite(null_z.std(ddof=1))
+
+
+def test_imcoh_is_antisymmetric_while_the_other_metrics_are_symmetric():
+    """ImCoh changes sign with the pair order, so the matrix must too.
+
+    Every other supported metric is a symmetric function of its two arguments,
+    and writing one scalar into both triangles is right for them. The imaginary
+    part of coherency is not: ImCoh(a, b) = -ImCoh(b, a), because swapping the
+    pair conjugates the cross-spectrum. Mirroring it would report the same lag
+    direction for both orders of every pair, so half the matrix would say the
+    opposite of the truth about which region leads -- and it would do so with no
+    outward sign, since a mirrored matrix looks exactly like a correct symmetric
+    one. mne-connectivity avoids the question by filling only one triangle.
+    """
+    info, fwd, dcov, sources, oris, _, epochs = _free_scenario()
+    common = dict(
+        sfreq=info["sfreq"],
+        fmin=8.0,
+        fmax=12.0,
+        orientations=oris,
+        noise_cov=None,
+        reg=0.1,
+    )
+    imcoh = np.asarray(
+        pairwise_mcmv_connectivity(
+            epochs, info, fwd, dcov, sources, method="imcoh", **common
+        )
+    )
+    assert_allclose(imcoh, -imcoh.T, atol=1e-12)
+    # Not trivially zero: an all-zero matrix would satisfy the line above.
+    assert np.abs(imcoh).max() > 1e-6
+
+    for method in ("coh", "plv"):
+        sym = np.asarray(
+            pairwise_mcmv_connectivity(
+                epochs, info, fwd, dcov, sources, method=method, **common
+            )
+        )
+        assert_allclose(sym, sym.T, atol=1e-12)

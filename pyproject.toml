@@ -33,9 +33,11 @@ classifiers = [
 dependencies = [
     "numpy>=1.25",
     "scipy>=1.11",
-    # The MNE APIs used here (``_reg_pinv``, ``_compute_beamformer``,
-    # ``compute_whitener``, ``Beamformer``, ``_get_src_type``, ``_get_vertno``)
-    # are unchanged back to 1.8, but 1.10 is the floor actually exercised in CI
+    # The private MNE APIs used here (``_reg_pinv``, ``_compute_beamformer``,
+    # ``_check_src_normal``, ``_make_stc``, ``_get_src_type``, ``_get_vertno``,
+    # ``_subject_from_forward``, ``_contains_ch_type``, ``_electrode_types``,
+    # ``_needs_eeg_average_ref_proj``, ``make_projector``) are unchanged back to
+    # 1.8, but 1.10 is the floor actually exercised in CI
     # and is the first release whose ``Covariance._get_square`` and per-type rank
     # handling this package relies on. Do not lower it without adding a CI job.
     "mne>=1.10",

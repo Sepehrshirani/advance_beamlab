@@ -27,8 +27,11 @@ equations say they should:
   diagonal stays at one for every ``P``; what ``P`` changes is the off-diagonal
   and the localiser, which scores template match rather than power.
 
-Reading the table through the public ``apply`` functions rather than out of each
-method's weight array is deliberate. The methods store their weights in
+Reading the table through the public ``apply`` functions, where one exists,
+rather than out of each method's weight array is deliberate. ABMC is the
+exception: the package exposes no ``apply_abmc``, so its table is read from the
+sensor-space weights ``ABMCResult`` returns, which are already in the space the
+comparison needs. The methods store their weights in
 different spaces (MCMV folds the whitener in, ReciPSIICOS works in a reduced
 virtual-sensor space), so the arrays are not comparable, while the response to a
 known input is. Feeding in a scene that contains only source :math:`j` and
@@ -215,7 +218,14 @@ def _pink(rng, n, n_times):
 
 
 def _background(gain, rng, n_times, exclude):
-    """Ongoing cortical activity everywhere else on the grid.
+    """Ongoing cortical activity elsewhere on the grid.
+
+    ``exclude`` names grid nodes the background must not be drawn from. Callers
+    currently pass an empty tuple, so the interference is drawn from the whole
+    grid and a simulated source's own node may also carry an independent
+    background dipole. That is deliberate -- real cortex does not fall silent
+    around an active patch -- but it means the interference is not disjoint from
+    the sources, which matters when reading a delivered amplitude.
 
     This is what a beamformer is really working against. With only white sensor
     noise the peak of the localiser sits exactly on the true grid node in almost
@@ -608,10 +618,13 @@ class EvokedDemo:
     separation : float
         Distance between them, in metres.
     correlation : float
-        Correlation between the two source waveforms as estimated by the
-        *joint* filter. Read off per-source LCMV traces instead and a strongly
-        correlated pair can read as uncorrelated, through the very filter whose
-        cancellation the correlation is meant to explain.
+        Correlation between the two reconstructed waveforms in
+        ``reference_tcs``, i.e. the estimate from whatever filter produced them.
+        Pass the *joint* filter's reconstruction to make this a
+        source-correlation estimate; left to default it is read off the selected
+        method's own traces, and a strongly correlated pair can then read as
+        uncorrelated, through the very filter whose cancellation the correlation
+        is meant to explain.
     times : ndarray, shape (n_times,)
         Time axis in seconds, with zero at stimulus onset.
     sensor_data : ndarray, shape (n_channels, n_times)
@@ -748,8 +761,13 @@ def evoked_demo(
         Their goodness of fit, in per cent.
     reference_tcs : ndarray | None
         Source waveforms used to weight the constraint table into a delivered
-        amplitude. These should come from the joint filter; without them the
-        pair is treated as uncorrelated, which understates the cancellation.
+        amplitude. These should come from the joint (MCMV) filter, whose
+        reconstruction is unmixed. Without them the basis falls back to the
+        *selected method's own* reconstruction, which is only meaningful when
+        that method is itself the joint one. For a cancelling filter such as
+        LCMV on a correlated pair the reconstruction is strongly anti-correlated,
+        the off-diagonal weight turns negative, and the reported delivered
+        amplitude is overstated. Supply this argument for any method but MCMV.
     reg : float
         Diagonal loading, as a fraction of the mean eigenvalue.
     template : ndarray | str

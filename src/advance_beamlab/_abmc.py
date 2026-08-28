@@ -89,6 +89,14 @@ dimensional quantity. Each :math:`c_n` is therefore rescaled to the norm of its
 leadfield column, which makes :math:`P` the dimensionless trade-off the paper
 describes.
 
+The rescaling is per column, with :math:`\kappa_n = \|g_n\| / \|X u_{j_n}\|`
+varying across the grid, so one ``P`` here is a *different* ``P`` at each grid
+point in the paper's notation (:math:`P_{\text{paper},n} = P\,\kappa_n`). That
+is the intended behaviour -- it equalises the constraint's strength over a grid
+whose leadfield norms span orders of magnitude, instead of letting deep sources
+feel a far weaker constraint than superficial ones -- but it does mean ``P`` is
+not numerically the paper's ``P`` and the two should not be compared directly.
+
 References
 ----------
 .. footbibliography::
@@ -466,7 +474,10 @@ class ABMCResult:
         larger ``P`` rather than only near the pole. Because each constraint
         column is rescaled to the norm of its leadfield column, a column's pole
         is exactly :math:`1/|\cos(g_n, c_n)|`, so this is never below 1 for any
-        dataset.
+        dataset. It is the pole of the *iterative* descent's denominator and an
+        upper bound on where that descent loses stability, not the exact
+        threshold and not the closed-form solver's pole; see the Notes of
+        :func:`~advance_beamlab.abmc_stability_curve`.
     unstable_fraction : float
         Fraction of grid columns with :math:`g_n^\mathsf{T}c_n < 0`, that is the
         share of the grid that has a finite pole at all. Also predicted before
@@ -747,12 +758,15 @@ def _abmc_prepare(info, forward, data, template, cov, noise_cov, reg, max_lag):
     # so the branch must not exist.
     #
     # One global factor, not one per column. Signing each column separately would
-    # also remove the dependence, but it would force g^T c >= 0 everywhere: no
-    # column could oppose its own leadfield, no pole could form, and critical_p,
-    # unstable_fraction and the whole stability curve would describe something
-    # that can no longer happen. The instability is real and worth keeping; only
-    # the arbitrary overall sign is not. A global flip negates every correlation,
-    # so it negates peak_sign too, and the two cancel.
+    # also remove the dependence, but the sign it computes is that of
+    # g^T R^-1 c, not of g^T c: the per-column correlation is taken against an
+    # initial LCMV output w0 = R^-1 g / (g^T R^-1 g), so it would force
+    # g^T R^-1 c >= 0 everywhere. That removes the closed-form solver's poles
+    # outright, and since the two sign patterns almost always agree it leaves
+    # critical_p, unstable_fraction and the stability curve describing something
+    # that can very nearly no longer happen. The instability is real and worth
+    # keeping; only the arbitrary overall sign is not. A global flip negates
+    # every correlation, so it negates peak_sign too, and the two cancel.
     c *= peak_sign
 
     # Put the template-constraint column on the same scale as the leadfield
@@ -1019,17 +1033,26 @@ def abmc_stability_curve(
     an *oblique* projector and :math:`d = g + Pc`. The obliquity, and hence the
     norm of :math:`\Pi`, grows as :math:`g^\mathsf{T}d = g^\mathsf{T}g +
     P\,g^\mathsf{T}c` shrinks. Consequently, wherever :math:`g^\mathsf{T}c < 0`
-    there is a :math:`P` beyond which the paper's descent is unstable. That is
-    the "threshold for each segment" the paper reports without deriving; the
-    smallest such :math:`P` over the grid is reported directly as
-    ``ABMCResult.critical_p``. The threshold is what bounds the sweep from
-    above, but not where the answer stops being trustworthy: the peak can move
+    there is a :math:`P` at which :math:`g^\mathsf{T}d` vanishes and the oblique
+    projector is undefined; the smallest such :math:`P` over the grid is reported
+    as ``ABMCResult.critical_p``. It is the pole of the constraint's denominator,
+    which is an *upper bound* on the "threshold for each segment" the paper
+    reports without deriving, not that threshold itself: the descent's spectral
+    radius :math:`\rho(\Pi(I - \mu R))` can reach one before the denominator
+    reaches zero, so the iteration may already diverge below ``critical_p``.
+    Note also that ``critical_p`` is the pole of the *iterative* descent's
+    denominator; the default ``method='closed-form'`` solver has its own pole, at
+    the smallest :math:`P` with :math:`g^\mathsf{T}R^{-1}g + P\,g^\mathsf{T}
+    R^{-1}c = 0`, which the two solvers do not share. The threshold is what
+    bounds the sweep from above, but not where the answer stops being
+    trustworthy: the peak can move
     well below it, which is why the viable range has to be found per dataset
     rather than assumed.
 
     Selection is by stability rather than by score, deliberately. The template
-    match increases with :math:`P` by construction: a stronger constraint pulls
-    the output towards the template whether or not the location is right.
+    match tends to increase with :math:`P`, a stronger constraint pulling the
+    output towards the template whether or not the location is right (it is not
+    monotone in general, but it rises over the working range).
     Choosing the :math:`P` that maximises it would therefore be circular. A
     plateau over which the answer is unchanged is evidence about the data; a
     maximum of a self-referential score is not.
@@ -1250,6 +1273,14 @@ def make_abmc(
     :math:`j^*` is fixed once per grid point (seeded from an initial LCMV output),
     per the confirmed reading of the paper.
 
+    The scan criterion and the orientation rule are this implementation's
+    reading rather than the paper's text, which states neither. Both are scored
+    here by template match. The paper's only statement about orientation is the
+    caption of its Fig. 9, "the overall direction of source activity based on
+    the received power along each axis" -- received power, not template match --
+    so a free-orientation result here need not reproduce the paper's choice of
+    axis.
+
     Following the paper, the source is localised by the **maximum cross-correlation
     between the beamformer output and the template**,
     :math:`|\mathrm{corr}(W^\mathsf{T}X, u_{j^*})|`, maximised over orientation:
@@ -1296,8 +1327,11 @@ def make_abmc(
         risen from 0.85 cm to 2.20 cm. ``P`` far below that range reduces ABMC
         to an iterative LCMV (a warning fires). Above it, the test for ``P``
         being too large is ``result.critical_p``, the first ``P`` at which a
-        column's gain denominator vanishes; ``result.blowup_fraction`` sees only
-        the immediate neighbourhood of that value. Where exactly the stable
+        column's gain denominator vanishes -- an upper bound on where the
+        iterative descent loses stability, not the exact threshold, and computed
+        for that descent rather than for the default closed-form solver;
+        ``result.blowup_fraction`` sees only the immediate neighbourhood of that
+        value. Where exactly the stable
         range ends is a property of the recording rather than of the method, so
         use ``P='auto'`` (:func:`abmc_stability_curve`) to place it on your own
         data. ``'auto'`` returns the lowest ``P`` at which the localised peak is

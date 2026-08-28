@@ -500,12 +500,20 @@ def test_non_unit_orientations_warn(fwd_info):
 
 
 def test_apply_mcmv_on_evoked(fwd_info):
-    """apply_mcmv accepts an MNE object and picks channels by name."""
+    """apply_mcmv accepts an MNE object and picks channels by name.
+
+    The Evoked is built from the same ``info`` the filter was, rather than from
+    a bare :func:`mne.create_info`: the filter carries the average-reference
+    projector that info has, and data without it is a genuine projector
+    mismatch that :func:`apply_mcmv` refuses, exactly as
+    :func:`mne.beamformer.apply_lcmv` does.
+    """
     fwd, info = fwd_info
     filt = make_mcmv(
         info, fwd, _random_cov(info), [4, 9], orientations=np.eye(3)[:2], reg=REG
     )
-    ev_info = mne.create_info(filt["ch_names"], 200.0, "eeg")
+    picks = [info["ch_names"].index(ch) for ch in filt["ch_names"]]
+    ev_info = mne.pick_info(info, picks, verbose=False)
     rng = np.random.default_rng(3)
     evoked = mne.EvokedArray(rng.standard_normal((len(filt["ch_names"]), 25)), ev_info)
     assert apply_mcmv(evoked, filt).shape == (2, 25)
@@ -893,3 +901,86 @@ def test_source_the_array_cannot_see_is_refused(fwd_info_mixed):
         info, fwd, data_cov, [10], orientations=ori, noise_cov=noise_cov
     )
     assert np.isfinite(filters["weights"]).all()
+
+
+def test_filters_refuse_data_whose_projectors_do_not_match(fwd_info):
+    """Applying a filter to differently-projected data must raise, not drift.
+
+    The whitener folds ``info['projs']`` into the weights, so the filter is only
+    valid for data carrying those same projectors. Applying it to data that has
+    since had another SSP vector applied changes the source estimate by tens of
+    per cent, and silently: nothing about the array's shape or dtype records
+    which projectors it was built for. :func:`mne.beamformer.apply_lcmv` refuses
+    that case, so this package must refuse it identically or a user moving
+    between the two is quietly exposed.
+    """
+    fwd, info = fwd_info
+    data_cov = _random_cov(info, seed=3)
+    filters = make_mcmv(
+        info, fwd, data_cov, sources=[0, 1], orientations=np.eye(3)[:2], reg=REG
+    )
+    assert filters["proj"] is not None
+    assert filters["is_ssp"] is True
+
+    rng = np.random.default_rng(5)
+    n_ch = len(filters["ch_names"])
+    evoked = mne.EvokedArray(
+        rng.standard_normal((len(info["ch_names"]), 40)), info.copy(), verbose=False
+    )
+    reference = apply_mcmv(evoked, filters)
+
+    # An extra projector, applied to the data only.
+    extra = mne.Projection(
+        data=dict(
+            data=rng.standard_normal((1, n_ch)),
+            col_names=list(filters["ch_names"]),
+            row_names=None,
+            nrow=1,
+            ncol=n_ch,
+        ),
+        active=False,
+        desc="test",
+        kind=1,
+        explained_var=None,
+    )
+    mismatched = evoked.copy().add_proj(extra).apply_proj(verbose=False)
+    with pytest.raises(ValueError, match="do not match the projections"):
+        apply_mcmv(mismatched, filters)
+
+    cov_mismatched = mne.Covariance(
+        data_cov.data.copy(),
+        list(data_cov.ch_names),
+        list(data_cov["bads"]),
+        list(data_cov["projs"]) + [extra],
+        nfree=1,
+    )
+    with pytest.raises(ValueError, match="do not match the projections"):
+        apply_mcmv_cov(cov_mismatched, filters)
+
+    # The matching case is untouched.
+    assert_allclose(apply_mcmv(evoked, filters), reference, atol=0, rtol=0)
+
+
+def test_missing_channel_names_the_filter_not_the_list(fwd_info):
+    """A dropped channel must say what to do, as MNE's message does.
+
+    ``[data.ch_names.index(ch) for ch in ch_names]`` raises "'EEG 001' is not in
+    list", which names the channel but nothing else -- not that a spatial filter
+    is involved, nor that the fix is to rebuild it on the good channels.
+    """
+    fwd, info = fwd_info
+    filters = make_mcmv(
+        info,
+        fwd,
+        _random_cov(info, seed=4),
+        sources=[0],
+        orientations=np.eye(3)[:1],
+        reg=REG,
+    )
+    rng = np.random.default_rng(6)
+    evoked = mne.EvokedArray(
+        rng.standard_normal((len(info["ch_names"]), 20)), info.copy(), verbose=False
+    )
+    dropped = evoked.copy().drop_channels([filters["ch_names"][0]])
+    with pytest.raises(ValueError, match="compute a new spatial filter"):
+        apply_mcmv(dropped, filters)

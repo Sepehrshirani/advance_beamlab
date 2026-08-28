@@ -452,6 +452,15 @@ def scan_mcmv(
     # wrong locations highest.
     reg_eff = float(reg) * n_white / len(common_ch)
     Rinv_w, _, rnk = _reg_pinv(R_w, reg=reg_eff, rank=pinv_rank)
+    # ``_reg_pinv`` returns the rank it measured *before* diagonal loading, but
+    # with ``rank='full'`` it masks with the rank *after* loading -- which is
+    # full, because the loading lifts the null space. So with ``rank='full'`` and
+    # ``reg > 0`` nothing is truncated and every whitened direction is inverted,
+    # even though the returned number is the smaller pre-loading rank. Reporting
+    # that number would warn about a pseudo-inverse that was not taken and could
+    # refuse an order the inverse can support.
+    if pinv_rank == "full" and reg_eff > 0:
+        rnk = n_white
     if rnk < n_white:
         warnings.warn(
             f"data_cov is rank-deficient (rank {rnk} < {n_white} whitened "

@@ -49,8 +49,12 @@ downsampled envelopes. The low-pass cannot be applied from outside because
 ``envelope_correlation`` takes the Hilbert transform internally, and it is not
 cosmetic: it is what makes the AR(1) surrogate null of
 :func:`ar1_surrogate_significance` correctly sized, and that null is what gates
-APW-MCMV. With ``envelope_lowpass=None`` the estimator reduces exactly to
-``envelope_correlation``.
+APW-MCMV. With ``envelope_lowpass=None`` the estimator reduces to
+``envelope_correlation``, exactly so for three of the four
+``(orthogonalize, absolute)`` combinations. The exception is
+``orthogonalize=False, absolute=True``: this estimator honours ``absolute`` for
+both ``orthogonalize`` settings, whereas ``envelope_correlation`` applies it
+only when orthogonalising.
 """
 # Authors: Sepehr Shirani <sepehrshirani@gmail.com>, <s.shirani@ucl.ac.uk>
 #          Muzhi Wang
@@ -255,7 +259,8 @@ def _spectral_conn_matrix(data, method, *, sfreq, fmin, fmax, mt_bandwidth):
     All signals go in one call rather than pair by pair. Each metric is a
     function of one pair's cross-spectrum alone, so the value read out of the
     joint call is the value the two-signal call returns, to round-off (at most
-    1.1e-16 apart over the supported metrics).
+    a few units in the last place apart over the supported metrics -- about
+    3e-16 near a value of one).
     """
     from mne_connectivity import spectral_connectivity_epochs
 
@@ -558,15 +563,21 @@ def pairwise_mcmv_connectivity(
     envelope_resample : float | None
         If given, the sampling frequency (Hz) the low-passed envelopes are
         downsampled to before correlating (the paper uses "downsampled envelope
-        correlations"). Downsampling does not change the expected correlation,
-        only the cost. Only used for ``method='envelope'``.
+        correlations"). This is an FFT resample, so it band-limits the envelope
+        to ``envelope_resample / 2`` Hz on the way down: a second smoothing
+        stage, not a free saving. It leaves the correlation alone only when that
+        limit sits well above the ``envelope_lowpass`` stopband; bring it close
+        and the correlation moves. Only used for ``method='envelope'``.
 
     Returns
     -------
     conn : ndarray, shape (n_sources, n_sources)
-        Symmetric connectivity matrix; ``conn[i, j]`` is the PW-MCMV
-        connectivity between ``sources[i]`` and ``sources[j]``. The diagonal is
-        zero.
+        Connectivity matrix; ``conn[i, j]`` is the PW-MCMV connectivity of the
+        ordered pair ``(sources[i], sources[j])``. The diagonal is zero. The
+        matrix is symmetric for every metric except ``'imcoh'``, which is
+        antisymmetric (``conn[j, i] == -conn[i, j]``) because the imaginary part
+        of coherency changes sign with the order of the pair; take
+        ``np.abs(conn)`` if you want a magnitude.
     """
     if sfreq is None and method == "envelope":
         sfreq = float(info["sfreq"])
@@ -602,7 +613,12 @@ def pairwise_mcmv_connectivity(
             envelope_lowpass=envelope_lowpass,
             envelope_resample=envelope_resample,
         )
-        conn[i, j] = conn[j, i] = value
+        # ``imcoh`` is antisymmetric -- ImCoh(a, b) = -ImCoh(b, a) -- so writing
+        # one scalar into both triangles would report the same lag direction for
+        # both orders of the pair and half the matrix would carry the wrong sign.
+        # Every other supported metric is symmetric in its two arguments.
+        conn[i, j] = value
+        conn[j, i] = -value if method == "imcoh" else value
     return conn
 
 
@@ -749,6 +765,9 @@ def augmented_pairwise_mcmv_connectivity(
     conn : ndarray, shape (n_sources, n_sources)
         Connectivity matrix with the significant edges re-estimated under
         augmentation and the non-significant edges left at their PW-MCMV value.
+        It follows the same convention as
+        :func:`~advance_beamlab.pairwise_mcmv_connectivity`: symmetric for every
+        metric except ``'imcoh'``, which is antisymmetric in the pair order.
     """
     if sfreq is None and method == "envelope":
         sfreq = float(info["sfreq"])
@@ -839,7 +858,12 @@ def augmented_pairwise_mcmv_connectivity(
             envelope_lowpass=envelope_lowpass,
             envelope_resample=envelope_resample,
         )
-        conn[i, j] = conn[j, i] = value
+        # ``imcoh`` is antisymmetric -- ImCoh(a, b) = -ImCoh(b, a) -- so writing
+        # one scalar into both triangles would report the same lag direction for
+        # both orders of the pair and half the matrix would carry the wrong sign.
+        # Every other supported metric is symmetric in its two arguments.
+        conn[i, j] = value
+        conn[j, i] = -value if method == "imcoh" else value
     return conn
 
 

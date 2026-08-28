@@ -35,9 +35,13 @@ method device-agnostic. The first is ours; the second follows the paper:
 * **Virtual sensors.** Following the paper's preprocessing, the whitened
   leadfield is reduced by a truncated SVD to the principal directions capturing
   a chosen fraction of its variance (``pct_var``). At the default 0.99 a
-  whole-head array reduces to roughly 30-80 virtual sensors (29 magnetometers,
-  43 gradiometers and 76 for the two combined on the 306-channel ``sample``
-  array). The :math:`M^2`-space projector, the data covariance and the
+  whole-head array reduces to roughly 30-80 virtual sensors. The count depends
+  on the noise covariance as well as the array: on the 306-channel ``sample``
+  array with that dataset's own ``sample_audvis-cov.fif`` it is 66
+  magnetometers, 72 gradiometers and 82 for the two combined, while under the
+  ad-hoc noise model (``noise_cov=None``) the same array gives 30, 46 and 43.
+  Quote the noise model alongside any such count. The :math:`M^2`-space
+  projector, the data covariance and the
   beamformer then all live in this small working space, which is what makes
   the :math:`M^2 \times M^2` correlation Gram tractable (a 306-channel array
   would otherwise need a 93k x 93k matrix).
@@ -1398,6 +1402,16 @@ def recipsiicos_rank_curve(
     the curve on a label-restricted forward would be the actual mistake -- the
     power subspace would stop spanning the sources outside the label, so ``K*``
     would be chosen for a projector that is never built.
+
+    What *does* have to match is the channel set. The working space is the
+    :math:`q^2` space of vectorised covariances over the ``q`` virtual sensors,
+    and ``q`` follows from the channels the call ends up with. Given
+    ``data_cov``, that is the intersection of ``info``, ``forward`` and the
+    covariance; without it, only ``info`` and ``forward`` are intersected. A
+    covariance missing channels the other two have therefore yields a different
+    ``q``, and a ``K*`` chosen here would be spent in a space it was not chosen
+    for. Pass the same ``data_cov`` you will pass to the beamformer whenever the
+    two channel sets could differ.
 
     The curve needs a forward with rich leadfield structure. On a single-shell
     sphere model the tangential leadfields are so low-rank that the power

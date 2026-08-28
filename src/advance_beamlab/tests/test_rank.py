@@ -161,3 +161,25 @@ def test_a_correlated_full_rank_spectrum_is_not_mistaken_for_a_projection():
     projected = basis[:, :25] * scale[:25] @ basis[:, :25].T
     projected = 0.5 * (projected + projected.T)
     assert estimate_rank(projected, method="cliff") == 25
+
+
+def test_a_projection_cliff_is_found_on_a_short_spectrum_too():
+    """A small covariance must not hide its own cliff.
+
+    The standardised score divides by a spread the cliff itself contributes to.
+    With one cliff among ``k`` drops, the standard deviation is dominated by
+    that single value and the cliff's own score cannot exceed about ``sqrt(k)``
+    however deep it is -- so on a short spectrum a genuine projection scored
+    below the threshold and the estimator silently returned the full positive
+    count instead. Measured before the fix: a rank-15 covariance on 20 channels
+    reported 17, and nothing under about 30 positive eigenvalues was reliable.
+    A 32-channel EEG montage is squarely inside that range.
+    """
+    rng = np.random.default_rng(0)
+    for n_ch in (10, 15, 20, 25, 30):
+        true = int(n_ch * 0.75)
+        basis, _ = np.linalg.qr(rng.standard_normal((n_ch, n_ch)))
+        cov = (
+            basis[:, :true] @ np.diag(np.geomspace(1.0, 1e-2, true)) @ basis[:, :true].T
+        )
+        assert estimate_rank(cov, method="cliff", verbose=False) == true

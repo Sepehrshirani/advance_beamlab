@@ -122,8 +122,11 @@ def estimate_rank(cov, *, method="cliff", threshold=None, pct_var=0.999, verbose
         mass reaches ``pct_var``.
     threshold : float | None
         For ``'cliff'``: how many robust deviations above the typical step a
-        drop must be to count. ``None`` uses 5. Lower it if a known truncation
-        is being missed, raise it if noise in the tail is being called a cliff.
+        drop must be to count. ``None`` uses 5. Raise it if noise in the tail is
+        being called a cliff. Lowering it will not necessarily recover a missed
+        truncation: it relaxes only the first of three conditions, and a drop
+        must also fall at least one decade and leave everything below it under
+        1e-6 of the largest eigenvalue. Those two are fixed.
     pct_var : float
         For ``'variance'``: the fraction of total eigenvalue mass to keep.
     %(verbose)s
@@ -141,14 +144,27 @@ def estimate_rank(cov, *, method="cliff", threshold=None, pct_var=0.999, verbose
     not have, and for checking a recorded rank against what the numbers say.
 
     ``'cliff'`` reports the first drop in :math:`-\Delta\log_{10}\lambda`
-    that is both unusual for the spectrum -- more than ``threshold`` deviations
-    above its median -- and an absolute fall of at least one decade. Both
-    conditions are needed. The standardised test alone calls the top eigenvalue
-    of any sample covariance a cliff, because it always sits slightly apart from
-    the rest, and returns a rank of 1 on perfectly good data. The two regimes
-    are far apart once measured: a projection cliff is a fall of some fifteen
-    decades, and the largest drop on a well-conditioned full-rank covariance is
-    about four hundredths of one.
+    meeting three conditions: it is unusual for the spectrum (more than
+    ``threshold`` robust deviations above its median), it is an absolute fall of
+    at least one decade, and everything below it sits under 1e-6 of the largest
+    eigenvalue. All three are needed. The standardised test alone calls the top
+    eigenvalue of any sample covariance a cliff, because it always sits slightly
+    apart from the rest, and returns a rank of 1 on perfectly good data. The
+    decade floor alone is not enough either: real EEG falls 1.17 decades at its
+    very first step, where the eigenvalue below is still a tenth of the largest
+    and carries real signal. What separates the two regimes is what is left
+    underneath -- a projection leaves its discarded directions at round-off,
+    some 1e-16 of the largest, while a merely steep spectrum leaves whole
+    percent. Measured on this package's own fixtures the residual is 6.7e-2 for
+    EEG, 1.1e-1 for magnetometers and 4.0e-1 for gradiometers, against ~1e-16
+    for a projection.
+
+    The deviation is measured with the median absolute deviation rather than the
+    standard deviation, because the standard deviation is inflated by the very
+    drop under test: with one cliff among :math:`k` drops its own score cannot
+    exceed about :math:`\sqrt{k}`, so on a short spectrum a genuine cliff scored
+    below the threshold and was missed entirely below roughly 30 positive
+    eigenvalues.
 
     On a covariance of full rank ``'cliff'`` returns ``n_channels``.
     ``'variance'`` does so only when the spectrum is nearly flat: it answers
@@ -217,7 +233,19 @@ def estimate_rank(cov, *, method="cliff", threshold=None, pct_var=0.999, verbose
         # is this drop unusual *for this spectrum* -- and leaves a smooth
         # spectrum with nothing above the threshold.
         centre = np.median(drops)
-        spread = np.std(drops)
+        # A *robust* spread, because the standard deviation is inflated by the
+        # very drop being tested. With one cliff among ``k`` drops, the cliff's
+        # own standardised score cannot exceed about ``sqrt(k)`` however deep it
+        # is, so on a short spectrum a genuine projection cliff scores below the
+        # threshold and is missed: measured, a rank-15 covariance on 20 channels
+        # reported 17, and the estimator only became reliable above about 30
+        # positive eigenvalues. The median absolute deviation is unmoved by a
+        # single outlier, so the cliff is scored against the scatter of the
+        # ordinary drops rather than against a scatter it dominates. The 1.4826
+        # makes it match the standard deviation on normally distributed drops,
+        # which is what the threshold was calibrated against.
+        mad = np.median(np.abs(drops - centre))
+        spread = 1.4826 * mad if mad > 0 else np.std(drops)
         if spread <= 0:
             rank = int(live.size)
         else:

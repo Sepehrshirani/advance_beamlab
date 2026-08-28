@@ -109,7 +109,12 @@ def permutation_image_test(
         rather than alongside them -- a sampled null uses the observed
         arrangement as its first draw, an exhaustive one contains it by
         construction -- so with ``n`` draws the smallest attainable value is
-        ``1 / n``.
+        ``1 / n``, with one exception. An *exhaustive* two-sided test
+        (``tail=0``, taken when ``2 ** n_observations <= n_permutations``)
+        enumerates every sign pattern together with its negation, and the fold
+        to ``|statistic|`` makes those two draws identical, so its maximum is
+        always attained at least twice and its floor is ``2 / n``. One-sided
+        exhaustive tests and all sampled tests reach ``1 / n``.
     null : ndarray, shape (n_permutations,) or (n_permutations, n_sources)
         The null distribution actually used -- one maximum per permutation under
         ``'maximum'``, or the full surface under ``'none'``. Returned because a

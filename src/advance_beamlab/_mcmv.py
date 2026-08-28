@@ -39,11 +39,25 @@ from mne import Covariance
 # handles the stack-rewriting behaviour.
 # MNE's regularised (pseudo-)inverse of a covariance matrix. We re-use it, with the
 # ``reg`` rescaling applied in ``make_mcmv`` to compensate for our ``pca=True``
-# whitener. The data-covariance inversion, including the diagonal-loading
-# convention and rank handling, is therefore numerically identical to that
-# performed by ``mne.beamformer.make_lcmv``, so the n == 1 MCMV filter reduces
-# *exactly* to the corresponding LCMV filter (including on rank-deficient data)
-# and every covariance estimator/shrinkage method available through
+# whitener. The diagonal-loading convention is therefore identical to
+# ``mne.beamformer.make_lcmv``'s, and the n == 1 MCMV filter reduces to the
+# corresponding LCMV filter to machine precision on a well-conditioned data
+# covariance (measured: 6e-15 relative, unit-gain and unit-noise-gain alike).
+#
+# The rank handling is deliberately *not* identical. ``make_lcmv`` passes
+# ``sum(compute_rank(data_cov, rank=rank, info=info).values())`` to ``_reg_pinv``
+# as an explicit integer; ``_split_rank`` below passes ``None`` unless the caller
+# said ``'full'``, which makes ``_reg_pinv`` estimate the rank numerically from
+# the unregularised whitened covariance. The two coincide whenever the data
+# covariance's only deficiency is the one the whitener has already removed (SSP,
+# average reference, SSS) -- the ordinary case. They diverge on a sample-starved
+# covariance, where this package truncates to the smaller numerical rank while
+# ``make_lcmv`` inverts the diagonally-loaded near-null space: on a 100-sample
+# covariance the two filters differ by more than their own norm. Truncating is
+# the safer choice, but it is a choice, so do not read the reduction above as
+# holding on a rank-deficient covariance.
+#
+# Every covariance estimator/shrinkage method available through
 # ``mne.compute_covariance`` is inherited unchanged.
 from mne.beamformer._compute_beamformer import _reg_pinv
 from mne.forward import is_fixed_orient
@@ -88,8 +102,11 @@ def _split_rank(rank):
     ``None | 'full' | int``. Passing one convention to the other raises
     ``TypeError``, so the caller-facing ``rank`` (MNE's convention) is translated
     here: the whitener receives it unchanged, and the covariance inverse receives
-    ``'full'`` only when the caller explicitly asked for it, else ``None`` (which
-    makes ``_reg_pinv`` estimate the rank numerically, as ``make_lcmv`` does).
+    ``'full'`` only when the caller explicitly asked for it, else ``None``, which
+    makes ``_reg_pinv`` estimate the rank numerically from the unregularised
+    whitened covariance. Note that ``make_lcmv`` does *not* do this -- it passes
+    an explicit integer from :func:`mne.compute_rank`. See the module header for
+    when the two agree and when they do not.
     """
     _validate_type(rank, (None, str, dict), "rank")
     if isinstance(rank, str) and rank not in ("full", "info"):
@@ -104,12 +121,21 @@ def _split_rank(rank):
 class MCMVBeamformer(dict):
     """Container for MCMV spatial-filter weights.
 
-    This is a thin ``dict`` subclass that mirrors
-    :class:`mne.beamformer.Beamformer` so that, when the algorithm is upstreamed
-    into MNE-Python, the native container can be substituted with no change to
-    calling code. It stores, among other metadata, the spatial-filter weight
-    matrix under the key ``'weights'`` with shape ``(n_sources, n_channels)``,
-    one row holding the filter for one constrained source.
+    This is a thin ``dict`` subclass shaped after
+    :class:`mne.beamformer.Beamformer`, so that upstreaming the algorithm into
+    MNE-Python is a small step. It stores, among other metadata, the
+    spatial-filter weight matrix under the key ``'weights'`` with shape
+    ``(n_sources, n_channels)``, one row holding the filter for one constrained
+    source.
+
+    It is not a drop-in replacement for MNE's container, and the two are not
+    interchangeable in either direction. MNE stores its weights in the
+    *whitened* space and :func:`mne.beamformer.apply_lcmv` whitens the data
+    before applying them; the weights here are in the original sensor space and
+    :func:`~advance_beamlab.apply_mcmv` multiplies the data as it stands. The
+    two differ by exactly the whitener, so swapping one container for the other
+    would change the answer silently rather than raise. This container also
+    carries only the keys MCMV needs, not MNE's full set.
     """
 
     def copy(self):
@@ -731,6 +757,15 @@ def make_mcmv(
     # ``make_lcmv`` on rank-deficient data (SSP, average reference, SSS/ICA).
     reg_eff = float(reg) * n_white / len(common_ch)
     Rinv_w, loading, rnk = _reg_pinv(R_w, reg=reg_eff, rank=pinv_rank)
+    # ``_reg_pinv`` returns the rank it measured *before* diagonal loading, but
+    # with ``rank='full'`` it masks with the rank *after* loading -- which is
+    # full, because the loading lifts the null space. So with ``rank='full'`` and
+    # ``reg > 0`` nothing is truncated and every whitened direction is inverted,
+    # even though the returned number is the smaller pre-loading rank. Reporting
+    # that number would warn about a pseudo-inverse that was not taken and could
+    # refuse an order the inverse can support.
+    if pinv_rank == "full" and reg_eff > 0:
+        rnk = n_white
     if rnk < n_white:
         warnings.warn(
             f"data_cov is rank-deficient (rank {rnk} < {n_white} whitened "
@@ -797,10 +832,23 @@ def make_mcmv(
         weights_w = weights_w / np.linalg.norm(weights_w, axis=1, keepdims=True)
 
     # -- fold the whitener back so the filters act on raw sensor data ------- #
-    # s_hat = weights_w (W x) = (weights_w W) x, and (weights_w W) H = I, so the
-    # unit-gain / zero-gain constraint is preserved in the original sensor space
-    # and apply_mcmv can be applied directly to unwhitened data.
+    # s_hat = weights_w (W x) = (weights_w W) x, so the constraint the whitened
+    # solve imposed is preserved in the original sensor space and apply_mcmv can
+    # be applied directly to unwhitened data. The zero-gain half, (w_i^T g_j) = 0
+    # for i != j, holds for every weight_norm. The unit-gain half holds only for
+    # weight_norm='unit-gain'; 'array-gain' and 'unit-noise-gain' have rescaled
+    # each row above, so their diagonal is that row's scale factor rather than 1.
     weights = weights_w @ whitener  # (n_sources, n_channels)
+
+    # Record the projectors the filters were built under, exactly as make_lcmv
+    # and make_recipsiicos_lcmv do. ``compute_whitener`` has already folded them
+    # into the whitener, so applying the filter must not re-apply them; what
+    # storing them buys is MNE's safety check that the data a filter is used on
+    # carries the same projectors it was computed with. Without it, adding SSP
+    # to the data after building the filter changes the source estimate silently.
+    from mne._fiff.proj import make_projector
+
+    proj, _, _ = make_projector(info["projs"], list(common_ch))
 
     logger.info(f"    Computed MCMV beamformer for {n} source(s).")
     return MCMVBeamformer(
@@ -816,16 +864,64 @@ def make_mcmv(
         loading_factor=float(loading),
         rank=int(rnk),
         leadfield=H,
+        proj=proj,
+        is_ssp=bool(info["projs"]),
     )
 
 
-def _pick_data(data, ch_names):
+def _check_proj_match(data, filters):
+    """Refuse data whose projectors differ from the ones the filter was built on.
+
+    The whitener folded ``info['projs']`` into the weights, so a filter is only
+    valid for data carrying those same projectors. Applying it to data that has
+    since had, say, EOG or ECG SSP applied changes the answer by tens of per
+    cent with nothing to show for it. :func:`mne.beamformer.apply_lcmv` refuses
+    that case, and the message below is MNE's verbatim so the contract matches.
+    """
+    if filters.get("proj") is None:  # a filter from before this was recorded
+        return
+    from mne._fiff.proj import make_projector
+
+    proj_data, _, _ = make_projector(data.info["projs"], list(filters["ch_names"]))
+    if not np.allclose(
+        proj_data, filters["proj"], atol=np.finfo(float).eps, rtol=1e-13
+    ):
+        raise ValueError(
+            "The SSP projections present in the data "
+            "do not match the projections used when "
+            "calculating the spatial filter."
+        )
+
+
+def _pick_data(data, ch_names, start=None, stop=None):
     """Return a (n_channels, n_times) array for the filter's channels."""
     # Accept either an MNE object exposing .get_data()/.ch_names or a raw array.
     if hasattr(data, "ch_names") and hasattr(data, "get_data"):
+        missing = [ch for ch in ch_names if ch not in data.ch_names]
+        if missing:
+            # MNE's wording: a bare ``list.index`` ValueError names the channel
+            # but says nothing about spatial filters or what to do next.
+            raise ValueError(
+                f"The spatial filter was computed with channel {missing[0]} "
+                "which is not present in the data. You should compute a new "
+                "spatial filter restricted to the good data channels."
+            )
         idx = [data.ch_names.index(ch) for ch in ch_names]
-        arr = np.asarray(data.get_data())
-        return arr[..., idx, :]
+        # Pick inside ``get_data`` rather than slicing afterwards. Reading the
+        # whole object first materialises every channel the filter never uses --
+        # stim, EOG, the other sensor type -- and, for a Raw, every sample: on an
+        # hour of 306-channel data that is several gigabytes to reconstruct two
+        # sources. MNE returns the channels in the order asked for, which is the
+        # order the weights are in.
+        kwargs = {}
+        if start is not None or stop is not None:
+            if not hasattr(data, "n_times") or not hasattr(data, "first_samp"):
+                raise TypeError(
+                    "start/stop are only supported for Raw data, got "
+                    f"{type(data).__name__}. Crop the object instead."
+                )
+            kwargs = dict(start=start, stop=stop)
+        return np.asarray(data.get_data(picks=idx, **kwargs))
     arr = np.asarray(data, dtype=np.float64)
     if arr.shape[-2] != len(ch_names):
         raise ValueError(
@@ -839,7 +935,7 @@ def _pick_data(data, ch_names):
 
 
 @verbose
-def apply_mcmv(data, filters, *, verbose=None):
+def apply_mcmv(data, filters, *, start=None, stop=None, verbose=None):
     r"""Apply MCMV spatial filters to sensor data.
 
     Computes the reconstructed source amplitudes
@@ -852,6 +948,11 @@ def apply_mcmv(data, filters, *, verbose=None):
         n_times)`` with channels ordered as ``filters['ch_names']``.
     filters : instance of MCMVBeamformer
         The MCMV filters from :func:`make_mcmv`.
+    start, stop : int | None
+        First and last sample to reconstruct, for :class:`mne.io.Raw` only,
+        mirroring :func:`mne.beamformer.apply_lcmv_raw`. ``None`` reconstructs
+        the whole recording. Use these rather than cropping a copy: only the
+        requested samples are read from disk.
     %(verbose)s
 
     Returns
@@ -860,8 +961,10 @@ def apply_mcmv(data, filters, *, verbose=None):
         The reconstructed time course of each constrained source.
     """
     _validate_type(filters, MCMVBeamformer, "filters")
+    if hasattr(data, "info"):
+        _check_proj_match(data, filters)
     W = filters["weights"]  # (n_sources, n_channels)
-    b = _pick_data(data, filters["ch_names"])  # (..., n_channels, n_times)
+    b = _pick_data(data, filters["ch_names"], start, stop)  # (..., n_ch, n_times)
     # s = W b, broadcast over any leading (e.g. epochs) dimension.
     return np.einsum("sc,...ct->...st", W, b)
 
@@ -888,6 +991,20 @@ def apply_mcmv_cov(data_cov, filters):
     """
     _validate_type(data_cov, Covariance, "data_cov")
     _validate_type(filters, MCMVBeamformer, "filters")
+    # A covariance carries its own projectors, and apply_lcmv_cov checks them
+    # against the filter's for the same reason apply_lcmv checks the data's.
+    if filters.get("proj") is not None:
+        from mne._fiff.proj import make_projector
+
+        proj_cov, _, _ = make_projector(data_cov["projs"], list(filters["ch_names"]))
+        if not np.allclose(
+            proj_cov, filters["proj"], atol=np.finfo(float).eps, rtol=1e-13
+        ):
+            raise ValueError(
+                "The SSP projections present in the data "
+                "do not match the projections used when "
+                "calculating the spatial filter."
+            )
     R = _cov_as_matrix(data_cov, filters["ch_names"])
     W = filters["weights"]  # (n_sources, n_channels)
     return W @ R @ W.T

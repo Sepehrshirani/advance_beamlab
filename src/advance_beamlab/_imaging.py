@@ -50,10 +50,15 @@ _KINDS = ("pseudo-z", "pseudo-t", "pseudo-f")
 
 
 def _power(filters, cov):
-    """Diagonal of W^T C W, through whichever public apply path fits.
+    """Per-source power, through whichever public apply path fits.
 
-    Both entry points return the full source-by-source matrix; only its diagonal
-    is a power, the off-diagonal being the cross-terms the constraint controls.
+    The two paths do not return the same thing. :func:`apply_mcmv_cov` returns
+    the full source-by-source matrix ``W^T C W``, of which only the diagonal is
+    a power -- the off-diagonal holds the cross-terms the constraint controls --
+    so the diagonal is what is taken. :func:`mne.beamformer.apply_lcmv_cov`
+    returns a source estimate whose data is already a per-source power, summed
+    over the three orientations for a free-orientation filter, so it is only
+    ravelled.
     """
     from mne.beamformer import apply_lcmv_cov
 

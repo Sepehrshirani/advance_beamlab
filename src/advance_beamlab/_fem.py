@@ -657,9 +657,12 @@ def read_ny_head_forward(
         ``None``.
     resolution : str
         Which of the model's nested cortical meshes to use: ``'1K'``, ``'2K'``,
-        ``'5K'``, ``'10K'`` (default) or ``'75K'``. Each is a strict subset of
-        the next, so a coarse mesh is a genuine subsampling of the same
-        geometry rather than a different model. ``'10K'`` is a good default for
+        ``'5K'``, ``'10K'`` (default) or ``'75K'``. All five index into the same
+        74382-node mesh, but only ``'2K'``, ``'5K'``, ``'10K'`` and ``'75K'``
+        form a nested chain. ``'1K'`` is a subset of ``'10K'`` rather than of
+        ``'2K'`` or ``'5K'`` -- barely half its vertices are in ``'2K'`` -- so a
+        ``'1K'`` result is not a subsampling of a ``'2K'`` or ``'5K'`` one and
+        the two do not share source indices. ``'10K'`` is a good default for
         beamforming, where the scan grid rarely needs to be finer than the
         spatial resolution of EEG. ``'75K'`` reads a 137 MB lead field at the
         default ``orientation='normal'`` and a 412 MB one at ``'free'``, the
