@@ -361,7 +361,7 @@ fig.tight_layout()
 
 # %%
 # **The leakage coefficient.** On a log scale, the conductor leakage
-# :math:`\alpha_C = \mathbf{w}_A^{\mathsf T}\mathbf{g}_C` drops from ~0.1 for
+# :math:`\alpha_C = \mathbf{w}_A^{\mathsf T}\mathbf{g}_C` drops from 0.17 for
 # PW-MCMV to machine zero once ``C`` is added by APW-MCMV. That is the exact null
 # that closes the indirect-leakage path.
 
