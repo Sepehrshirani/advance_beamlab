@@ -98,7 +98,8 @@ result = scan_mcmv(
 
 print(result["sources"])  # discovered grid indices
 print(result["pseudo_z"])  # per-source pseudo-Z (judge how many are real)
-stc_time_courses = apply_mcmv(epochs, result["filters"])  # jointly-optimal filters
+# ndarray, (n_epochs, n_sources, n_times) -- not a SourceEstimate
+source_tcs = apply_mcmv(epochs, result["filters"])  # jointly-optimal filters
 ```
 
 **Make LCMV robust to correlation with ReciPSIICOS**:
@@ -338,16 +339,19 @@ numbers *mean*:
   on the raw leadfield, so reconstructed amplitudes are in physical source
   units. Use it when amplitudes/units matter.
 - **`array-gain`**: normalise each leadfield column before imposing the
-  constraint, so that $\mathbf{w_i}^{\mathsf T}\mathbf{h_i}=\lVert\mathbf{h_i}\rVert$
-  instead. The output is then in measurement units rather than a dipole moment,
-  and in exchange it sheds unit-gain's bias towards deep sources: a deep leadfield
+  constraint, so that $\mathbf{w_i}^{\mathsf T}\mathbf{h_i}=\lVert\tilde{\mathbf{h}}_i\rVert$
+  instead, with $\tilde{\mathbf{h}}_i$ the **whitened** leadfield column. In
+  exchange it sheds unit-gain's bias towards deep sources: a deep leadfield
   column is small, so a unit-gain filter has to amplify to reach unit gain, and
   the reconstruction is inflated wherever the forward is weak. It is the
   depth-neutral choice when there is no noise covariance to normalise against.
-  The norm taken is the *raw* leadfield's, not the whitened one, since the
-  returned filters act on raw sensor data; whitened norms would fold the
-  whitener's own scale into the output and the units would stop being the
-  array's.
+  The norm has to be the whitened one: a norm of the raw leadfield sums squared
+  entries across the whole array, and as soon as the array mixes sensor types
+  those entries carry different units — $\mathrm{T}^2$ added to
+  $(\mathrm{T/m})^2$ added to $\mathrm{V}^2$ — so the sum is dominated by
+  whichever type happens to carry the larger numbers. The price is that
+  array-gain amplitudes are in units of the noise rather than of the array, and
+  so are not comparable across analyses that used different noise covariances.
 - **`unit-noise-gain`**: rescale each filter so that
   $\mathbf{w_i}^{\mathsf T}\mathbf{C_n}\mathbf{w_i}=1$, i.e. unit output noise.
   Because the solve is in whitened space this is exactly unit Euclidean norm of
@@ -789,9 +793,10 @@ non-convergence regime). ABMC reports the blow-up fraction. For $P$ to mean
 that, it has to be dimensionless: $g_n^\mathsf{T}g_n$ carries the units of the
 squared forward model while $g_n^\mathsf{T}c_n$, with $c_n = Xu_{j^\ast}^\mathsf{T}$,
 carries data × template units, so each $c_n$ is first rescaled to the norm of its
-leadfield column. Without that rescaling $P\,g^\mathsf{T}c/g^\mathsf{T}g$ is
-$\sim10^{-19}$ on SI-unit MEG at any sane $P$ and the paper's second constraint is
-inert; with it, $P\sim0.01$–$0.1$ gives the template a perceptible but subordinate
+leadfield column. Without that rescaling $P\,g^\mathsf{T}c/g^\mathsf{T}g$ is of
+order $10^{-10}$–$10^{-9}$ on SI-unit MEG at $P\sim0.01$–$0.1$ (measured on the
+`sample` gradiometers: the un-rescaled $|g^\mathsf{T}c|/g^\mathsf{T}g$ has a
+median near $2\times10^{-8}$), so the paper's second constraint is inert; with it, $P\sim0.01$–$0.1$ gives the template a perceptible but subordinate
 weight regardless of the units. A warning fires if the realised coupling is so small
 that the constraint does nothing.
 
@@ -814,7 +819,7 @@ only on the data) and reusing it for every template.
 | `localizer` (scan_mcmv) | Which scanning statistic | `mai` = robust, broad; `mpz` = sharper but noisier; `mer`/`rmer` = phase-locked/evoked (need `evoked_cov`). |
 | `noise_cov` | Whitening model | A measured `noise_cov` is essential for **mixed sensor types** and for a meaningful `unit-noise-gain`; `None` uses an ad-hoc per-type model (fine for a single sensor type). |
 | `reg` | Diagonal loading of the (whitened) covariance, as a fraction of its mean eigenvalue | Larger `reg` → more stable inverse, smoother maps, lower resolution and slightly biased amplitudes; `reg=0` is the exact but fragile inverse. Default `0.05`, matching `make_lcmv`. |
-| `weight_norm` | Output scaling | `unit-gain` preserves physical amplitude; `array-gain` gives up the dipole moment for measurement units but drops unit-gain's depth bias; `unit-noise-gain` equalises the noise floor (better maps, no amplitude). |
+| `weight_norm` | Output scaling | `unit-gain` preserves physical amplitude; `array-gain` gives up the dipole moment for units of the noise (the norm is the whitened leadfield's) but drops unit-gain's depth bias; `unit-noise-gain` equalises the noise floor (better maps, no amplitude). |
 | `rank` | Numerical rank of the whitener **and** the covariance inverse | Leave at `None` after SSP/ICA/SSS (data are rank-deficient): it auto-detects per sensor type. To pin it, pass a per-type dict such as `{'meg': 60}`; a bare integer raises `TypeError`, because a rank has to be resolved per sensor type. `'full'` assumes full rank and will over-fit noise if the data are not. |
 
 ## `make_recipsiicos_cov` / `make_recipsiicos_lcmv`

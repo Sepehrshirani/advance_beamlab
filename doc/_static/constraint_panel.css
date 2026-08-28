@@ -39,7 +39,10 @@ html[data-mode="dark"] .cp-root,
   --cp-grid: #6d7887;
   --cp-chip: #2b323b;
   --cp-chip-edge: #6f7c8a;
-  --cp-true: #9aa0aa;
+  /* Distinct from --cp-muted: the reference markers and true waveforms have to
+     be told apart from ordinary muted chrome, and in dark mode the two tokens
+     were the same colour. */
+  --cp-true: #c5ccd6;
   --cp-accent: #4aa3df;
   --cp-warm: #e2705a;
   --cp-cool: #6b9fd4;

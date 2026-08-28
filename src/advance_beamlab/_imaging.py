@@ -118,10 +118,28 @@ def power_image(
     -------
     image : ndarray, shape (n_sources,)
         One value per source the filters cover. Unitless in every case: the
-        normalisation is what removes the units.
+        normalisation is what removes the units. A plain array rather than a
+        :class:`mne.SourceEstimate`, because the MCMV path covers only the
+        handful of constrained sources and has no source space to attach; see
+        the Notes for the whole-grid case.
 
     Notes
     -----
+    To plot, morph or label a whole-grid image, wrap it in a source estimate
+    using the vertices the filters already carry. For a surface source space::
+
+        img = power_image(filters, data_cov, noise_cov=noise_cov)
+        stc = mne.SourceEstimate(
+            img[:, None], vertices=filters["vertices"], tmin=0.0, tstep=1.0,
+            subject=filters["subject"],
+        )
+
+    Use :class:`mne.VolSourceEstimate` instead when ``filters['src_type']`` is
+    ``'volume'`` or ``'discrete'``; that class takes the single vertex array
+    rather than the per-hemisphere pair, and passing the surface form raises.
+    The resulting estimate supports ``plot``, ``in_label``,
+    :func:`mne.compute_source_morph` and the rest of the source-space API.
+
     With :math:`S_a`, :math:`S_c` the power passed from the active and control
     windows and :math:`N` the power passed from the noise covariance,
 

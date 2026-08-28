@@ -31,9 +31,14 @@ between the two with the correlation high is the clearest thing on this page.
 
 ReciPSIICOS and ABMC get there differently, and the table shows how. ReciPSIICOS
 never touches the constraint; it edits the covariance the filter is built from,
-so the cancellation has less to work with. ABMC keeps a constraint but trades
-the distortionless one against a match to a known waveform. Both leave a visible
-signature in the table.
+so the cancellation has less to work with. ABMC does not trade the
+distortionless constraint away either -- its diagonal reads exactly 1.000000 in
+every configuration the panel holds. What flattens its off-diagonal is that it
+solves against a sparse Bayesian estimate of the covariance rather than the
+sample one; the template term is a mild steer on top, not a second constraint.
+Measured over the whole grid its off-diagonal has a median magnitude of 0.03,
+against 0.29 for LCMV and 0.18 for ReciPSIICOS, with MCMV exactly zero by
+construction. Both leave a visible signature in the table.
 
 The panel opens with the problem each method is solving, the sizes of every
 quantity in it at the current settings, and a note on which head model is in use
@@ -100,9 +105,9 @@ says anything on its own.
 .. raw:: html
 
    <div id="advance-beamlab-panel" class="cp-root"></div>
-   <link rel="stylesheet" href="_static/constraint_panel.css?v=7">
+   <link rel="stylesheet" href="_static/constraint_panel.css?v=8">
    <script src="_static/constraint_panel_data.js?v=5"></script>
-   <script src="_static/constraint_panel.js?v=7"></script>
+   <script src="_static/constraint_panel.js?v=8"></script>
 
 The controls
 ------------
@@ -192,6 +197,15 @@ known waveform, and it is worth comparing the four methods there.
 **Head model** switches between the two regimes described below, and it is worth
 moving it with LCMV and MCMV in turn.
 
+**Covariance window** appears on the recorded half only, and sets the interval
+the data covariance is estimated over. It is the page's plainest demonstration
+that a beamformer is tuned by what you show it rather than only by its formula:
+the same recording and the same method give different filters, and different
+distances to the fitted dipoles, depending on the window. Every recorded number
+quoted on this page is for the narrow 80-130 ms response window; the wider
+50-200 ms window admits more of the evoked response and more of the ongoing
+activity along with it.
+
 **Trials averaged** is the signal-to-noise axis, expressed as the thing an
 experimenter actually controls. A single trial of an evoked MEG response sits
 well below unit sensor signal-to-noise; this panel takes 0.2 as the single-trial
@@ -213,9 +227,12 @@ about *how much*, unless the constraint is fixed.
 
 The correlation is exact for any number of sources. Two sinusoids can be given
 any correlation by a phase shift, but three cannot, so the simulation instead
-mixes one shared factor and one private factor per source in proportions
-:math:`\sqrt{r}` and :math:`\sqrt{1-r}`. Every pair then correlates at exactly
-:math:`r` whatever the rhythm or the count.
+mixes one shared factor and one private factor per source, orthonormalised
+first, in proportions :math:`\sqrt{r}` and :math:`\sqrt{1-r}`. Every pair then
+correlates at exactly :math:`r` whatever the rhythm or the count. The
+orthonormalisation is what makes it exact rather than approximate: without it
+the private factors carry some shared variance of their own and the realised
+correlation drifts above :math:`r`.
 
 Limitations of the simulation
 -----------------------------
@@ -246,9 +263,12 @@ looks**, and the two settings exist because no single choice can show everything
 With **matched** selected, the sources sit exactly on points the beamformer
 scans and the data are generated with the very leadfield being inverted. That is
 an inverse crime, and its symptom is unmistakable: LCMV and MCMV localise every
-single matched source to exactly 0 mm, at both signal-to-noise settings, because
-nothing can move a matched filter off its own node. Read those zeros as a
-property of the simulation, not a claim about any method.
+single matched source to exactly 0 mm, at both signal-to-noise settings. That is
+not a theorem -- interference can and does move a localiser's peak off a node
+the filter was built on -- but on this grid, at these separations and
+interference levels, the strongest point of the map lands on the true node in
+every matched configuration. Read those zeros as a property of the simulation,
+not a claim about any method.
 
 ABMC joins them only when it is handed the target's own waveform. Its localiser
 scores template match rather than power, so an exact head model is not enough on
@@ -389,16 +409,30 @@ The **trials averaged** control is real here in a way it cannot be in the
 simulation: it averages that many actual epochs. Watch it with LCMV selected.
 At one trial the off-diagonal is :math:`-0.52` and the filter delivers 0.82; by
 145 trials the off-diagonal has reached :math:`-1.03` and the delivered
-amplitude has fallen to 0.56. More data makes the cancellation *worse*, for the
-same reason it does in the simulation: the cancellation is a property of the
-clean covariance, and noise was the only thing preventing the filter from
-performing it.
+amplitude has fallen to 0.56. More data makes the cancellation *worse* here as
+it does in the simulation, but not by the same route. The covariance is
+estimated from the very epochs being averaged, so at one trial the filter is
+solving against a covariance estimated from a single epoch: it cannot adapt
+because it does not yet know what to adapt to. Adding epochs sharpens the
+estimate, and a filter that can see the correlation is a filter that can cancel
+it. In the simulation the covariance is not the limitation -- there the noise
+level itself is what falls -- so the two halves reach the same place from
+different directions.
 
 The **visual** conditions are there as a control, and they behave differently
-rather than identically. The two visual sources sit 3.2 cm apart against the
-auditory pair's 10.9 cm, and LCMV's off-diagonal comes out *positive*, around
+rather than identically. LCMV's off-diagonal comes out *positive* there, around
 :math:`+0.47`: the neighbour is added rather than subtracted. It is the same
 failure to control the off-diagonal, in the other direction.
+
+What decides that direction is the sign of the correlation between the two
+sources, not how far apart they are. A filter that minimises output power
+subtracts a neighbour whose activity runs with the target and adds one that runs
+against it. Measured on the panel's own reconstructions in the 80-130 ms window,
+the auditory pair correlates at :math:`+0.25` and its off-diagonal is
+:math:`-1.03`, while the visual pair correlates at :math:`-0.79` and its
+off-diagonal is :math:`+0.47`. The separations run the other way -- the visual
+sources sit 3.2 cm apart against the auditory pair's 10.9 cm -- so proximity is
+not what flips the sign.
 
 How the panel is computed
 -------------------------
@@ -419,9 +453,11 @@ what comes out of the public apply path is.
 
 Colour means one thing throughout. A **method colour** is always that method's
 estimate: the crosses on the cortex, the reconstruction trace, its line in the
-sweep. **Grey** is always the truth: the rings marking the simulated sources,
-the true waveforms. Sources are told apart by their row and label rather than by
-colour, which would otherwise collide.
+sweep. **Grey** is always the reference the estimates are judged against: the rings
+marking the simulated sources and the true waveforms on the simulated half, and
+the independently fitted dipoles on the recorded half, where there is no truth
+to be had and a dipole fit is the closest stand-in. Sources are told apart by
+their row and label rather than by colour, which would otherwise collide.
 
 The localiser map is normalised to its own range and then compressed by a cube
 root. That combination took two attempts. Colouring by rank was the first, on the
@@ -453,9 +489,12 @@ The sensor panel shows a field map beside the traces. The traces carry all 203
 gradiometers over two and a half seconds: drag to move through channels and
 time, scroll to zoom, or use the sliders. The topography says where on the
 helmet the signal sits, and how little that pattern changes when you move the
-sources a couple of centimetres. Both refer to the same instant, the peak of the
-global field power inside the drawn window, and the vertical line on the traces
-marks it. The map is interpolated in the browser from the array's own sensor
+sources a couple of centimetres. Both refer to the same instant: the peak of the
+global field power over the whole trace, chosen once when the panel is built,
+with the vertical line on the traces marking it. It does not follow the zoom, so
+scrolling or zooming past that instant leaves the map showing a moment that is
+no longer on screen -- the vertical line is what tells you where it was. The map
+is interpolated in the browser from the array's own sensor
 positions, drawn with iso-contours because a smooth wash of colour is hard to
 read a gradient from, and it is diverging rather than sequential because the
 field has a sign.
@@ -475,11 +514,20 @@ amplitude. Normalising each trace to its own peak would have made every method
 look equally good, which is the opposite of the point.
 
 The **amplitude delivered** readout is what the filter does to the source's
-amplitude: each constrained source's gain, weighted by how much of this source's
-waveform it carries, which for a pair is :math:`\mathbf{w}_i^{\mathsf T}
-\mathbf{g}_i + r\,\mathbf{w}_i^{\mathsf T}\mathbf{g}_j`. There is no noise in
-it, so it says what the filter does rather than how well one short recording
-measures it.
+amplitude: each source's gain, weighted by how much of this source's waveform it
+carries, which for a pair is :math:`\mathbf{w}_i^{\mathsf T}\mathbf{g}_i +
+r\,\mathbf{w}_i^{\mathsf T}\mathbf{g}_j`. There is no noise in it, so it says
+what the filter does rather than how well one short recording measures it.
+
+The :math:`\mathbf{g}` here are the leadfields of the sources *as simulated*,
+not of the nodes the filter was constrained at, and under the realistic head
+model those are different points. So the readout cannot be recomputed from the
+constraint table displayed above it -- that table is the response at the
+constrained nodes, with its diagonal pinned to one by construction. The gap
+between the two is the whole cost of a mismatched head model: measured against
+its scan node LCMV can report delivering the full amplitude of a source whose
+reconstruction holds about seven per cent of it. With a matched model the two
+coincide and the question does not arise.
 
 Two other definitions were tried and rejected, and the reason is worth stating
 because both look reasonable. The figures below are one scene rather than the
@@ -530,7 +578,11 @@ The last panel sweeps the whole correlation axis at the current settings, for al
 four methods at once, plotting both recovered amplitude and localisation error
 with a marker where the sliders are. The sliders show one point; that chart shows
 the curve those points lie on, which is a fairer way to judge a method than any
-single setting.
+single setting. Two things about that chart are worth knowing: it draws the
+first source only, and its amplitude axis is floored at zero, so where LCMV's
+delivered amplitude goes negative the curve flattens along the axis instead of
+crossing it. Read the sign off the readout beside the constraint table, which
+carries it.
 
 If you would rather drive this from Python, with your own forward model and
 without the precomputed grid, :func:`~advance_beamlab.constraint_explorer` opens

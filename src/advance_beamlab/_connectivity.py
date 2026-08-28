@@ -578,6 +578,14 @@ def pairwise_mcmv_connectivity(
         antisymmetric (``conn[j, i] == -conn[i, j]``) because the imaginary part
         of coherency changes sign with the order of the pair; take
         ``np.abs(conn)`` if you want a magnitude.
+
+        Mind the transpose when handing an ``'imcoh'`` matrix to
+        :mod:`mne_connectivity`. Its dense output puts the ordered pair
+        ``(i, j)`` at ``[j, i]``, so this matrix is that one's transpose, and
+        ``plot_connectivity_circle`` reads only ``np.tril_indices(n, -1)``.
+        Passing this matrix unchanged therefore draws every edge with the
+        opposite lag direction. Pass ``conn.T``, or ``np.abs(conn)`` if the
+        direction does not matter. Symmetric metrics are unaffected.
     """
     if sfreq is None and method == "envelope":
         sfreq = float(info["sfreq"])
