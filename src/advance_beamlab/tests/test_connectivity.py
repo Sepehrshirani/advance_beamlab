@@ -1,6 +1,7 @@
 r"""Tests for pairwise and augmented-pairwise MCMV connectivity (Nunes et al., 2020)."""
 # Authors: Sepehr Shirani <sepehrshirani@gmail.com>, <s.shirani@ucl.ac.uk>
-#          Muzhi Wang
+#          Muzhi Wang <muzhi.wang@ucl.ac.uk>
+#          Jade Serfaty <jade.serfaty.17@ucl.ac.uk>
 # License: BSD-3-Clause
 
 import mne

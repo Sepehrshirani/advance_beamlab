@@ -26,7 +26,8 @@ Currently implemented:
 """
 
 # Authors: Sepehr Shirani <sepehrshirani@gmail.com>, <s.shirani@ucl.ac.uk>
-#          Muzhi Wang
+#          Muzhi Wang <muzhi.wang@ucl.ac.uk>
+#          Jade Serfaty <jade.serfaty.17@ucl.ac.uk>
 # License: BSD-3-Clause
 
 from ._abmc import (

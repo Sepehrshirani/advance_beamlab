@@ -9,6 +9,12 @@ authors:
     affiliation: "University College London"
   - family-names: "Wang"
     given-names: "Muzhi"
+    email: "muzhi.wang@ucl.ac.uk"
+    affiliation: "University College London"
+  - family-names: "Serfaty"
+    given-names: "Jade"
+    email: "jade.serfaty.17@ucl.ac.uk"
+    affiliation: "University College London"
 version: "1.0"
 license: BSD-3-Clause
 repository-code: "https://github.com/Sepehrshirani/advance_beamlab"

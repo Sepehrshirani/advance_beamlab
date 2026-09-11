@@ -43,7 +43,8 @@ trials either, and that cuts the other way: its template and noise covariance
 both come from all 72 epochs, and only the segment being localised is short.
 """
 # Authors: Sepehr Shirani <sepehrshirani@gmail.com>, <s.shirani@ucl.ac.uk>
-#          Muzhi Wang
+#          Muzhi Wang <muzhi.wang@ucl.ac.uk>
+#          Jade Serfaty <jade.serfaty.17@ucl.ac.uk>
 # License: BSD-3-Clause
 
 # %%

@@ -1,7 +1,8 @@
 """Sphinx configuration for the advance_beamlab documentation."""
 
 # Authors: Sepehr Shirani <sepehrshirani@gmail.com>, <s.shirani@ucl.ac.uk>
-#          Muzhi Wang
+#          Muzhi Wang <muzhi.wang@ucl.ac.uk>
+#          Jade Serfaty <jade.serfaty.17@ucl.ac.uk>
 # License: BSD-3-Clause
 
 import os
@@ -13,8 +14,8 @@ import advance_beamlab
 # import name is still advance_beamlab; this is the human-readable form,
 # which is what belongs in a page title and a site header.
 project = "Advance Beam Lab"
-author = "Sepehr Shirani and Muzhi Wang"
-copyright = "2026, Sepehr Shirani and Muzhi Wang"
+author = "Sepehr Shirani, Muzhi Wang and Jade Serfaty"
+copyright = "2026, Sepehr Shirani, Muzhi Wang and Jade Serfaty"
 release = advance_beamlab.__version__
 version = release
 

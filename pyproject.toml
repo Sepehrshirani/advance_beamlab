@@ -12,7 +12,8 @@ license = "BSD-3-Clause"
 keywords = ["MEG", "EEG", "beamformer", "MCMV", "source localization", "MNE"]
 authors = [
     { name = "Sepehr Shirani", email = "sepehrshirani@gmail.com" },
-    { name = "Muzhi Wang" },
+    { name = "Muzhi Wang", email = "muzhi.wang@ucl.ac.uk" },
+    { name = "Jade Serfaty", email = "jade.serfaty.17@ucl.ac.uk" },
 ]
 # An `authors` entry carries a single address, so the institutional one is given
 # here; both end up in the distribution metadata.

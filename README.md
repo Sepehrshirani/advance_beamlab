@@ -928,10 +928,11 @@ for the matrix under test, plus its `sfreq`.
 # Maintainers and contributors
 
 - **Sepehr Shirani**, maintainer and contributor (<sepehrshirani@gmail.com>, <s.shirani@ucl.ac.uk>)
-- **Muzhi Wang**, contributor
+- **Muzhi Wang**, contributor (<muzhi.wang@ucl.ac.uk>)
+- **Jade Serfaty**, contributor (<jade.serfaty.17@ucl.ac.uk>)
 
 Contributions are welcome. Please open an issue or pull request.
 
 # License
 
-BSD-3-Clause. Copyright (c) 2026, Sepehr Shirani and Muzhi Wang.
+BSD-3-Clause. Copyright (c) 2026, Sepehr Shirani, Muzhi Wang and Jade Serfaty.
