@@ -104,8 +104,9 @@ Decision table
      - One MCMV solve and one estimate per ROI **pair**: 22-29 ms/pair at 94
        channels x 24,000 samples, so ~50-65 s per band per subject for a
        68-label atlas, plus ~15 s for the AR(1) screen. PW-MCMV stays the closer
-       estimate of the spurious edge down to 4.6 dB sensor SNR, though its sign
-       is already wrong there; below about 3 dB LCMV is the closer of the two.
+       estimate of the spurious edge down to about 6 dB sensor SNR; by 4.6 dB
+       the two are level and its sign is already gone, and below that LCMV is
+       the closer of the two.
    * - A low-variance transient with a reproducible morphology you can supply as
        a template (IED, evoked spike), contributing of order 1% of the segment's
        sensor variance
@@ -348,11 +349,14 @@ an error bound.
 and grows with noise, so on the same scenario the spurious edge runs LCMV
 +0.097 / +0.122 / +0.188 / +0.240 / +0.348 / +0.410 against PW-MCMV -0.100 /
 -0.030 / +0.166 / +0.336 / +0.658 / +0.847 at 22.7 / 8.7 / 4.6 / 2.7 / -0.9 /
--5.3 dB. Read that against the truth and the two crossings are separate: the
-sign of PW-MCMV's estimate goes wrong between 8.7 and 4.6 dB, but its absolute
-error only overtakes LCMV's between 4.6 dB (0.317 against 0.339) and 2.7 dB
-(0.487 against 0.391), so at 4.6 dB it is still the better estimator of a
-number whose sign it has already lost. APW-MCMV, whose null is not
+-5.3 dB. Read that against the truth and the advantage goes in two stages. The
+sign is gone by about 8.7 dB, where the estimate sits on zero -- re-measured
+over independent noise draws it straddles it (+0.008, -0.003, -0.008), so the
+crossing is at that point rather than after it. The absolute error is level with
+LCMV's by 4.6 dB: over five draws, LCMV 0.347-0.362 against PW-MCMV 0.345-0.373,
+with LCMV marginally ahead in four of the five. So PW-MCMV is the better
+estimator down to about 6 dB, a tie at 4.6, and behind below that -- not still
+ahead at 4.6 dB. APW-MCMV, whose null is not
 data-adaptive, held -0.14 to -0.17 throughout. Do not import the
 "regularisation pushes LCMV back toward the truth" reasoning
 from the amplitude examples: for connectivity, noise moved LCMV's spurious edge
