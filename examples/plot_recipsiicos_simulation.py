@@ -24,11 +24,15 @@ projection rank.
 
 The head model matters here and is worth stating up front. The sources are
 simulated, but they are simulated on the **real BEM forward** of the MNE
-``sample`` dataset rather than on a sphere. ReciPSIICOS builds its projector from
-the forward, and a single-shell sphere has such low-rank tangential leadfields
-that the power and correlation subspaces barely separate: the rank curve
-degenerates and the automatic rank criterion has nothing to lock onto. On a
-realistic forward it behaves as the paper describes.
+``sample`` dataset rather than on a sphere. ReciPSIICOS builds its projector
+from the forward, so the forward decides how well the power and correlation
+subspaces separate. On a single-shell sphere ``method='recipsiicos'`` barely
+separates them at all -- measured on a 60-channel EEG sphere it keeps 0.99 of
+the power subspace and 0.87 of the correlation subspace at :math:`K^*` -- which
+leaves the automatic rank criterion nothing to lock onto. (``'whitened'``
+separates cleanly even there, 0.83 against 0.16, so this is a property of the
+projector rather than of spheres as such.) A realistic forward is the regime
+the method was developed and validated in, and is what is used here.
 
 See :ref:`ex-mcmv-simulation` for the same cancellation attacked from the other
 direction, by constraining the sources jointly, and

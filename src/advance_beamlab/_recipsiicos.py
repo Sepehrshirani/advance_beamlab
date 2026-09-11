@@ -1414,12 +1414,18 @@ def recipsiicos_rank_curve(
     for. Pass the same ``data_cov`` you will pass to the beamformer whenever the
     two channel sets could differ.
 
-    The curve needs a forward with rich leadfield structure. On a single-shell
-    sphere model the tangential leadfields are so low-rank that the power
-    subspace collapses to a few directions and the curve degenerates (there is
-    nothing to separate); a realistic BEM forward gives the smooth, separable
-    curve the 45-degree criterion expects, and on a degenerate curve ``K*``
-    falls back toward the least restrictive end. Both curves build a correlation
+    How much the curve needs a forward with rich leadfield structure depends on
+    the method, and the two differ sharply on a single-shell sphere. Measured on
+    a 60-channel EEG sphere with 1258 fixed-orientation sources,
+    ``method='recipsiicos'`` does collapse as described: at ``K*`` it retains
+    0.99 of the power subspace but also 0.87 of the correlation subspace, a
+    separation of 0.12, so there is almost nothing for the 45-degree criterion
+    to lock onto. ``method='whitened'`` does not: on the same sphere it retains
+    0.83 of the power against 0.16 of the correlation, a separation of 0.67, and
+    ``K*`` is perfectly well defined. So a degenerate curve is a reason to
+    distrust ``'recipsiicos'`` on a smooth forward, not a blanket property of
+    spheres. On a degenerate curve ``K*`` falls back toward the least
+    restrictive end. Both curves build a correlation
     Gram over every source pair (:math:`O(N^2)` in runtime), so decimate the
     source space for real forwards; peak memory is instead the
     :math:`q^2 \times q^2` Gram, so keep ``q`` modest as well.
