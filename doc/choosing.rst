@@ -186,11 +186,18 @@ and 1.48x (right) the LCMV peak at ``reg=0.05``: evidence that the pipeline
 runs and that the effect survives realistic regularisation, not that the
 amplitude is the correct one.
 
-**When it does not help.** When the constraints are wrong. On the sphere
-fixture with an exactly matched forward and sources sitting on grid points,
-displacing the *partner* by 5 mm cut recovered amplitude from 0.99 to 0.44 and
-by 10 mm to 0.33, against LCMV's 0.31; 5 degrees of partner-orientation error
-gave 0.54 and 10 degrees 0.36. How far that transfers to a real oct-6 source
+**When it does not help.** When the constraints are wrong, and orientation is
+the tighter of the two tolerances rather than the looser. Measured on the same
+sphere and source pair but on a 5 mm grid (the 726-point grid is spaced at
+15 mm, so a 5 mm displacement cannot be placed on it), with an exactly matched
+forward and :math:`r = 0.95` at 5 per cent noise, exact constraints recover
+0.998 of the amplitude. Displacing the *partner* by 5 mm cuts that to 0.24 and
+by 10 mm to 0.18; tilting the partner's orientation by 5 degrees cuts it
+further, to 0.15, and by 10 degrees to 0.11, against LCMV's 0.10. So a few
+degrees of orientation error has already given back almost the whole advantage,
+and it costs more than a displacement of the same nominal size because it
+perturbs the leadfield column more (0.10 relative at 5 degrees against 0.20 at
+10 degrees). How far that transfers to a real oct-6 source
 space is untested here. The repository's own real-data example takes both
 constrained vertices straight from an LCMV power-map peak with no cross-check.
 The greedy search is also not a general-purpose localiser: on the 231-electrode

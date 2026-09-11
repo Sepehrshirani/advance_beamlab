@@ -119,10 +119,16 @@ gain_bem = gain_bem - gain_bem.mean(0, keepdims=True)
 
 # %%
 # Both models are in MNE's units of V/(A m), so the curves are directly
-# comparable. The FEM gains are consistently *lower*: the cerebrospinal fluid is
-# the most conductive tissue in the head, and modelling it shunts current that a
-# three-layer BEM instead pushes out to the scalp. This is the systematic bias a
-# BEM introduces for EEG, and it is roughly a factor of 1.7 here.
+# comparable. The FEM gains are consistently *lower*, by a median factor of about
+# 1.7 against this particular BEM. Resist reading that as the isolated effect of
+# representing the cerebrospinal fluid. The factor is joint with the skull
+# conductivity hard-coded above: re-running this same comparison at 0.0033 S/m
+# gives 1.34 and at 0.0125 S/m 1.95, bracketing the 1.67 obtained at 0.006 S/m,
+# and the New York Head's own skull conductivity is higher again. The two
+# forwards also differ in anatomy and in source space -- minimum
+# electrode-to-source distance is 11.9 mm for the FEM against 16.8 mm for the
+# BEM -- so this comparison cannot separate conductivity from anatomy, and
+# nothing here establishes which model is the more accurate.
 
 elec = np.array([c["loc"][:3] for c in info["chs"]])
 depth_fem = np.linalg.norm(elec[:, None] - fwd["source_rr"][None], axis=2).min(0)
