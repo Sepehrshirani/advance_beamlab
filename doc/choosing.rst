@@ -412,8 +412,8 @@ locations. It is not a lucky seed: over six noise realisations the means are
 individual sources. The lag search works: three differently-shifted copies of
 the same template return one location with lags +50, 0 and -50 samples, and a
 test recovers a +50-sample lag to within 3 samples. Stage 1 alone is explicitly
-not a localiser. Its own peak sat 4.9 cm from the truth while its variance
-estimates ranked the true source 7 of 301. On waveform recovery the gain is
+not a localiser. Its own peak sat 15.6 cm from the truth while its variance
+estimates ranked the true source 9 of 301. On waveform recovery the gain is
 real but small: r = 0.40 (ABMC) against 0.34 (LCMV) at the least favourable
 source, on a trace neither filter recovers well.
 
@@ -440,12 +440,14 @@ realisations. Coverage limits worth knowing: ABMC is never run against a
 competing higher-power source, which is the regime its own rationale is about.
 It is now run on a real MEG recording, in :ref:`ex-abmc-auditory`, and the
 result is a boundary rather than a win. On a single trial ABMC is worse than
-LCMV and highly variable, a median of 29 mm over eight disjoint trials against
-11 mm for LCMV, with a range of 1 to 46 mm. From two trials upwards it is
-consistently better, 9 mm at two, four and eight and 7 mm at sixteen. LCMV is
-given the whole recording throughout, so the comparison runs against ABMC and it
-still wins above one trial. Distance to an anatomical label remains a weak
-criterion next to a simulated ground truth.
+LCMV and highly variable, a median of 31.6 mm over eight disjoint trials against
+11 mm for LCMV, with a range of 5.1 to 45.5 mm. From two trials upwards it is
+never worse, but not uniformly better: 9.0 mm at two, 11.1 mm at four, 9.0 mm at
+eight and 6.8 mm at sixteen, so it wins at two, eight and sixteen and ties with
+LCMV at four. LCMV is given the whole recording throughout, so the comparison
+runs against ABMC and it still comes out ahead at every trial count above one.
+Distance to an anatomical label remains a weak criterion next to a simulated
+ground truth.
 
 **The parameters that matter.** ``template`` is the load-bearing input rather
 than a tuning knob: only its shape matters (the read-out is exactly invariant to

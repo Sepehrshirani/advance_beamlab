@@ -30,9 +30,13 @@ This example shows four things on a spherical EEG model:
 The LCMV comparator throughout is :func:`mne.beamformer.make_lcmv` with
 ``weight_norm='unit-noise-gain'``. That normalisation matters: the *unnormalised*
 unit-gain output power :math:`1/(\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{g})`
-scales as :math:`\|\mathbf{g}\|^{-2}` and is therefore strongly depth-biased, so on
-a spherical model it always peaks at the most superficial grid point regardless of
-the data. Comparing against that would flatter ABMC for the wrong reason.
+scales as :math:`\|\mathbf{g}\|^{-2}`, so it is driven by wherever the leadfield
+happens to be weakest rather than by where the source is. On this grid, with a
+white covariance, it correlates with :math:`\|\mathbf{g}\|^{-2}` at 1.000 and
+peaks on the weakest-leadfield point (index 4 of 301) -- not on the most
+superficial one (index 106), which it never picks. A different covariance moves
+the peak, but it keeps tracking the leadfield rather than the data. Comparing
+against that would flatter ABMC for the wrong reason.
 """
 
 # Authors: Sepehr Shirani <sepehrshirani@gmail.com>, <s.shirani@ucl.ac.uk>
