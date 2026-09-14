@@ -5,12 +5,14 @@
 Beamforming EEG on a finite-element head model
 =========================================================
 
-Every forward solution MNE-Python can compute uses the boundary element method:
-nested, closed, homogeneous surfaces for scalp, outer skull and inner skull.
-That model has no way to represent the cerebrospinal fluid, the split of the
-skull into compact and spongy bone, or the openings at the orbits and the
-auditory meatus. For EEG those omissions bias the forward field, because
-current has to flow *through* all of it to reach the electrodes. The finite
+Every *realistic-geometry* forward solution MNE-Python can compute uses the
+boundary element method: nested, closed, homogeneous surfaces for scalp, outer
+skull and inner skull. (The alternative it offers is an analytic concentric-
+sphere model, which several other examples in this gallery use; it is not a BEM,
+but it is not a realistic geometry either.) The BEM has no way to represent the
+cerebrospinal fluid or the openings at the orbits and the auditory meatus. For
+EEG those omissions bias the forward field, because current has to flow
+*through* all of it to reach the electrodes. The finite
 element method (FEM) discretises the whole head volume instead and gives every
 tetrahedron its own conductivity. MNE-Python has no FEM solver.
 

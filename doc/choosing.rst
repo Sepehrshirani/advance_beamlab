@@ -84,7 +84,8 @@ Decision table
        (1.40x).
      - The rank ``K`` is a real parameter with two failure ends and only
        warnings guarding them. Runtime O(N^2) in sources for ``'whitened'``,
-       memory 99 MiB at q = 60 and 1.5 GiB at q = 120, rebuilt on every call.
+       memory about 200 MiB at q = 60 and 3 GiB at q = 120 (a q^2 x q^2 Gram
+       plus one same-sized accumulator), rebuilt on every call.
        All quantified benefit here is MEG.
    * - Correlated sources and what you need is **position**, not amplitude
      - :func:`mne.beamformer.make_lcmv`
@@ -202,7 +203,7 @@ perturbs the leadfield column more (0.10 relative at 5 degrees against 0.20 at
 space is untested here. The repository's own real-data example takes both
 constrained vertices straight from an LCMV power-map peak with no cross-check.
 The greedy search is also not a general-purpose localiser: on the 231-electrode
-New York Head FEM with a 34 mm, r = 0.95 pair, :func:`~advance_beamlab.scan_mcmv`
+New York Head FEM with a 34 mm, r = 0.999 pair, :func:`~advance_beamlab.scan_mcmv`
 and LCMV were both exact at 5% noise, but at 50% noise the scan missed by
 10-24 mm while LCMV stayed at 0.0 mm. ``pseudo_z`` is a weak stopping rule: in
 the repository's own three-source demo the sequence is
@@ -545,7 +546,7 @@ the mixing coefficient generating them, which is not the resulting r), LCMV's
 two highest-power vertices are exactly the two true source indices, 0.0 and
 0.0 mm error, and
 :func:`~advance_beamlab.make_mcmv` given those indices returns 20.2 and
-19.8 nA m against 20 and 19 simulated. :func:`~advance_beamlab.scan_mcmv` on the
+19.8 nA m against 20.0 and 19.6 simulated. :func:`~advance_beamlab.scan_mcmv` on the
 same data, by contrast, returns vertices 8.9 and 23.6 mm off, contradicting the
 example's own framing of this as "the regime that defeats a single-source LCMV".
 
@@ -594,12 +595,12 @@ When plain LCMV is the better choice
 
 **You need position, and your sources are strongly correlated.** On
 231-electrode average-referenced EEG with two sources 34 mm apart correlated at
-r = 0.95, plain LCMV localised both at 0.0 mm error while
-:func:`~advance_beamlab.scan_mcmv` and ReciPSIICOS each missed by 20-40 mm. The
+r = 0.999, plain LCMV localised both at 0.0 mm error while
+:func:`~advance_beamlab.scan_mcmv` missed by 8.9 and 23.6 mm. The
 same miss reproduced on an MNE BEM forward with a matched source space, so it is
-a property of those methods and not of the head model, and
+a property of the search and not of the head model, and
 :func:`~advance_beamlab.make_mcmv` given the true indices was fine on the same
-data (20.2 and 19.8 nA m against 20 and 19 simulated). The failure is in the
+data (20.2 and 19.8 nA m against 20.0 and 19.6 simulated). The failure is in the
 search, not the estimator. The shipped FEM example reproduces the pattern: LCMV
 exact at both sources, the greedy scan 8.9 and 23.6 mm off. Use LCMV to find the
 sources and a constrained method to read them out; do not read amplitudes off

@@ -9,8 +9,9 @@ Two temporally correlated sources are the textbook failure mode of the LCMV
 beamformer. Because LCMV minimises output power under a unit-gain constraint, a
 second source that is correlated with the target lets the filter place a null
 that *cancels the target itself*: the recovered amplitude of a source shrinks by
-a factor of :math:`1 - \rho^2` (in root-mean-square, :math:`\sqrt{1 - \rho^2}`)
-as its correlation :math:`\rho` with the neighbour approaches one. At
+a factor of :math:`\sqrt{1 - \rho^2}` -- equivalently, its power by
+:math:`1 - \rho^2` -- as its correlation :math:`\rho` with the neighbour
+approaches one. At
 :math:`\rho = 0.95` more than 90% of the power is lost.
 
 The multi-source (MCMV) beamformer constrains both sources in one filter set, so

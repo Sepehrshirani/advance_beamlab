@@ -355,9 +355,16 @@ numbers *mean*:
 - **`unit-noise-gain`**: rescale each filter so that
   $\mathbf{w_i}^{\mathsf T}\mathbf{C_n}\mathbf{w_i}=1$, i.e. unit output noise.
   Because the solve is in whitened space this is exactly unit Euclidean norm of
-  the whitened filter (MNE's definition). It equalises the noise floor across
-  locations, which is what you want for *maps* (so deep, low-SNR locations are
-  not penalised) at the cost of no longer preserving physical amplitude.
+  the whitened filter (MNE's definition). The equality with
+  $\mathbf{w_i}^{\mathsf T}\mathbf{C_n}\mathbf{w_i}=1$ is exact only when the
+  whitener is a single block: `mne.cov.compute_whitener` eigendecomposes the
+  noise covariance separately per sensor-type group, so on a combined MEG+EEG
+  array the whitened noise covariance is the identity only up to its cross-type
+  blocks and the realised noise gain departs from 1 (by of order one tenth in
+  power on the `sample` data). `make_lcmv` behaves identically. It equalises the
+  noise floor across locations, which is what you want for *maps* (so deep,
+  low-SNR locations are not penalised) at the cost of no longer preserving
+  physical amplitude.
 
 ## 7. The scanning localizers: MAI, MPZ, MER and rMER
 
@@ -524,8 +531,11 @@ and the symmetric cross-product vectors as $G_c$.
   project *away from* the top $K$ correlation directions and unwhiten. Because
   the power directions are flattened to unit scale first, this spares them far
   better than the plain variant. $W_p$ only spans that symmetric subspace, so a
-  rank $K\ge q(q{+}1)/2$ removes all of it and annihilates the covariance; the
-  code warns when a requested rank reaches that bound.
+  rank $K$ at or above the retained rank of $C_\mathrm{pwr}$ removes all of it
+  and annihilates the covariance; the code warns when a requested rank reaches
+  that bound. That retained rank is the number of independent working-space
+  topographies — at most $q(q{+}1)/2$, but on a small or rank-deficient grid it
+  is reached well before that, which is where the warning actually fires.
 
 **Applying it** (Eq. 11): reshape the projected vector back to a matrix and
 symmetrise,
@@ -561,9 +571,14 @@ versus $K$ (Eqs. 20–21), computed in closed form over all ranks from a single
 decomposition rather than one per rank. With `return_optimal=True` it also
 returns the rank $K^*$ at the 45° point where the correlation subspace stops
 emptying faster than the power subspace (Section 2.4). The two methods traverse
-the rank axis in *opposite* directions: the identity is $K=q^2$ for
+the rank axis in *opposite* directions: the least restrictive end is $K=q^2$ for
 `recipsiicos` and $K=0$ for `whitened` (which is why Fig. 19 of the paper puts
-the ReciPSIICOS scale in descending order). Both curves therefore rise with $K$
+the ReciPSIICOS scale in descending order). "Least restrictive" is not a synonym
+for "identity" — neither end leaves the covariance untouched. `recipsiicos`
+projects onto the singular directions of $G_\mathrm{pwr}$, of which there are
+only $\min(q^2, n_\mathrm{cols})$, so on a decimated grid $K$ is silently capped
+below $q^2$ and the curves are flat above the cap; `whitened` is confined at
+every rank to the retained range of $C_\mathrm{pwr}$. Both curves therefore rise with $K$
 for the former and fall with it for the latter, and $K^*$ is located
 accordingly. Note $K$ lives in the $q^2$-dimensional working covariance space.
 `make_recipsiicos_cov(...)` returns the cleaned `mne.Covariance` (for
@@ -828,7 +843,7 @@ only on the data) and reusing it for every template.
 |---|---|---|
 | `rank` (the projection rank $K$) | Size of the retained power subspace (`recipsiicos`) or removed correlation subspace (`whitened`), in the $q^2$-dimensional virtual-sensor space | The single most important knob, and it runs in **opposite directions for the two methods**, because $K$ counts what is kept in one and what is removed in the other. `recipsiicos`: too small → the projector keeps too little of the power subspace and removes real power (over-smoothing, lost sources); too large → correlation leaks back and cancellation returns. `whitened`: the reverse — too small → too little of the correlation subspace is removed and cancellation returns; too large → source power is stripped along with it. Use `recipsiicos_rank_curve` (optionally `return_optimal=True` for the 45° $K^*$) and pick $K$ near that point. |
 | `method` | Which projector | `recipsiicos` (project onto power) is simpler; `whitened` (project away from correlation in power-whitened space) spares source power better and is usually preferred for real data. |
-| `pct_var` / `n_virtual` | Virtual-sensor count $q$ | Fraction of whitened-leadfield variance kept (default 0.99), or an explicit count. Fewer virtual sensors → smaller and faster $M^2$-space but coarser subspace separation; too few and the power subspace fills the space, leaving the projector nothing to remove. This is also the memory knob: the projector build holds about nine $q^2\times q^2$ operators at once, so budget $9\times 8q^4$ bytes (Section 10). |
+| `pct_var` / `n_virtual` | Virtual-sensor count $q$ | Fraction of whitened-leadfield variance kept (default 0.99), or an explicit count. Fewer virtual sensors → smaller and faster $M^2$-space but coarser subspace separation; too few and the power subspace fills the space, leaving the projector nothing to remove. This is also the memory knob: at the peak of the **`whitened`** build about nine $q^2\times q^2$ operators are live at once, so budget $9\times 8q^4$ bytes; the `recipsiicos` build peaks nearer $1.5\times 8q^4$ (Section 10). |
 | `noise_cov` | Whitening model | Whitens per sensor type; **essential for mixed sensor types**. `None` uses an ad-hoc per-type model (a global scaling for a single type, which leaves the projector subspaces unchanged). |
 | `whitener_rank` | Numerical rank of the whitener | Leave at `None` after SSP/ICA/SSS (data are rank-deficient): it auto-detects per sensor type. To pin it, pass a per-type dict such as `{'meg': 60}`; as for `make_mcmv`, a bare integer raises `TypeError`. `'full'` assumes full rank. |
 | `reg` | Tikhonov loading of the working-space LCMV inverse (and the whitening ridge for `whitened`) | Same trade-off as MCMV's `reg`: stability vs resolution. Default `0.05`. |
@@ -857,7 +872,7 @@ table above. The connectivity-specific knobs:
 | `method` | Connectivity metric | `'envelope'` (signed amplitude-envelope correlation) for resting-state coupling; `'coh'`, `'plv'`, `'imcoh'`, … for task phase/spectral measures. The spectral metrics require `sfreq`, `fmin`, `fmax`. `'cohy'` is refused: coherency is complex and the returned matrix is real. Use `'coh'` (magnitude) or `'imcoh'` (imaginary part). |
 | `radius` (APW) | Neighbour search radius for augmentation | Default 0.04 m (4 cm), from the paper's ~2 cm resolution rule. Larger admits more candidate conductors (higher order → better indirect-leakage suppression but lower SNR); smaller admits fewer. |
 | `max_neighbours` (APW) | Neighbours added per source of the pair | Default 2, capping beamformer order at 2 + 2·`max_neighbours` = 6. Raising it suppresses more indirect leakage but erodes SNR (an $n$-source filter spends $n$ degrees of freedom; see §11), so keep the total order ≲ 8. |
-| `orthogonalize` | Leakage-orthogonalisation of the envelopes | Default `False` (plain correlation). MCMV already removes leakage; enabling this is the competing symmetric-orthogonalisation baseline and discards genuine zero-lag coupling. |
+| `orthogonalize` | Leakage-orthogonalisation of the envelopes | Default `False` (plain correlation). The only other accepted value is the string `'pairwise'`; a bare `True` raises, because pairwise is the only orthogonalisation implemented and it is not the same estimator as symmetric (multivariate) orthogonalisation. MCMV already removes leakage, so `'pairwise'` is there as the competing baseline — and it discards genuine zero-lag coupling. |
 | `absolute` | Sign of the envelope correlation | Default `False` (signed Pearson of envelopes, as in the paper); `True` returns the magnitude. Honoured for both `orthogonalize` settings, unlike `mne_connectivity.envelope_correlation`, which ignores it unless `orthogonalize='pairwise'`. |
 | `envelope_lowpass` | Envelope low-pass before correlating (§11) | Default `0.5` Hz, per the paper. `None` correlates the unsmoothed envelopes (exactly `envelope_correlation`) and leaves the AR(1) null anticonservative. Needs `sfreq`, which defaults to `info['sfreq']`. |
 | `envelope_resample` | Envelope downsampling before correlating | Default `None`. A target rate (Hz) reproduces the paper's "downsampled envelope correlations"; it changes the cost, not the expected value. |
@@ -866,7 +881,13 @@ table above. The connectivity-specific knobs:
 For `ar1_surrogate_significance`, `n_surrogates` (default 200) trades null-estimate
 precision against runtime, and `alpha` (default 0.05) is the FDR level; pass the
 same `orthogonalize`, `absolute`, `envelope_lowpass` and `envelope_resample` used
-for the matrix under test, plus its `sfreq`.
+for the matrix under test, plus its `sfreq`. The null is calibrated for
+`method='envelope'`, which is what the paper prescribes. **For the spectral
+metrics it is anticonservative**: under a complete null the uncorrected per-edge
+rejection rate at `alpha=0.05` measured 0.168 (coh), 0.114 (imcoh), 0.100 (plv),
+0.098 (wpli) and 0.077 (ppc) — 1.5 to 3.4 times nominal — with some of those
+edges surviving Benjamini-Hochberg. See the function's own docstring for the
+full figures.
 
 ---
 
@@ -875,7 +896,7 @@ for the matrix under test, plus its `sfreq`.
 | Parameter | What it controls | Effect of changing it |
 |---|---|---|
 | `cov` | The beamformer covariance $R$ | `None` (default) estimates the SBL covariance from the data, which is the intended ABMC pipeline. Pass a precomputed `sbl_covariance` result, or any `mne.Covariance`, to override. |
-| `P` | Ratio $\beta_2/\beta_1$ weighting the template constraint | The one genuinely free parameter. The paper states it "is empirically adjusted" and reports no value, because the useful setting depends on the recording (its own data is 20–32 subdural contacts). Pass **`P="auto"`** to have `abmc_stability_curve` choose it on your data (see below), or set it yourself: the constraint column is rescaled to its leadfield column so `P` is dimensionless, and 0.01–0.1 is the working range. The "numerically inert" warning is not what marks the bottom of it: that fires only when $P\,g^{\mathsf T}c/g^{\mathsf T}g$ falls below $10^{-6}$, which on a realistic fixture means $P\approx10^{-6}$ — four orders below 0.01 — so everything in between runs silently. Note also that `P="auto"` on the default `P_range` returns *the lowest setting at which the answer is already stable*, which is typically below 0.01 (median 0.0075 on the example fixture); pass `P_range=(0.01, 1e4)` if you want a selection inside the recommended range. Above it the localised peak starts to move well before anything blows up: measured on the example fixture, every peak is still on its $P\to 0$ location up to $P=0.18$, but by $P=1$ half of them have moved and the mean error has risen from 0.85 cm to 2.20 cm, while the first weights only blow up at $P=2.3$. So do not read `blowup_fraction` as an all-clear: it is zero again for large $P$, where the weights are finite but the answer is wrong. Use `result.critical_p`, the smallest $P$ at which some column's gain denominator vanishes, which is predicted before the solve and is never below 1. |
+| `P` | Ratio $\beta_2/\beta_1$ weighting the template constraint | The one genuinely free parameter. The paper states it "is empirically adjusted" and reports no value, because the useful setting depends on the recording (its own data is 20–32 subdural contacts). Pass **`P="auto"`** to have `abmc_stability_curve` choose it on your data (see below), or set it yourself: the constraint column is rescaled to its leadfield column so `P` is dimensionless, and 0.01–0.1 is the working range. The "numerically inert" warning is not what marks the bottom of it: that fires only when $P\,g^{\mathsf T}c/g^{\mathsf T}g$ falls below $10^{-6}$, which on a realistic fixture means $P\approx10^{-6}$ — four orders below 0.01 — so everything in between runs silently. Note also that `P="auto"` on the default `P_range` returns *the lowest setting at which the answer is already stable*, which is typically below 0.01 (median 0.0075 on the example fixture); pass `P_range=(0.01, 1e4)` if you want a selection inside the recommended range. Above it the localised peak starts to move well before anything blows up: measured on the example fixture, every peak is still on its $P\to 0$ location up to $P=0.18$, but by $P=1$ half of them have moved and the mean error has risen from 0.85 cm to 2.20 cm, while the first weights only blow up at $P=2.3$. So do not read `blowup_fraction` as an all-clear: it is zero again for large $P$, where the weights are finite but the answer is wrong. Use `result.critical_p`, the smallest $P$ at which some column's gain denominator vanishes, which is predicted before the solve and is never below 1 — noting that it is the pole of the *iterative* descent's denominator and an upper bound on where that descent loses stability, not the pole of the default closed-form solver, which has its own. |
 | `reg` | Diagonal loading of $R$ for the Stage-2 solve | **Default 0**, which is what the paper does. Its $R = G\alpha G^{\mathsf T} + \Lambda$ carries an *estimated* per-channel noise term and is positive definite and full rank **by construction**, so no loading is needed. Do not read that as "the empirical covariance is too ill-conditioned to invert": `examples/plot_abmc_localization.py` measures the opposite on its own fixture and says so — over the dimensions the segment occupies the empirical covariance is well conditioned, and `make_lcmv` inverts that very matrix on the same page. The reason to reach for $R$ is structural, not numerical: a diagonal $\alpha$ carries no cross-source correlation for a beamformer to exploit. Raise it only when you supply your own ill-conditioned `cov`. |
 | `method` | How Stage 2 is solved | `"closed-form"` (default) solves at the fixed point of the paper's Eqs. 17–19 directly. `"iterative"` runs the paper's gradient descent verbatim, for exact reproduction; `mu`, `max_iter` and `tol` apply only to that path. The two agree to ~1e-8 when the descent is run to convergence, and a test pins them together. Note the descent's step count grows with the condition number of $R$: on an ill-conditioned covariance it can need 10⁵ steps, which is why it is not the default. |
 | `mu` / `max_iter` / `tol` (`method="iterative"`) | Descent step size, budget and tolerance | `mu=None` uses $1/\lambda_{\max}(R)$. **`tol` is a distance to the fixed point, not a step size.** Those are not interchangeable: on an ill-conditioned $R$ the steps go small precisely because the descent is crawling along a shallow direction, so a step-size rule reports convergence while the weights are still far away. Because the fixed point is known in closed form, the honest test is available. |
@@ -932,6 +953,24 @@ for the matrix under test, plus its `sfreq`.
 - Sekihara, K., & Nagarajan, S. S. (2008). *Adaptive Spatial Filters for
   Electromagnetic Brain Imaging*. Springer.
   [doi:10.1007/978-3-540-79370-0](https://doi.org/10.1007/978-3-540-79370-0)
+- Vrba, J., & Robinson, S. E. (2001). Signal processing in
+  magnetoencephalography. *Methods*, 25(2), 249–271.
+  [doi:10.1006/meth.2001.1238](https://doi.org/10.1006/meth.2001.1238)
+  — the pseudo-Z / pseudo-T / pseudo-F localisers.
+- Nichols, T. E., & Holmes, A. P. (2002). Nonparametric permutation tests for
+  functional neuroimaging: a primer with examples. *Human Brain Mapping*,
+  15(1), 1–25. [doi:10.1002/hbm.1058](https://doi.org/10.1002/hbm.1058)
+  — the sign-flip permutation test and its maximum-statistic correction.
+- Huang, Y., Parra, L. C., & Haufe, S. (2016). The New York Head — A precise
+  standardized volume conductor model for EEG source localization and tES
+  targeting. *NeuroImage*, 140, 150–162.
+  [doi:10.1016/j.neuroimage.2015.12.019](https://doi.org/10.1016/j.neuroimage.2015.12.019)
+  — the finite-element head model this package fetches.
+- Oostenveld, R., & Praamstra, P. (2001). The five percent electrode system for
+  high-resolution EEG and ERP measurements. *Clinical Neurophysiology*, 112(4),
+  713–719.
+  [doi:10.1016/S1388-2457(00)00527-7](https://doi.org/10.1016/S1388-2457\(00\)00527-7)
+  — the 10-05 electrode naming the New York Head montage follows.
 
 # Maintainers and contributors
 
