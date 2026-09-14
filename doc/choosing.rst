@@ -283,8 +283,12 @@ one true source 63 mm from its nearest peak. Under ``'unit-noise-gain'`` or
 ``'nai'``, at ``reg=0.05``, or with ``method='recipsiicos'``, both localise
 exactly. The miss is setting-specific rather than universal, but it occurs at
 the advertised settings. For EEG there is no quantified benefit at all: EEG
-appears only in well-formedness tests. The default ``reg=0.05`` is itself enough
-diagonal loading to mask the cancellation the method exists to repair.
+appears only in well-formedness tests. Do not expect ``reg`` to mask the problem
+either way: on the sphere fixture at :math:`r = 0.95` and 5 per cent noise,
+sweeping it from 0.001 to 0.5 -- a factor of five hundred -- moves LCMV's
+recovered amplitude only from 0.096 to 0.130, against a distortionless 1.0. The
+cancellation is a property of the clean covariance, and diagonal loading barely
+touches it.
 
 **The parameters that matter.** ``rank`` (K), which lives in the
 q^2-dimensional working space, not in sensor space. Take it from
@@ -426,7 +430,9 @@ sphere with a 301-point 20 mm grid, 400 samples at 250 Hz and white sensor noise
 1.3x the spike's peak sensor amplitude, against
 :func:`mne.beamformer.make_lcmv` with ``weight_norm='unit-noise-gain'`` and
 ``reg=0.05``: mean peak error 0.9 cm (ABMC) against 5.5 cm (LCMV) over 8 spike
-locations. It is not a lucky seed: over six noise realisations the means are
+locations. It is not a lucky seed. Over six re-simulations -- the example's seed
+draws the eight source locations as well as the noise, so each run is a fresh
+geometry rather than a fresh noise draw on one -- the means are
 0.71-1.39 cm against 3.86-7.36 cm, with ABMC worse than LCMV at 1 of the 48
 individual sources. The lag search works: three differently-shifted copies of
 the same template return one location with lags +50, 0 and -50 samples, and a
