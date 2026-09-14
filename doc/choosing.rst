@@ -448,10 +448,18 @@ was 0.60 cm off at 0.5x and 3.20 cm at 0.8x, against ABMC's 0.00 and 0.25 cm. So
 the crossover is around 0.2x, not higher. When you have no reproducible
 waveform: the reason is the missing template rather than the activity being
 sustained. A sustained 10 Hz source, with its own sinusoid passed as the
-template, was localised at 0.00 cm by both methods at 0.2x and 1.3x noise (and
-better by ABMC, 0.85 vs 4.31 cm, only at 3.0x). When the template is wrong: a
-10 Hz burst template on spike data moved ABMC from 0.85 cm to 4.54 cm, against
-LCMV's unchanged 5.47 cm, and left ABMC worse than LCMV at 3 of the 8 sources.
+template, was localised at 0.00 cm by both methods at 0.2x and 1.3x noise. Push
+it to 3.0x and the two stay comparable rather than separating: over three noise
+draws ABMC ran 0.00 to 2.00 cm against LCMV's 0.00 to 2.00 cm on a 2 cm grid,
+so this is not a case where the template constraint earns its keep. When the
+template is wrong: a
+band-limited template on spike data costs ABMC its whole advantage, but how much
+depends entirely on what the wrong template is, so the number is only meaningful
+with the template stated. From the same 0.85 cm baseline, against LCMV's
+unchanged 5.47 cm: a three-cycle 10 Hz burst gives 2.96 cm (worse than LCMV at
+1 of the 8 sources), a full-length 10 Hz sinusoid 7.77 cm (worse at 5 of 8) and
+a five-cycle burst 8.65 cm (worse at 6 of 8). Treat "a wrong template" as a
+range, not a value.
 When two sources of the same morphology are simultaneously active: ABMC returns
 one map with one peak and places no null on a second source, and in a check with
 two spikes 6 samples apart at sources 8.9 cm apart the peak landed 4.0 and

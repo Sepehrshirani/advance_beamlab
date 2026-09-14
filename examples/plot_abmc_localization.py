@@ -185,8 +185,11 @@ print(f"mean error  ABMC {np.mean(abmc_err):.1f} cm   LCMV {np.mean(lcmv_err):.1
 # it carries no cross-source correlation structure. That structure is exactly what
 # an LCMV beamformer exploits when it cancels correlated sources.
 #
-# The left panel is the fitted source power. It is informative: it puts the true
-# source in the top handful of a 301-point grid. But it is *not* a localiser. Its
+# The left panel is the fitted source power. It is informative, though not as
+# sharply as "informative" might suggest: over this run's eight sources it ranks
+# the true one 1st, 2nd, 2nd, 50th, 8th, 11th, 67th and 9th of 301, and the one
+# shown here is the 9th. Two of the eight fall outside the top fifteen per cent,
+# and on other seeds the worst reaches 141st. But it is *not* a localiser. Its
 # own peak can sit several centimetres away. Stage 1 supplies a covariance that
 # will not cancel correlated sources; the template constraint of Stage 2 is what
 # turns that into a location. That division of labour is the method.
