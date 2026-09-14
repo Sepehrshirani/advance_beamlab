@@ -128,17 +128,15 @@ fig, ax = plt.subplots(figsize=(7, 3.8))
 ax.plot(ranks, p_pwr, color="C3", label="power subspace retained")
 ax.plot(ranks, p_cor, color="C0", label="correlation subspace retained")
 ax.axvline(k_opt, color="k", ls="--", lw=1.2, label=f"$K^*$ = {k_opt}")
-# Both curves saturate long before the largest rank the covariance space admits,
-# so the axis stops where they stop changing. Drawn to the full range the entire
-# trade-off -- and the selected rank with it -- was compressed into the left
-# fifth of the panel, with the rest two flat lines carrying no information.
-_reached = np.flatnonzero(p_pwr >= 0.99)
-_saturated = int(ranks[_reached[0]]) if _reached.size else int(ranks[-1])
+# The interesting part of the curve is the neighbourhood of K*, so the axis
+# stops at twice it. Drawn to the full range the entire trade-off -- and the
+# selected rank with it -- was compressed into the left fifth of the panel, with
+# the rest two flat lines carrying no information.
 ax.set(
     xlabel="projection rank $K$",
     ylabel="retained energy fraction",
     ylim=(0, 1.05),
-    xlim=(0, min(int(ranks[-1]), max(2 * k_opt, int(1.2 * _saturated)))),
+    xlim=(0, min(int(ranks[-1]), 2 * k_opt)),
 )
 ax.set_title("The rank trade-off, and the rank it selects", loc="left")
 ax.legend(loc="center right")
@@ -366,17 +364,29 @@ fig.suptitle(
 
 # %%
 # Read the shaded band as invalid rather than as more plateau. Over the ranks
-# that are valid, :math:`K^*/8` to :math:`K^*`, the recovered amplitude stays
-# between 0.96 and 1.02 while LCMV on the same data sits at 0.31. On this
-# configuration the choice of rank really is not what separates the two methods;
-# applying the projection at all is.
+# below the bound, :math:`K^*/8` to :math:`K^*`, the recovered amplitude stays
+# between 0.95 and 1.02 (0.97, 0.96 and 1.02 at the three points) while LCMV on
+# the same data sits at 0.31. On this configuration the choice of rank really is
+# not what separates the two methods; applying the projection at all is.
+#
+# Two of those three ranks are not silent, though: both sub-:math:`K^*` points
+# raise the Eq. 24 negative-eigenvalue diagnostic during the run, at 24.1 and
+# 21.0 per cent against a 20 per cent limit, while :math:`K^*` itself does not.
+# As that warning says, a large negative-eigenvalue share is expected in exactly
+# the regime the method is for and is not by itself a reason to change the rank
+# -- but it will appear in the reader's own console, so it is worth knowing
+# which points here produce it.
 #
 # Past the bound the amplitude carries straight on and reaches 1.08 at
 # :math:`4K^*`, the highest value anywhere in the sweep, and it means nothing:
 # the covariance behind it is zero to within round-off. The power share in the
-# right-hand panel falls from about 0.15 to 0.006 and 0.004 over the same two
-# points, a factor of twenty-five and thirty-five. That is what a real failure
-# looks like, and it is the reason the left-hand panel alone was not enough.
+# right-hand panel collapses with it, from about 0.15 to 0.006 and 0.004 over
+# the same two points. Read that as a collapse of an order of magnitude or more
+# rather than as the exact factors of twenty-five and thirty-five it works out
+# to here: past the annihilation bound the modified covariance is some 5e-15 of
+# the raw one, so what is left is round-off and the precise ratio moves with the
+# draw. That is what a real failure looks like, and it is the reason the
+# left-hand panel alone was not enough.
 #
 # **The modified covariance itself.** :func:`~advance_beamlab.make_recipsiicos_cov`
 # returns the cleaned sensor covariance directly, which is useful for inspection

@@ -98,8 +98,9 @@ n_epochs, n_times = 60, 150
 times = np.arange(n_times) / info["sfreq"] - 0.2
 active = times >= 0.0
 
-# 10 Hz oscillations at equal phase steps, giving pairwise correlations of 0.95,
-# 0.95 and 0.80. That is the regime a single-source scan cannot resolve.
+# 10 Hz oscillations at equal phase steps: 0.95 between neighbouring steps and
+# 0.80 across two, printed below in the order (0,1), (0,2), (1,2) as 0.95, 0.80,
+# 0.95. That is the regime a single-source scan cannot resolve.
 rho = 0.95
 phi = np.arccos(rho)
 sources = np.zeros((3, n_times))

@@ -426,15 +426,20 @@ for system in ("10-20", "10-10", "10-05", "all"):
 # %%
 # It is worth knowing what the familiar montage costs before reaching for it.
 # Repeating the localisation above at each electrode count, on the same
-# correlated pair, the 19-electrode array misses by 38.9 mm while the
-# 67-electrode 10-10 cap and everything denser is exact.
+# correlated pair, the 19-electrode array misses *both* sources, by 38.9 and
+# 34.4 mm, while the 67-electrode 10-10 cap and everything denser is exact at
+# both.
 #
 # The counts in between are the ones a reader actually has to choose among, and
 # the loop below does not print them, so they are worth stating: the error does
-# not fall away gradually. Random subsets of 26 to 40 electrodes still miss one
-# of the two sources by up to 34 mm, and only from about 45 electrodes does
-# every draw land on both. A 32-channel cap sits on the wrong side of that line,
-# which is the opposite of what this paragraph used to claim.
+# not fall away gradually. Drawing ten random subsets at each size from the 161
+# 10-05 names, on this same source pair and noise, a subset misses one of the
+# two sources (by more than 5 mm) in 8 of 10 draws at 26 and at 32 electrodes,
+# 7 of 10 at 40, 3 of 10 at 45 and still 4 of 10 at 50; only from about 60 does
+# every draw land on both. The misses are large when they happen -- up to
+# 45 mm -- rather than a gradual degradation. A 32-channel cap therefore sits
+# well on the wrong side of that line, which is the opposite of what this
+# paragraph used to claim.
 #
 # The miss is a property of the array rather than of the noise. Across ten noise
 # seeds it comes out at 38.9 mm nine times and 41.7 mm once. It is also specific

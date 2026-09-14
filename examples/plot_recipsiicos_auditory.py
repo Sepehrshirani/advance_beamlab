@@ -259,10 +259,11 @@ if brain is not None:
 # hemispheric balance the two filters are close, because LCMV already recovers
 # both hemispheres. On waveform amplitude at the auditory peaks they are not:
 # ReciPSIICOS returns roughly four and a half times the LCMV peak on the left and
-# about a third more on the right. That is not an artefact of the two weight
-# normalisations, since the pre-stimulus baseline deviations are comparable
-# between the two filters, so the peak signal-to-noise improves along with the
-# amplitude.
+# about a third more on the right. It is not a normalisation artefact: both
+# filters above are built with ``weight_norm='unit-noise-gain'``, so there is
+# only one normalisation in play. The pre-stimulus baseline deviations then say
+# whether the extra amplitude is signal or noise, and they do not move with it,
+# so the peak signal-to-noise improves along with the amplitude.
 #
 # The two metrics are asking different questions. Balance asks whether each
 # hemisphere shows up at all, and LCMV passes. Peak amplitude asks how much of

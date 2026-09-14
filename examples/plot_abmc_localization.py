@@ -27,8 +27,13 @@ This example shows four things on a spherical EEG model:
 4. **A dictionary of templates**: :func:`~advance_beamlab.make_abmc_dictionary`
    localising several desired waveforms in one call.
 
-The LCMV comparator throughout is :func:`mne.beamformer.make_lcmv` with
-``weight_norm='unit-noise-gain'``. That normalisation matters: the *unnormalised*
+The LCMV comparator for the localisation maps is
+:func:`mne.beamformer.make_lcmv` with ``weight_norm='unit-noise-gain'``. (The
+waveform figure near the end is the exception: it compares against a hand-built
+unit-gain filter, because there the question is what each filter does to the
+source's amplitude, and unit-noise-gain does not preserve amplitude.)
+
+That normalisation matters for the maps: the *unnormalised*
 unit-gain output power :math:`1/(\mathbf{g}^{\mathsf T}\mathbf{R}^{-1}\mathbf{g})`
 scales as :math:`\|\mathbf{g}\|^{-2}`, so it is driven by wherever the leadfield
 happens to be weakest rather than by where the source is. On this grid, with a
@@ -338,8 +343,10 @@ fig.tight_layout()
 
 # %%
 # **Reconstructed source** at that location. Both filters are unit-gain at the
-# source, so both recover the spike, and ABMC's trace is modestly cleaner
-# (``r`` = correlation with the noiseless source).
+# source, so both traces are on the injected source's scale -- but at this SNR
+# neither recovers the spike cleanly, and the honest reading is that ABMC's
+# trace is modestly less bad rather than good (``r`` = correlation with the
+# noiseless source; this is the least favourable of the eight sources).
 #
 # It is worth being exact about which half of the method earns that, because the
 # obvious reading is the wrong one. Most of it is Stage 1 rather than the
