@@ -522,11 +522,16 @@ for i in range(len(short)):
 
 # %%
 # One edge moves and the rest do not, which is what the augmentation rule
-# predicts. APW-MCMV adds a region to a pair's beamformer only when that region
-# is in the list passed in, lies within ``radius`` of one of the pair, and itself
-# carries a significant edge. Of the six pairs here, only ``aud-R``-``vis-L``
-# has such a neighbour: the two pericalcarine regions are about 3 cm apart, well
-# inside the 4 cm ``radius``, and their own edge survives the AR(1) screen, so
+# predicts. Two conditions decide it. First, a pair is only considered at all if
+# it survived the screen: the loop opens with ``if not significance[i, j]:
+# continue``, so the four non-significant pairs here are copied through at their
+# PW-MCMV value and never tested for neighbours. That leaves two candidates.
+# Second, among those, APW-MCMV adds a region to the pair's beamformer only when
+# that region is in the list passed in, lies within ``radius`` of one of the
+# pair, and itself carries a significant edge. Of the two pairs tested, only
+# ``aud-R``-``vis-L`` has such a neighbour: the two pericalcarine regions are
+# about 3 cm apart, well inside the 4 cm ``radius``, and their own edge survives
+# the AR(1) screen, so
 # ``vis-R`` joins that pair's filter and the order goes from two to three. The
 # value it reports shifts from 0.255 to 0.261.
 #

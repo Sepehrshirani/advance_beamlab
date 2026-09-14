@@ -497,10 +497,10 @@ second follows the paper:
   is a property of the noise model as much as of the array, so it is worth
   quoting a configuration rather than a number: on the `sample` MEG array (305
   good channels, the oct-6 free-orientation forward) with the dataset's own
-  `sample_audvis-cov.fif` as `noise_cov`, `pct_var=0.99` gives $q=68$ over the
-  102 magnetometers, $q=74$ over the 203 gradiometers and $q=85$ over all 305.
+  `sample_audvis-cov.fif` as `noise_cov`, `pct_var=0.99` gives $q=67$ over the
+  102 magnetometers, $q=73$ over the 203 gradiometers and $q=84$ over all 305.
   Substituting the ad-hoc noise model (`noise_cov=None`) drops the single-type
-  counts to $q=31$ and $q=48$; combined MEG has no ad-hoc case, since it
+  counts to $q=31$ and $q=47$; combined MEG has no ad-hoc case, since it
   refuses to run without a `noise_cov` at all. The $M^2\times M^2$ correlation
   Gram would be $93\text{k}\times 93\text{k}$ for a 306-channel array; in the
   $q$-dimensional working space it is a few thousand square.

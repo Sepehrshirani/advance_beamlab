@@ -205,6 +205,16 @@
      * table reporting the simulated grid and a sample count from a simulation
      * that is not on screen. */
     var C = P.n_channels;
+    /* The ReciPSIICOS rank and its virtual-sensor count are a pair, and the
+     * recorded half is built with its own: the simulated grid gives K = 84 at
+     * q = 75, the recording K = 175 at q = 70. Reporting the simulated pair on
+     * the recorded tab described a filter the page had not built. */
+    var rsRank = isRecorded
+      ? (P.model && P.model.real_recipsiicos_rank)
+      : (P.model && P.model.recipsiicos_rank);
+    var rsVirtual = isRecorded
+      ? (P.model && P.model.real_recipsiicos_virtual)
+      : (P.model && P.model.recipsiicos_virtual);
     var V = isRecorded ? P.n_real_sources : P.n_sources;
     var T = isRecorded
       ? P.real_n_times
@@ -248,8 +258,8 @@
     if (algo) {
       var S = {
         C: C, V: V, T: T, n: n, n2: n * n,
-        K: (P.model && P.model.recipsiicos_rank) || 0,
-        q: (P.model && P.model.recipsiicos_virtual) || 0,
+        K: rsRank || 0,
+        q: rsVirtual || 0,
       };
       S.q2 = S.q * S.q;
       extra =
@@ -270,8 +280,8 @@
     if (shapes) {
       var S2 = {
         C: C, V: V, T: T, n: n, n2: n * n,
-        K: (P.model && P.model.recipsiicos_rank) || 0,
-        q: (P.model && P.model.recipsiicos_virtual) || 0,
+        K: rsRank || 0,
+        q: rsVirtual || 0,
       };
       S2.q2 = S2.q * S2.q;
       check =

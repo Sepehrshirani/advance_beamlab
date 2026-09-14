@@ -105,9 +105,9 @@ says anything on its own.
 .. raw:: html
 
    <div id="advance-beamlab-panel" class="cp-root"></div>
-   <link rel="stylesheet" href="_static/constraint_panel.css?v=8">
+   <link rel="stylesheet" href="_static/constraint_panel.css?v=9">
    <script src="_static/constraint_panel_data.js?v=5"></script>
-   <script src="_static/constraint_panel.js?v=8"></script>
+   <script src="_static/constraint_panel.js?v=9"></script>
 
 The controls
 ------------
@@ -210,7 +210,11 @@ activity along with it.
 experimenter actually controls. A single trial of an evoked MEG response sits
 well below unit sensor signal-to-noise; this panel takes 0.2 as the single-trial
 value, and averaging :math:`N` trials buys a factor of :math:`\sqrt{N}`, so the
-two settings are 0.20 and 2.0.
+two settings are 0.20 and 2.0. Note that the simulation holds the record length
+fixed at 2000 samples and moves only that ratio, so what a one-trial filter
+lacks here is signal-to-noise, not samples to estimate a covariance from. The
+recorded half is the other way round: there the covariance really is estimated
+from the epochs being averaged.
 
 This control moves two things in opposite directions, and that is worth sitting
 with rather than explaining away. Averaging always improves **localisation**:
@@ -449,7 +453,9 @@ comes from passing a scene containing only source :math:`j` through the finished
 filter and reading what filter :math:`i` returns, which is
 :math:`\mathbf{w}_i^{\mathsf T}\mathbf{g}_j` by definition. The methods keep
 their weights in different spaces, so their stored arrays are not comparable;
-what comes out of the public apply path is.
+what comes out of the public apply path is. ABMC is the exception, because the
+package exposes no ``apply_abmc``: its row is read from the sensor-space weights
+``ABMCResult`` returns, which are already in the space the comparison needs.
 
 Colour means one thing throughout. A **method colour** is always that method's
 estimate: the crosses on the cortex, the reconstruction trace, its line in the
@@ -553,8 +559,9 @@ makes it more or less common depends on the head model, so the two are worth
 quoting apart. With a realistic one every method leaks less as the data improve
 -- LCMV in 26.5 per cent of its single-trial configurations against none at all
 of its hundred-trial ones, MCMV 35.5 against none, ReciPSIICOS 43.4 against
-36.5 -- because a filter with too little data to adapt degenerates towards a
-non-adaptive one with poor spatial selectivity, while one given enough adapts
+36.5 -- because a filter with too little signal-to-noise to adapt degenerates
+towards a non-adaptive one with poor spatial selectivity, while one given enough
+adapts
 sharply enough to null a source it is pointed slightly to one side of, which
 takes the amplitude below one rather than above it. With a matched model there
 is far less to leak and the direction is no longer uniform: LCMV falls from

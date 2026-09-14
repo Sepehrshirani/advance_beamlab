@@ -348,17 +348,23 @@ an error bound.
 **When it does not help.** When the edge is genuine and strong: LCMV was within
 0.008 here. At low SNR: PW-MCMV's residual conductor leakage is data-adaptive
 and grows with noise, so on the same scenario the spurious edge runs LCMV
-+0.097 / +0.122 / +0.188 / +0.240 / +0.348 / +0.410 against PW-MCMV -0.100 /
--0.030 / +0.166 / +0.336 / +0.658 / +0.847 at 22.7 / 8.7 / 4.6 / 2.7 / -0.9 /
--5.3 dB. Read that against the truth and the advantage goes in two stages. The
++0.100 / +0.140 / +0.211 / +0.263 / +0.368 / +0.415 against PW-MCMV -0.093 /
++0.008 / +0.222 / +0.397 / +0.705 / +0.866 at 22.7 / 8.7 / 4.6 / 2.7 / -0.9 /
+-5.3 dB, against a truth of -0.151. The first point is the one the example
+prints. Read that against the truth and the advantage goes in two stages. The
 sign is gone by about 8.7 dB, where the estimate sits on zero -- re-measured
 over independent noise draws it straddles it (+0.008, -0.003, -0.008), so the
 crossing is at that point rather than after it. The absolute error is level with
 LCMV's by 4.6 dB: over five draws, LCMV 0.347-0.362 against PW-MCMV 0.345-0.373,
 with LCMV marginally ahead in four of the five. So PW-MCMV is the better
 estimator down to about 6 dB, a tie at 4.6, and behind below that -- not still
-ahead at 4.6 dB. APW-MCMV, whose null is not
-data-adaptive, held -0.14 to -0.17 throughout. Do not import the
+ahead at 4.6 dB. APW-MCMV, whose null is not data-adaptive, degrades far more
+slowly but does degrade: -0.151 / -0.132 / -0.107 / -0.085 / -0.014 / +0.104
+over the same six points, so it holds the value to about 8.7 dB, has lost a
+third of it by 4.6, and reaches the wrong sign at -5.3 dB. Its spread across
+noise draws widens as the SNR falls, from +/-0.001 at 22.7 dB to a range of
+-0.092 to +0.104 at -5.3 dB, so read the low-SNR figures as a trend rather than
+as values. Do not import the
 "regularisation pushes LCMV back toward the truth" reasoning
 from the amplitude examples: for connectivity, noise moved LCMV's spurious edge
 *away* from the truth and dropped its genuine edge from 0.992 to 0.667. When
