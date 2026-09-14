@@ -179,8 +179,9 @@ at 5% noise and 0.205 vs 0.048 at 100% noise, so the accuracy advantage
 survives across the whole noise range even where the amplitude ratio has
 collapsed to ~1.2. For discovery, on a 418-point grid with three sources
 6.0 / 8.2 / 14.2 cm apart (pairwise 0.95 / 0.805 / 0.95) an LCMV power map ranks
-the three true sources #4, #41 and #1 of 418 with two non-sources in its top
-three, whereas :func:`~advance_beamlab.scan_mcmv` with ``'mai'`` and with
+the three true sources #4, #41 and #1 of 418, with two points in its top three
+that are not sources but the immediate neighbours of one (1.8 and 2.5 cm away on
+an 18 mm grid), whereas :func:`~advance_beamlab.scan_mcmv` with ``'mai'`` and with
 ``'mpz'`` returns all three at 0.0 cm and recovers their time courses at
 r = 0.999-1.000. That three-source result is shown only in an example; no test
 pins it. On real mixed-sensor MEG, the sample auditory N100 gives 2.21x (left)

@@ -127,9 +127,12 @@ print(f"pairwise source correlations: {pairs}")
 # %%
 # **What a one-at-a-time scan sees.** A standard LCMV power map, noise-normalised
 # so it is not depth-biased, over the same grid. It finds the strongest source
-# and then reports peaks that are not sources at all: the rank it assigns each
-# true location is printed below, and one of the three is buried in the noise
-# floor.
+# and then ranks other grid points above the remaining two: the rank it assigns
+# each true location is printed below, and one of the three is buried in the
+# noise floor. Those higher-ranked points are not phantoms somewhere else --
+# they are the immediate neighbours of a true source, 1.8 to 2.5 cm from it on
+# an 18 mm grid, so what the map really shows is a source blurred across its own
+# first and second rings until the blur outranks the source itself.
 
 lcmv = make_lcmv(
     info,
