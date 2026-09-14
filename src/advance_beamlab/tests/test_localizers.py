@@ -5,6 +5,7 @@
 #          Jade Serfaty <jade.serfaty.17@ucl.ac.uk>
 # License: BSD-3-Clause
 
+import warnings
 from copy import deepcopy
 
 import mne
@@ -744,3 +745,26 @@ def test_orientation_dominant_component_is_never_negative(name):
             # A unit 3-vector's dominant component has magnitude >= 1/sqrt(3),
             # so the convention puts it comfortably above zero.
             assert u[np.argmax(np.abs(u))] > 0.5
+
+
+def test_full_rank_with_loading_reports_the_directions_it_inverted(sphere_fwd):
+    """``rank='full'`` plus ``reg > 0`` truncates nothing, so report nothing cut.
+
+    ``_reg_pinv`` measures the rank before diagonal loading but masks with the
+    rank after it, which for ``rank='full'`` is the full whitened dimension.
+    Nothing is truncated, yet the number it returns is the smaller pre-loading
+    rank. Reporting that number warned about a pseudo-inverse that was never
+    taken, and could refuse a beamformer order the inverse can support.
+    """
+    fwd, info = sphere_fwd
+    # A deliberately rank-deficient covariance: fewer implanted sources than
+    # channels, so the pre-loading rank is far below the whitened dimension.
+    data_cov = _implanted_cov(fwd, info, [0, 1], np.eye(3)[:2], corr=0.5)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = scan_mcmv(
+            info, fwd, data_cov, n_sources=1, rank="full", reg=0.05, verbose=False
+        )
+    deficient = [w for w in caught if "rank-deficient" in str(w.message)]
+    assert not deficient, f"unexpected rank warning: {deficient[0].message}"
+    assert len(result["sources"]) == 1

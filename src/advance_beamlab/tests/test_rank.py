@@ -184,3 +184,29 @@ def test_a_projection_cliff_is_found_on_a_short_spectrum_too():
             basis[:, :true] @ np.diag(np.geomspace(1.0, 1e-2, true)) @ basis[:, :true].T
         )
         assert estimate_rank(cov, method="cliff", verbose=False) == true
+
+
+def test_degenerate_spectra_return_without_reaching_the_cliff_test():
+    """Spectra too small or too flat to have a cliff must still answer.
+
+    The cliff test needs at least three positive eigenvalues and a non-zero
+    spread of drops. Below that there is nothing to standardise against, so the
+    estimator returns the count of usable directions rather than dividing by a
+    zero spread or indexing an empty array of drops.
+    """
+    # No channels at all.
+    with pytest.raises(ValueError, match="cov has no channels"):
+        estimate_rank(np.zeros((0, 0)), verbose=False)
+
+    # One usable direction, and none at all.
+    assert estimate_rank(np.diag([1.0, 0.0, 0.0]), verbose=False) == 1
+    assert estimate_rank(np.zeros((3, 3)), verbose=False) == 1
+
+    # Two positive eigenvalues: fewer than the three the cliff test needs.
+    assert estimate_rank(np.diag([1.0, 1e-3, 0.0]), verbose=False) == 2
+
+    # A perfectly flat spectrum has zero spread, so no drop can be unusual.
+    assert estimate_rank(np.eye(6), verbose=False) == 6
+
+    # 'variance' on an all-zero spectrum has no mass to apportion.
+    assert estimate_rank(np.zeros((4, 4)), method="variance", verbose=False) == 1

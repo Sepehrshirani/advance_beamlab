@@ -264,3 +264,18 @@ def test_the_blocked_maximum_is_the_maximum_of_the_whole_surface():
     # count has to match the comparison exactly, ties included.
     counted = (blocked[None, :] >= np.abs(obs)[:, None]).sum(axis=1) / blocked.size
     np.testing.assert_array_equal(p, np.clip(counted, 1.0 / blocked.size, 1.0))
+
+
+def test_a_non_positive_permutation_count_is_refused():
+    """Zero or negative draws cannot produce a p-value, so say so up front.
+
+    The floor of the returned p-values is ``1 / n_draws``, so a non-positive
+    count has no meaning at all rather than merely being a poor choice. Left
+    unchecked it would reach the sign-flip draw and fail there with a shape
+    error that says nothing about the argument the caller got wrong.
+    """
+    rng = np.random.default_rng(0)
+    images = rng.standard_normal((6, 12))
+    for bad in (0, -1, -250):
+        with pytest.raises(ValueError, match="n_permutations must be positive"):
+            permutation_image_test(images, n_permutations=bad, verbose=False)
