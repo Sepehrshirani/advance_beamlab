@@ -85,10 +85,27 @@ dev = ["advance_beamlab[test,doc]", "ruff>=0.6"]
 
 [project.urls]
 Homepage = "https://github.com/Sepehrshirani/advance_beamlab"
+Documentation = "https://sepehrshirani.github.io/advance_beamlab-docs/"
 "Source Code" = "https://github.com/Sepehrshirani/advance_beamlab"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/advance_beamlab"]
+
+# The source distribution ships an explicit allowlist rather than everything the
+# VCS does not ignore. Hatchling reads .gitignore but not .git/info/exclude, so a
+# deny list would silently miss anything excluded only locally, and any editor or
+# tooling directory sitting in the working tree would be published with the
+# release. Listing what belongs in the sdist keeps that decision explicit.
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/doc",
+    "/examples",
+    "/tools",
+    "/README.md",
+    "/LICENSE",
+    "/CITATION.cff",
+]
 
 # Linting + formatting configured to mirror MNE-Python's conventions, so that
 # upstreamed files pass the MNE CI checks unchanged.

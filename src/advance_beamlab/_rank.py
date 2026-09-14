@@ -77,7 +77,7 @@ def _eigenvalues(cov):
 
 @verbose
 def rank_spectrum(cov, *, verbose=None):
-    """Eigenvalues of a covariance, largest first, for inspection.
+    """Return the eigenvalues of a covariance, largest first, for inspection.
 
     Parameters
     ----------

@@ -185,6 +185,10 @@ def power_image(
     neighbour causes, which is a property of the filter rather than of the
     window it is applied to.
 
+    References
+    ----------
+    .. footbibliography::
+
     Examples
     --------
     >>> from advance_beamlab import power_image  # doctest: +SKIP
@@ -192,10 +196,6 @@ def power_image(
     ...     filters, active_cov, baseline_cov=base_cov,
     ...     noise_cov=noise_cov, kind="pseudo-t",
     ... )
-
-    References
-    ----------
-    .. footbibliography::
     """
     _check_option("kind", kind, _KINDS)
     _validate_type(log_ratio, bool, "log_ratio")

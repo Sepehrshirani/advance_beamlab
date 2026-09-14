@@ -161,14 +161,14 @@ def permutation_image_test(
     per-source variance estimated from a handful of subjects is itself unstable
     enough to make the studentised version the worse choice in a small study.
 
+    References
+    ----------
+    .. footbibliography::
+
     Examples
     --------
     >>> from advance_beamlab import permutation_image_test  # doctest: +SKIP
     >>> obs, p, null = permutation_image_test(subject_images)  # doctest: +SKIP
-
-    References
-    ----------
-    .. footbibliography::
     """
     _check_option("correction", correction, _CORRECTIONS)
     _check_option("tail", tail, (-1, 0, 1))

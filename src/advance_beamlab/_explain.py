@@ -87,7 +87,10 @@ _ON_GRID_TOLERANCE = 0.001
 class ConstraintDemo:
     r"""One simulated scene, reconstructed by one method.
 
-    Attributes
+    This is a :func:`~dataclasses.dataclass`, so the fields below are both its
+    constructor parameters and its attributes.
+
+    Parameters
     ----------
     method : str
         The method used.
@@ -606,7 +609,10 @@ class EvokedDemo:
     table is the filters' response to the leadfields of the constrained
     locations, and it is measurable on any data at all.
 
-    Attributes
+    This is a :func:`~dataclasses.dataclass`, so the fields below are both its
+    constructor parameters and its attributes.
+
+    Parameters
     ----------
     method : str
         The method used.
@@ -656,6 +662,11 @@ class EvokedDemo:
         Epochs averaged.
     window : tuple of float
         The window the data covariance was computed over, in seconds.
+    extra : dict
+        ``'n_sources'``, and the ReciPSIICOS pair ``'recipsiicos_rank'`` with the
+        ``'recipsiicos_virtual'`` count it was chosen out of. The two are
+        reported together because a rank alone cannot say which space it
+        belongs to.
     """
 
     method: str
@@ -688,6 +699,25 @@ def evoked_sources(info, forward, data_cov, noise_cov, *, reg=0.05):
     7.5 mm scan grid the right-hemisphere peak of the auditory response lands in
     parietal cortex and the pair stops being correlated at all, which is why the
     real recording is analysed on the undecimated surface.
+
+    Parameters
+    ----------
+    info : instance of mne.Info
+        The measurement info, used for the channel set and projectors.
+    forward : instance of mne.Forward
+        The forward solution whose grid is scanned.
+    data_cov : instance of mne.Covariance
+        Data covariance the LCMV power map is built from.
+    noise_cov : instance of mne.Covariance
+        Noise covariance used to noise-normalise that map.
+    reg : float
+        Diagonal loading of ``data_cov``, as a fraction of its mean eigenvalue.
+
+    Returns
+    -------
+    sources : list of int
+        Two grid indices, the strongest point in the left hemisphere followed by
+        the strongest in the right.
     """
     from mne.beamformer import apply_lcmv_cov, make_lcmv
 
@@ -953,15 +983,14 @@ def constraint_demo(
         Fixed-orientation forward solution.
     method : str
         ``'lcmv'``, ``'mcmv'``, ``'recipsiicos'`` or ``'abmc'``.
+    n_sources : int
+        How many sources to simulate, ignored when ``sources`` is given. One has
+        nothing to cancel against and is the control case; two is the classic
+        correlated pair; three shows what happens when a beamformer is given
+        fewer constraints than there are active sources.
     sources : array-like of int | None
         Grid indices to place the sources at, overriding ``n_sources`` and
         ``separation``. Use it to put them in named anatomical regions.
-    n_sources : int
-        How many sources to simulate, ignored when ``sources`` is given. One has
-        nothing to cancel against and is
-        the control case; two is the classic correlated pair; three shows what
-        happens when a beamformer is given fewer constraints than there are
-        active sources.
     morphology : str
         ``'theta'``, ``'alpha'`` or ``'beta'`` for a modulated rhythm at 6, 10 or
         20 Hz, or ``'transient'`` for a train of short bursts, which is the

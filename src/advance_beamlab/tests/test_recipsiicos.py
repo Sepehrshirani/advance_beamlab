@@ -1409,3 +1409,24 @@ def test_a_label_restricts_the_filters_and_not_the_covariance_modification():
     rows = np.concatenate(rows)
     assert len(rows) == restricted["weights"].shape[0]
     assert_allclose(restricted["weights"], whole["weights"][rows], rtol=1e-7, atol=0.0)
+
+
+def test_mne_rank_vocabulary_is_rejected_with_an_actionable_message(fwd_info):
+    """``rank`` here is K, not MNE's covariance rank, so say so.
+
+    Every other argument of :func:`make_recipsiicos_lcmv` mirrors
+    :func:`mne.beamformer.make_lcmv`, where ``rank`` accepts ``None``,
+    ``'info'``, ``'full'`` or a dict and means covariance-rank handling. Here it
+    is the projection rank K, a positive integer, and the covariance-rank
+    argument is spelled ``whitener_rank``. A caller porting an ``make_lcmv``
+    call keeps MNE's vocabulary, and before this guard that produced
+    ``invalid literal for int() with base 10: 'info'`` from inside the projector
+    build, which names neither the argument nor the fix.
+    """
+    fwd, info = fwd_info
+    data_cov = _cov_from_sources(fwd, [0, 1], rho=0.9)
+    for bad in ("info", "full", None, {"eeg": 30}):
+        with pytest.raises(TypeError, match="whitener_rank"):
+            make_recipsiicos_lcmv(info, fwd, data_cov, rank=bad, verbose=False)
+        with pytest.raises(TypeError, match="whitener_rank"):
+            make_recipsiicos_cov(data_cov, fwd, info, rank=bad, verbose=False)

@@ -271,7 +271,8 @@ def ny_head_montage(path=None, *, verbose=None):
 
     Notes
     -----
-    The names follow the extended 10-05 system, so an ordinary 10-20 or
+    The names follow the extended 10-05 system
+    :footcite:`OostenveldPraamstra2001`, so an ordinary 10-20 or
     64-channel cap is a subset of them and ``info.set_montage`` will match it
     by name.
 
@@ -338,17 +339,17 @@ def ny_head_scalp(path=None, *, verbose=None):
     tris : ndarray, shape (2160, 3)
         Triangle definitions, zero-based.
 
+    See Also
+    --------
+    ny_head_montage
+    read_ny_head_forward
+
     Notes
     -----
     The surface is coarse (1082 vertices, roughly 10 mm spacing) because it is
     the outer boundary of the volume mesh rather than a rendering surface. It
     extends well below the brain, down to the neck, because the montage does
     too; see :func:`ny_head_montage`.
-
-    See Also
-    --------
-    ny_head_montage
-    read_ny_head_forward
     """
     with _open(path) as f:
         sa = f["sa"]
@@ -393,14 +394,14 @@ def ny_head_plot_indices(resolution="10K", path=None, *, geodesic=True, verbose=
         :func:`read_ny_head_forward`, so that ``values[idx]`` is a per-vertex
         array on the dense mesh.
 
+    See Also
+    --------
+    read_ny_head_forward
+
     Notes
     -----
     Median distance from a dense vertex to the source representing it is 2.6 mm
     at ``'5K'``, with a 95th percentile of 5.8 mm, so the interpolation is local.
-
-    See Also
-    --------
-    read_ny_head_forward
     """
     _check_option("resolution", resolution, _RESOLUTIONS)
     if resolution == "75K":
@@ -449,6 +450,11 @@ def ny_head_picks(system="10-05", path=None, *, verbose=None):
         system, front to back; ``'10-05'`` alphabetically; ``'all'`` in the
         model's own order, which is the row order of a forward read with
         ``picks=None``. The four sets are strictly nested.
+
+    See Also
+    --------
+    read_ny_head_forward
+    make_ny_head_info
 
     Notes
     -----
@@ -513,11 +519,6 @@ def ny_head_picks(system="10-05", path=None, *, verbose=None):
     one. Without it, and without declaring ``rank=dict(eeg=n-1)``, localisation
     degrades badly and erratically; see :func:`read_ny_head_forward` for the
     measured cost.
-
-    See Also
-    --------
-    read_ny_head_forward
-    make_ny_head_info
 
     References
     ----------
@@ -691,6 +692,8 @@ def read_ny_head_forward(
 
     Notes
     -----
+    The model is that of Huang et al. :footcite:`HuangEtAl2016`.
+
     **Average reference and rank.** The lead field is supplied in common average
     reference, so its rank is one less than the number of electrodes (230 of 231)
     and the corresponding data must carry an average-reference projector.

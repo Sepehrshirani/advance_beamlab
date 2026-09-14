@@ -595,6 +595,28 @@ def _reduction_operator(
     return b_op, q, whitener.shape[0]
 
 
+def _check_projection_rank(rank):
+    """Reject MNE's ``rank`` vocabulary before it reaches ``int()``.
+
+    ``rank`` here is the ReciPSIICOS projection rank K, a positive integer in
+    the q^2-dimensional working space. Everything else in these signatures
+    mirrors :func:`mne.beamformer.make_lcmv`, where ``rank`` instead means
+    covariance-rank handling and accepts ``None``, ``'info'``, ``'full'`` or a
+    dict. A caller porting an ``make_lcmv`` call keeps that vocabulary and would
+    otherwise get ``invalid literal for int()`` from deep inside the projector
+    build. The covariance-rank argument is spelled ``whitener_rank`` here.
+    """
+    if isinstance(rank, str) or isinstance(rank, dict) or rank is None:
+        raise TypeError(
+            f"rank must be a positive integer, got {rank!r}. In this function "
+            "`rank` is the ReciPSIICOS projection rank K in the q^2-dimensional "
+            "working space, not mne.beamformer's covariance rank. Pass the "
+            "covariance-rank handling (None, 'info', 'full' or a dict) as "
+            "`whitener_rank` instead, and use recipsiicos_rank_curve with "
+            "return_optimal=True to choose K."
+        )
+
+
 def _build_projector(gain_work, fixed, method, rank, reg):
     """Build the ReciPSIICOS/Whitened projector from working-space topographies."""
     topos = _tangential_topographies(gain_work, fixed)
@@ -655,6 +677,7 @@ def _recipsiicos_working(
     """
     _validate_type(data_cov, Covariance, "data_cov")
     _check_option("method", method, _ALLOWED_METHOD)
+    _check_projection_rank(rank)
 
     common_ch, cov = _align_channels(info, forward, data_cov)
     # A MEG-only empty-room noise covariance with a MEG+EEG forward is standard
@@ -817,7 +840,8 @@ def make_recipsiicos_cov(
 
     Notes
     -----
-    Equation numbers refer to Kuznetsova et al. (2021).
+    Equation numbers refer to Kuznetsova et al.
+    :footcite:`KuznetsovaEtAl2021`.
 
     A ``RuntimeWarning`` is raised when the spectral-flip step (Eq. 12) carries
     more than a fifth of the eigenvalue energy in negative eigenvalues (Eq. 24).
@@ -985,7 +1009,8 @@ def make_recipsiicos_lcmv(
 
     Notes
     -----
-    Equation numbers refer to Kuznetsova et al. (2021).
+    Equation numbers refer to Kuznetsova et al.
+    :footcite:`KuznetsovaEtAl2021`.
 
     For free-orientation MEG pass ``reduce_rank=True`` (see that parameter).
     The ``whitened`` projector builds a correlation Gram over every source
@@ -1365,7 +1390,8 @@ def recipsiicos_rank_curve(
 
     Notes
     -----
-    Equation numbers refer to Kuznetsova et al. (2021).
+    Equation numbers refer to Kuznetsova et al.
+    :footcite:`KuznetsovaEtAl2021`.
 
     The negative-eigenvalue energy reported when ``data_cov`` is given is a
     property of the covariance far more than of the rank. Measured on a fixed

@@ -507,8 +507,9 @@ html_theme_options = {
     "use_edit_page_button": False,
     "navbar_align": "left",
     "show_prev_next": True,
-    # The mathematical background is a long single page; four levels of
-    # in-page contents keeps its right-hand sidebar navigable.
+    # Two levels of in-page contents. The mathematical background is a long
+    # single page, and showing deeper levels made its right-hand sidebar longer
+    # than the viewport.
     "show_toc_level": 2,
     "header_links_before_dropdown": 5,
     "footer_start": ["copyright"],

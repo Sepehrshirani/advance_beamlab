@@ -367,9 +367,14 @@ def _check_eeg_reference(info, common_ch):
     Beamforming EEG without an average reference is not well posed: the forward
     model is computed against an average reference, so a differently referenced
     recording is modelled with the wrong topographies.
-    :func:`mne.beamformer.make_lcmv` raises for this (via ``_check_reference``),
-    and so do we: the messages below are MNE's verbatim, so the contract is
-    identical.
+
+    MNE raises the same error with the same wording, but later: ``_check_reference``
+    is called from :func:`mne.beamformer.apply_lcmv` and its epochs and raw
+    variants, not from :func:`mne.beamformer.make_lcmv`. This package checks at
+    filter construction instead, so a non-average-referenced EEG dataset fails
+    one step sooner than it would under ``make_lcmv``. That is deliberate: the
+    filter is already wrong once it is built, and failing where the forward and
+    the covariance are both in scope gives the caller a message it can act on.
     """
     from mne import pick_info
     from mne._fiff.pick import _electrode_types

@@ -169,7 +169,10 @@ def localizer_value(name, H, R, N, *, evoked_cov=None, metrics=None):
 
 
 def optimal_orientation(name, H_ref, H_loc, R, N, *, evoked_cov=None, metrics=None):
-    r"""Data-driven orientation of a new source (Moiseev 2011, Eqs. 13-14).
+    r"""Data-driven orientation of a new source (Eqs. 13-14).
+
+    Implements the orientation step of Moiseev et al.
+    :footcite:`Moiseev2011`.
 
     Given the leadfields ``H_ref`` of the sources already found (held fixed) and
     the ``(n_channels, 3)`` leadfield block ``H_loc`` of a candidate location,

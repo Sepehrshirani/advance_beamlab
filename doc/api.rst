@@ -153,8 +153,3 @@ for when you would rather name a band than supply an array.
    evoked_sources
    EvokedDemo
    resolve_template
-
-References
-----------
-
-.. footbibliography::
