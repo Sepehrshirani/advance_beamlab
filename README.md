@@ -260,7 +260,9 @@ Lagrange multipliers $\mathbf{\Lambda}$,
 
 $$\mathcal{L}=\mathrm{Tr}(\mathbf{W}^{\mathsf T}\mathbf{R}\mathbf{W})-\mathrm{Tr}\big(\mathbf{\Lambda}(\mathbf{W}^{\mathsf T}\mathbf{H}-\mathbf{I_n})\big),$$
 
-$$\frac{\partial\mathcal{L}}{\partial\mathbf{W}}=2\mathbf{R}\mathbf{W}-\mathbf{H}\mathbf{\Lambda}^{\mathsf T}=\mathbf{0}\;\Rightarrow\;\mathbf{W}=\tfrac12\mathbf{R}^{-1}\mathbf{H}\,\mathbf{\Lambda}^{\mathsf T}.$$
+$$\frac{\partial\mathcal{L}}{\partial\mathbf{W}}=2\mathbf{R}\mathbf{W}-\mathbf{H}\mathbf{\Lambda}=\mathbf{0}\;\Rightarrow\;\mathbf{W}=\tfrac12\mathbf{R}^{-1}\mathbf{H}\,\mathbf{\Lambda},$$
+
+since $\partial\,\mathrm{Tr}(\mathbf{\Lambda}\mathbf{W}^{\mathsf T}\mathbf{H})/\partial\mathbf{W}=\mathbf{H}\mathbf{\Lambda}$. The constraint then forces $\mathbf{\Lambda}=2(\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\mathbf{H})^{-1}$, which is symmetric, so the transpose makes no difference to the result below — but it does to this step.
 
 Substituting into the constraint $\mathbf{W}^{\mathsf T}\mathbf{H}=\mathbf{I}$
 fixes $\mathbf{\Lambda}$ and yields the **MCMV weights** (Moiseev et al. 2011,
@@ -373,6 +375,10 @@ that peak at the true sources. They are built from four $n\times n$ matrices
 (Moiseev et al. 2011, Table 2), each a leadfield sandwiched around a covariance:
 
 $$\mathbf{S}=\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\mathbf{H},\qquad \mathbf{G}=\mathbf{H}^{\mathsf T}\mathbf{C_n}^{-1}\mathbf{H},$$
+
+(In this section and the next, $\mathbf{G}$ is that $n\times n$ localiser matrix
+and nothing else. Elsewhere in this document $G$ is the $M\times N$ leadfield and
+$g$ one of its columns.)
 
 $$\mathbf{T}=\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\mathbf{C_n}\mathbf{R}^{-1}\mathbf{H},\qquad \mathbf{E}=\mathbf{H}^{\mathsf T}\mathbf{R}^{-1}\bar{\mathbf{R}}\,\mathbf{R}^{-1}\mathbf{H},$$
 
@@ -766,13 +772,16 @@ seeded from an initial LCMV output and then held fixed, rather than
 re-estimated as the descent runs.
 
 **This implementation solves that descent at its fixed point instead of stepping
-towards it.** Setting the update to zero gives $RW=(G+P\,Xu^\mathsf{T})\beta_1$, and
-the consistency of the $\beta_1$ expression then forces $G^\mathsf{T}W=f$, so
+towards it.** Stage 2 works one grid point at a time, so write $g$ for that
+point's leadfield *column* (not the full matrix $G$ of stage 1, and not the
+localiser matrix $\mathbf{G}$ of Section 7). Setting the update to zero gives
+$Rw=(g+P\,Xu^\mathsf{T})\beta_1$, and the consistency of the $\beta_1$ expression
+then forces $g^\mathsf{T}w=f$, so
 
-$$ \boxed{\;W^\ast = f\,\frac{R^{-1}\big(G + P\,Xu^\mathsf{T}\big)}{G^\mathsf{T}R^{-1}\big(G + P\,Xu^\mathsf{T}\big)}\;} $$
+$$ \boxed{\;w^\ast = f\,\frac{R^{-1}\big(g + P\,Xu^\mathsf{T}\big)}{g^\mathsf{T}R^{-1}\big(g + P\,Xu^\mathsf{T}\big)}\;} $$
 
 This is the *same* estimator the iteration converges to (the descent's own relative
-step evaluated at $W^\ast$ is $\sim 2\times10^{-12}$), but it removes the tuning.
+step evaluated at $w^\ast$ is $\sim 2\times10^{-12}$), but it removes the tuning.
 That matters in practice: on a real gradiometer covariance the descent needed
 several thousand steps, and its stopping rule (on the size of the *step*) reported
 convergence while the weights were still ~40% away from $W^\ast$, moving the
@@ -847,7 +856,7 @@ only on the data) and reusing it for every template.
 | `noise_cov` | Whitening model | Whitens per sensor type; **essential for mixed sensor types**. `None` uses an ad-hoc per-type model (a global scaling for a single type, which leaves the projector subspaces unchanged). |
 | `whitener_rank` | Numerical rank of the whitener | Leave at `None` after SSP/ICA/SSS (data are rank-deficient): it auto-detects per sensor type. To pin it, pass a per-type dict such as `{'meg': 60}`; as for `make_mcmv`, a bare integer raises `TypeError`. `'full'` assumes full rank. |
 | `reg` | Tikhonov loading of the working-space LCMV inverse (and the whitening ridge for `whitened`) | Same trade-off as MCMV's `reg`: stability vs resolution. Default `0.05`. |
-| `pick_ori`, `weight_norm`, `reduce_rank`, `inversion` | Orientation and normalisation of the working-space LCMV | Reuse MNE's own filter computation, so they behave exactly as in `make_lcmv`, including that **free-orientation MEG needs `reduce_rank=True`** (the radial-silent leadfield is rank-deficient). |
+| `pick_ori`, `weight_norm`, `reduce_rank`, `inversion` | Orientation and normalisation of the working-space LCMV | Reuse MNE's own filter computation, so they behave exactly as in `make_lcmv`, including `reduce_rank`. That one is worth qualifying: free-orientation MEG on a **spherical** model needs `reduce_rank=True`, because there the radial component is exactly silent and the leadfield is exactly rank 2. On a realistic BEM it is only approximately rank-deficient — on the `sample` oct-6 free-orientation forward both `pick_ori=None` and `pick_ori='max-power'` run with `reduce_rank=False`. |
 
 If a ReciPSIICOS run warns about negative-eigenvalue energy above the threshold,
 do not reach for `rank` first. That fraction is mainly a property of the data

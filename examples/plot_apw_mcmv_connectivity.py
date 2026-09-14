@@ -161,7 +161,16 @@ evoked.set_eeg_reference("average", projection=True)
 
 
 def envelope_correlation(x, y):
-    """Signed Pearson correlation of the Hilbert amplitude envelopes."""
+    """Signed Pearson correlation of the Hilbert amplitude envelopes.
+
+    This correlates the raw magnitudes. The library's own estimator low-passes
+    the envelope at ``envelope_lowpass=0.5`` Hz first, per Nunes et al. Sec. 2.5,
+    so the ground truth and the LCMV bar below are computed slightly differently
+    from the PW-MCMV and APW-MCMV bars. On these deliberately slow envelopes the
+    two agree to 0.003 (-0.1506 against -0.1531 on the spurious edge, 1.0000
+    against 0.9999 on the genuine one), which is far below the differences the
+    figure is about.
+    """
     return float(np.corrcoef(np.abs(hilbert(x)), np.abs(hilbert(y)))[0, 1])
 
 
