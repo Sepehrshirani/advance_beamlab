@@ -373,9 +373,15 @@ as values. Do not import the
 "regularisation pushes LCMV back toward the truth" reasoning
 from the amplitude examples: for connectivity, noise moved LCMV's spurious edge
 *away* from the truth and dropped its genuine edge from 0.992 to 0.667. When
-your ROI vertices are uncertain: displacing one ROI by 12 mm turned PW-MCMV's
-spurious edge from -0.093 to +0.287, an error of 0.437 against LCMV's 0.251 on
-the same edge, and cost APW-MCMV's genuine edge 1.000 to 0.937. The same
+your ROI vertices are uncertain, though the direction of the error matters more
+than its size. A has exactly six 12 mm grid neighbours, and only the one that
+moves it toward the conductor (A-C from 2.4 to 1.2 cm, leadfield overlap 0.978
+to 0.994) does real damage: PW-MCMV's spurious edge goes from -0.093 to +0.287,
+an error of 0.437, and APW-MCMV holds that edge to within 0.009 but loses the
+genuine one, 1.000 to 0.937. The other five leave PW-MCMV at errors of 0.007 to
+0.068, against 0.057 undisplaced. Read LCMV at the same displaced vertex rather
+than at its undisplaced one and PW-MCMV is still ahead at all six, including the
+worst: 0.437 against LCMV's 0.624. The same
 mechanism applies to forward-model error, which this package never tests. Every
 zero-gain result here is measured under a perfectly matched fixed-orientation
 forward. When no in-radius neighbour carries a significant edge, APW-MCMV
