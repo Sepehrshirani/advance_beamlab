@@ -215,3 +215,55 @@ jobs:
         with:
           name: html-doc
           path: doc/_build/html
+
+  dist:
+    # Builds both distributions and checks their metadata, then asserts that the
+    # source distribution contains nothing outside the allowlist in pyproject.
+    # Hatchling reads .gitignore but not .git/info/exclude, so before the
+    # allowlist a locally excluded directory was published with every sdist. A
+    # stray path must fail here rather than reach an index.
+    name: build + twine check
+    runs-on: ubuntu-latest
+    # Around a minute; the build is pure Python and downloads nothing.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the build tooling
+        run: python -m pip install --upgrade build twine
+      - name: Build the sdist and the wheel
+        run: python -m build
+      - name: Check the distribution metadata
+        run: python -m twine check dist/*
+      - name: Require the sdist to contain only the allowlisted paths
+        run: |
+          python - <<'PY'
+          import sys, tarfile
+          from pathlib import Path
+
+          # Mirrors [tool.hatch.build.targets.sdist].include, plus the files
+          # hatchling always writes itself.
+          ALLOWED = {
+              "src", "doc", "examples", "tools",
+              "README.md", "LICENSE", "CITATION.cff",
+              "pyproject.toml", "PKG-INFO", ".gitignore",
+          }
+          sdist = next(Path("dist").glob("*.tar.gz"))
+          with tarfile.open(sdist) as tar:
+              names = tar.getnames()
+          root = names[0].split("/")[0]
+          stray = sorted(
+              {n.split("/")[1] for n in names
+               if n.startswith(root + "/") and len(n.split("/")) > 1}
+              - ALLOWED
+          )
+          if stray:
+              print(f"{sdist.name} contains paths outside the allowlist:")
+              for s in stray:
+                  print(f"  {s}")
+              sys.exit(1)
+          print(f"{sdist.name}: {len(names)} entries, all within the allowlist")
+          PY

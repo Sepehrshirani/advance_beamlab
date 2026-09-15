@@ -1,0 +1,6 @@
+# Display-only identity normalisation. The maintainer has committed under both
+# a local name and the GitHub noreply address; this maps them to one entry in
+# git shortlog and git log --use-mailmap. It rewrites nothing.
+Sepehr Shirani <s.shirani@ucl.ac.uk> <sepehrshirani@gmail.com>
+Sepehr Shirani <s.shirani@ucl.ac.uk> Sepehrshirani <sepehrshirani@gmail.com>
+Sepehr Shirani <s.shirani@ucl.ac.uk> <145929919+Sepehrshirani@users.noreply.github.com>

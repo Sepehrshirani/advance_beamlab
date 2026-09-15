@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "advance_beamlab"
-version = "1.0"
+dynamic = ["version"]
 description = "Advanced minimum-variance beamformers for MEG/EEG, compatible with MNE-Python"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -87,6 +87,12 @@ dev = ["advance_beamlab[test,doc]", "ruff>=0.6"]
 Homepage = "https://github.com/Sepehrshirani/advance_beamlab"
 Documentation = "https://sepehrshirani.github.io/advance_beamlab-docs/"
 "Source Code" = "https://github.com/Sepehrshirani/advance_beamlab"
+
+# One version authority: src/advance_beamlab/__init__.py. doc/conf.py already
+# reads __version__ from the imported package, so declaring it here as well
+# would give two places to forget.
+[tool.hatch.version]
+path = "src/advance_beamlab/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/advance_beamlab"]
